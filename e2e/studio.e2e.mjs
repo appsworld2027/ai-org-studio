@@ -92,6 +92,13 @@ try {
     r = await fetch(`${base}/api/products/parent-plus/terminal/claude`, { method: "PUT", headers: { Cookie: `studio_key=${cookie.value}`, Origin: `https://${port}-cs-1-abc.cs-asia-southeast1.cloudshell.dev`, "Sec-Fetch-Site": "same-origin", "Content-Type": "application/json" }, body: '{"model":"","effort":"default"}' });
     assert(r.status === 200, `proxied same-origin PUT = ${r.status}`);
     assert(readFileSync(join(home, "public-url"), "utf8").trim() === `https://${port}-cs-1-abc.cs-asia-southeast1.cloudshell.dev`, "address remembered");
+    // WebSockets carry no Sec-Fetch-Site: through the Cloud Shell proxy the chat must still connect; another site must not.
+    const upgrade = (origin) => new Promise((ok) => { const s = net.connect(port, "127.0.0.1", () => s.write(`GET /pty?product=parent-plus&engine=claude HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nCookie: studio_key=${cookie.value}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: ${origin}\r\n\r\n`)); s.on("data", (d) => { ok(d.toString().split("\r\n")[0]); s.destroy(); }); });
+    assert(/101/.test(await upgrade(`https://${port}-cs-1-abc.cs-asia-southeast1.cloudshell.dev`)), "chat connects through the Cloud Shell proxy");
+    assert(/101/.test(await upgrade(`https://${port}-cs-9-other.cs-europe-west1.cloudshell.dev`)), "any Cloud Shell address for THIS port works (e.g. after a VM move)");
+    assert(/401/.test(await upgrade(`https://9999-cs-1-abc.cs-asia-southeast1.cloudshell.dev`)), "another port's address is refused");
+    assert(/401/.test(await upgrade(`https://${port}-cs-1.cloudshell.dev.evil.example`)), "look-alike domain refused");
+    assert(/401/.test(await upgrade("https://evil.example")), "other site refused");
   });
   await check("ST-01", "layout: product picker, three AI choices on the left, three tabs on the right", async () => {
     await page.waitForSelector(".eng[data-eng=claude]");

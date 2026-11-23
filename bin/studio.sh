@@ -15,7 +15,8 @@ BASE="${BASEURL%%|*}"; WHERE="${BASEURL##*|}"
 # Cloud Shell without WEB_HOST: ask Cloud Shell for the preview address of this port.
 if [ "$BASE" = "http://localhost:$PORT" ] && command -v cloudshell >/dev/null 2>&1; then
   W="$(cloudshell get-web-preview-url -p "$PORT" 2>/dev/null | grep -Eo 'https://[^[:space:]]+' | head -1)"
-  [ -n "$W" ] && BASE="${W%/}"
+  # Cloud Shell can answer "https://8484-None" when it does not know its own host: ignore that.
+  case "$W" in *None*|"") ;; *) BASE="${W%/}" ;; esac
 fi
 URL="$BASE/?k=$(cat "$KEYF")"
 running(){ curl -s -o /dev/null -m 2 "http://127.0.0.1:$PORT/healthz"; }
@@ -49,6 +50,7 @@ echo "  $URL"
 case "$WHERE" in
   "Google Cloud Shell")
     if [ "${BASE#http://localhost}" != "$BASE" ]; then
+      echo "  (The localhost link above only works inside Cloud Shell.)"
       echo "  Cloud Shell did not tell us this machine's web address, so open it once through Web Preview:"
       echo "    1. Click the Web Preview button (eye icon, top right of Cloud Shell) → Change port → type $PORT → Change and Preview."
       echo "    2. In the new tab, add  ?k=$(cat "$KEYF")  to the end of the address and press Enter."

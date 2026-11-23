@@ -48,12 +48,22 @@ function originOk(req) {
   // Behind Cloud Shell / Codespaces proxies, the Host the server sees can differ from the address in the browser.
   // Browsers mark requests made by the page itself with Sec-Fetch-Site: same-origin; web pages cannot set or fake it.
   if (req.headers["sec-fetch-site"] === "same-origin") { rememberPublicUrl(o); return true; }
+  // WebSocket upgrades carry no Sec-Fetch-Site. Accept the address the Studio was opened at (remembered at the key link
+  // or from the page's own requests), and this port's address on Cloud Shell / Codespaces.
+  if (learnedOrigins().includes(o) || isOwnProxyOrigin(o)) return true;
   log(`blocked a request from ${host} (allowed: ${ok.join(", ")}). If this is you, restart with STUDIO_ALLOW_HOST=${host}`);
   return false;
 }
+// This port's own address behind the Cloud Shell or Codespaces proxy (only those Google/GitHub domains, only this port).
+function isOwnProxyOrigin(o) {
+  let u; try { u = new URL(o); } catch { return false; }
+  if (u.protocol !== "https:") return false;
+  return (u.hostname.startsWith(`${PORT}-`) && /\.cloudshell\.dev$/.test(u.hostname)) || (/-\d+\.app\.github\.dev$/.test(u.hostname) && u.hostname.endsWith(`-${PORT}.app.github.dev`));
+}
+const learnedOrigins = () => { try { return [readFileSync(join(store.dir, "public-url"), "utf8").trim()]; } catch { return []; } };
 // The address you opened the Studio at, so `studio.sh` can print the right link next time (Cloud Shell may not tell us).
 function rememberPublicUrl(origin) {
-  if (!/^https:\/\//.test(origin) || /localhost|127\.0\.0\.1/.test(origin)) return;
+  if (!/^https:\/\//.test(origin) || /localhost|127\.0\.0\.1|None/.test(origin) || !isOwnProxyOrigin(origin)) return;
   const f = join(store.dir, "public-url");
   try { if (readFileSync(f, "utf8").trim() === origin) return; } catch { /* first time */ }
   try { writeFileSync(f, origin + "\n", { mode: 0o600 }); log(`remembered the Studio address: ${origin}`); } catch { /* read-only */ }
@@ -246,6 +256,7 @@ const server = http.createServer(async (req, res) => {
     if (path === "/healthz") return send(res, 200, "ok");
     if (url.searchParams.get("k")) {
       if (!same(url.searchParams.get("k"), TOKEN)) return send(res, 401, "Wrong Studio key. Use the link printed when the Studio started.");
+      if (req.headers["x-forwarded-host"]) rememberPublicUrl(`https://${String(req.headers["x-forwarded-host"]).split(",")[0].trim()}`);
       return send(res, 302, "", "text/plain", { Location: "/", "Set-Cookie": `${COOKIE}=${TOKEN}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000` });
     }
     if (!cookieOk(req)) return send(res, 401, "This Studio is private. Open it with the link printed when it started (bash ~/ai-org-studio/bin/studio.sh).");

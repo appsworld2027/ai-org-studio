@@ -5,12 +5,14 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
+// Cloud Shell sometimes reports its host as the literal text "None" (seen 2026-11-23); treat that as unknown.
+const realHost = (h) => (h && h !== "None" && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(h) ? h : "");
 function cloudShellHost(env) {
-  if (env.WEB_HOST) return env.WEB_HOST;
+  if (realHost(env.WEB_HOST)) return env.WEB_HOST;
   if (!env.CLOUD_SHELL && !env.DEVSHELL_PROJECT_ID && !env.GOOGLE_CLOUD_SHELL) return "";
   // Background processes may not inherit WEB_HOST; the login profile usually exports it.
   for (const f of ["/etc/profile.d/cloudshell_web_host.sh", `${homedir()}/.customize_environment`]) {
-    try { const m = readFileSync(f, "utf8").match(/WEB_HOST=["']?([a-z0-9.-]+)/i); if (m) return m[1]; } catch { /* not there */ }
+    try { const m = readFileSync(f, "utf8").match(/WEB_HOST=["']?([a-z0-9.-]+)/i); if (m && realHost(m[1])) return m[1]; } catch { /* not there */ }
   }
   return "";
 }
@@ -24,7 +26,7 @@ export function platform(env = process.env) {
 function learnedUrl(port, env) {
   try {
     const u = readFileSync(`${env.STUDIO_HOME || `${homedir()}/.ai-org-studio`}/public-url`, "utf8").trim();
-    if (/^https:\/\/\S+$/.test(u) && (u.includes(`//${port}-`) || u.includes(`-${port}.`))) return u;
+    if (/^https:\/\/\S+$/.test(u) && !/None/.test(u) && (u.includes(`//${port}-`) || u.includes(`-${port}.`))) return u;
   } catch { /* not yet */ }
   return "";
 }
