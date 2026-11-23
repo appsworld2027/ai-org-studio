@@ -109,6 +109,15 @@ test("the private link is right on Cloud Shell, Codespaces and elsewhere", () =>
   assert.equal(publicUrl(8484, {}), "http://localhost:8484");
   assert.equal(platform({ CODESPACE_NAME: "x" }).id, "codespaces"); assert.equal(platform({ CLOUD_SHELL: "true" }).id, "cloudshell"); assert.equal(platform({}).id, "other");
 });
+test("Cloud Shell without WEB_HOST: the link the Studio was opened at is remembered for this port only", () => {
+  const home = tmp();
+  writeFileSync(join(home, "public-url"), "https://8484-cs-123-default.cs-asia-southeast1.cloudshell.dev\n");
+  assert.equal(publicUrl(8484, { STUDIO_HOME: home }), "https://8484-cs-123-default.cs-asia-southeast1.cloudshell.dev");
+  assert.equal(publicUrl(9000, { STUDIO_HOME: home }), "http://localhost:9000", "a different port is not guessed");
+  assert.equal(publicUrl(8484, { STUDIO_HOME: home, WEB_HOST: "cs-9.cloudshell.dev" }), "https://8484-cs-9.cloudshell.dev", "WEB_HOST wins when present");
+  writeFileSync(join(home, "public-url"), "javascript:alert(1)\n");
+  assert.equal(publicUrl(8484, { STUDIO_HOME: home }), "http://localhost:8484", "a bad saved value is ignored");
+});
 test("OpenRouter lists free models first", () => {
   assert.deepEqual(sortModels("openrouter", ["b/paid", "a/x:free", "c/y:free"]).slice(0, 2), ["a/x:free", "c/y:free"]);
   assert.equal(sortModels("nvidia", ["z/z"])[0], "nvidia/nemotron-3-ultra-550b-a55b", "verified defaults stay on top");

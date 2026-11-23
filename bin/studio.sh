@@ -11,7 +11,13 @@ PORT="${STUDIO_PORT:-$(node -e "try{console.log(require('$DIR/studio.config.json
 KEYF="$STATE/key"; [ -s "$KEYF" ] || (umask 077; head -c 18 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n' > "$KEYF")
 [ "$(wc -c < "$KEYF")" -ge 20 ] || { rm -f "$KEYF"; echo "STOP: could not create the private key (is the disk full? df -h ~)"; exit 1; }
 BASEURL="$(cd "$DIR" && STUDIO_PORT="$PORT" node -e "import('./server/platform.mjs').then(m=>console.log(m.publicUrl(process.env.STUDIO_PORT)+'|'+m.platform().name))")"
-URL="${BASEURL%%|*}/?k=$(cat "$KEYF")"; WHERE="${BASEURL##*|}"
+BASE="${BASEURL%%|*}"; WHERE="${BASEURL##*|}"
+# Cloud Shell without WEB_HOST: ask Cloud Shell for the preview address of this port.
+if [ "$BASE" = "http://localhost:$PORT" ] && command -v cloudshell >/dev/null 2>&1; then
+  W="$(cloudshell get-web-preview-url -p "$PORT" 2>/dev/null | grep -Eo 'https://[^[:space:]]+' | head -1)"
+  [ -n "$W" ] && BASE="${W%/}"
+fi
+URL="$BASE/?k=$(cat "$KEYF")"
 running(){ curl -s -o /dev/null -m 2 "http://127.0.0.1:$PORT/healthz"; }
 case "${1:-start}" in
   stop) tmux kill-session -t studio 2>/dev/null; pkill -f "node $DIR/server/server.mjs" 2>/dev/null; echo "Studio stopped."; exit 0 ;;
@@ -41,7 +47,13 @@ echo "  AI Org Studio is running ($WHERE, port $PORT)."
 echo "  Your private link (Ctrl+click; don't share it):"
 echo "  $URL"
 case "$WHERE" in
-  "Google Cloud Shell") echo "  If the link does not open: Web Preview button (top right) → Change port → $PORT, then add ?k=$(cat "$KEYF") to the address once." ;;
+  "Google Cloud Shell")
+    if [ "${BASE#http://localhost}" != "$BASE" ]; then
+      echo "  Cloud Shell did not tell us this machine's web address, so open it once through Web Preview:"
+      echo "    1. Click the Web Preview button (eye icon, top right of Cloud Shell) → Change port → type $PORT → Change and Preview."
+      echo "    2. In the new tab, add  ?k=$(cat "$KEYF")  to the end of the address and press Enter."
+      echo "  After that the Studio remembers its address and prints the full link here next time."
+    else echo "  If the link does not open: Web Preview button (top right) → Change port → $PORT, then add ?k=$(cat "$KEYF") to the address once."; fi ;;
   "GitHub Codespaces") echo "  If the link does not open: Ports tab → port $PORT → Open in browser, then add ?k=$(cat "$KEYF") to the address once." ;;
   *) echo "  On a remote machine, open it through an SSH tunnel: ssh -L $PORT:localhost:$PORT <machine>, then use the link above." ;;
 esac
