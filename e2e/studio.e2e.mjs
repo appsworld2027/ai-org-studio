@@ -83,9 +83,15 @@ try {
   await page.goto(`${base}/?k=${TOKEN}`);
   const cookie = (await ctx.cookies()).find((c) => c.name === "studio_key");
 
-  await check("ST-13b", "cross-site writes are refused even with the cookie", async () => {
-    const r = await fetch(`${base}/api/providers/nvidia`, { method: "PUT", headers: { Cookie: `studio_key=${cookie.value}`, Origin: "https://evil.example", "Content-Type": "application/json" }, body: '{"key":"x"}' });
+  await check("ST-13b", "cross-site writes are refused even with the cookie; a proxied same-origin page is accepted and its address remembered", async () => {
+    let r = await fetch(`${base}/api/providers/nvidia`, { method: "PUT", headers: { Cookie: `studio_key=${cookie.value}`, Origin: "https://evil.example", "Content-Type": "application/json" }, body: '{"key":"x"}' });
     assert(r.status === 403, `cross-site PUT = ${r.status}`);
+    r = await fetch(`${base}/api/providers/nvidia`, { method: "PUT", headers: { Cookie: `studio_key=${cookie.value}`, Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site", "Content-Type": "application/json" }, body: '{"key":"x"}' });
+    assert(r.status === 403, `cross-site PUT with Sec-Fetch-Site: cross-site = ${r.status}`);
+    // Cloud Shell's proxy: browser address differs from the Host the server sees; the browser marks the page's own requests same-origin.
+    r = await fetch(`${base}/api/products/parent-plus/terminal/claude`, { method: "PUT", headers: { Cookie: `studio_key=${cookie.value}`, Origin: `https://${port}-cs-1-abc.cs-asia-southeast1.cloudshell.dev`, "Sec-Fetch-Site": "same-origin", "Content-Type": "application/json" }, body: '{"model":"","effort":"default"}' });
+    assert(r.status === 200, `proxied same-origin PUT = ${r.status}`);
+    assert(readFileSync(join(home, "public-url"), "utf8").trim() === `https://${port}-cs-1-abc.cs-asia-southeast1.cloudshell.dev`, "address remembered");
   });
   await check("ST-01", "layout: product picker, three AI choices on the left, three tabs on the right", async () => {
     await page.waitForSelector(".eng[data-eng=claude]");

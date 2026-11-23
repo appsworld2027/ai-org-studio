@@ -5,7 +5,7 @@
 //   or "Other models" — a chat the Studio draws itself, on any OpenAI-compatible model (free or paid) with the user's key.
 // Right panel: the product's real app (Vercel) or HTML prototype, and live agent status read from GitHub.
 import http from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execFile, spawn, execFileSync as require_execFileSync } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve, extname } from "node:path";
@@ -45,8 +45,18 @@ function originOk(req) {
   const pub = publicUrl(PORT); let pubHost = ""; try { pubHost = new URL(pub).host; } catch { /* none */ }
   const ok = [req.headers.host, req.headers["x-forwarded-host"], pubHost, process.env.STUDIO_ALLOW_HOST].filter(Boolean).map((h) => String(h).split(",")[0].trim());
   if (ok.includes(host)) return true;
+  // Behind Cloud Shell / Codespaces proxies, the Host the server sees can differ from the address in the browser.
+  // Browsers mark requests made by the page itself with Sec-Fetch-Site: same-origin; web pages cannot set or fake it.
+  if (req.headers["sec-fetch-site"] === "same-origin") { rememberPublicUrl(o); return true; }
   log(`blocked a request from ${host} (allowed: ${ok.join(", ")}). If this is you, restart with STUDIO_ALLOW_HOST=${host}`);
   return false;
+}
+// The address you opened the Studio at, so `studio.sh` can print the right link next time (Cloud Shell may not tell us).
+function rememberPublicUrl(origin) {
+  if (!/^https:\/\//.test(origin) || /localhost|127\.0\.0\.1/.test(origin)) return;
+  const f = join(store.dir, "public-url");
+  try { if (readFileSync(f, "utf8").trim() === origin) return; } catch { /* first time */ }
+  try { writeFileSync(f, origin + "\n", { mode: 0o600 }); log(`remembered the Studio address: ${origin}`); } catch { /* read-only */ }
 }
 
 // ---------- static files (whitelist only) ----------
