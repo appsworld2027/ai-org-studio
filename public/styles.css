@@ -96,3 +96,72 @@ button{cursor:pointer}
 
 @media (max-width:900px){.split{grid-template-columns:1fr;grid-template-rows:55% 0 1fr}.divider{display:none}}
 @media (prefers-reduced-motion:reduce){.av::after,.st.agent::after,.st.founder::after{animation:none}}
+
+/* ---- v1.1: product picker, Studio-drawn chat, dialogs ---- */
+.top select{border:1px solid var(--rule);border-radius:7px;padding:3px 8px;background:#fff;font:600 13px var(--head);max-width:22ch}
+.linkish{background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;padding:0 8px 8px}
+.leftpane{flex:1;min-height:0;display:flex;flex-direction:column}
+.chatpane{background:#F6F8FA}
+.chatbar{display:flex;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--rule);flex-wrap:wrap;background:var(--panel)}
+.chatbar select{border:1px solid var(--rule);border-radius:7px;padding:3px 6px;background:#fff;font-size:12.5px;min-width:0}
+#chatPick{flex:1 1 120px;max-width:26ch} #providerPick{flex:0 1 130px} #modelPick{flex:1 1 120px;max-width:24ch}
+.chatbar .spacer{flex:0 0 4px}
+.msgs{flex:1;min-height:0;overflow:auto;padding:14px 14px 8px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:94%;line-height:1.55}
+.msg .who{font:600 12px var(--head);color:var(--muted);margin-bottom:2px}
+.msg.me{align-self:flex-end;background:#EEEAFE;border-radius:12px 12px 2px 12px;padding:8px 12px;white-space:pre-wrap}
+.msg.ai{align-self:flex-start}
+.msg.err{align-self:stretch;background:#FCE8EE;color:#8A1538;border-radius:8px;padding:8px 12px;font-size:13px}
+.md p{margin:0 0 8px} .md ul,.md ol{margin:0 0 8px;padding-left:20px} .md h4{margin:6px 0 4px;font:600 14px var(--head)}
+.md code,.toolcard code{font:12.5px "Cascadia Mono",Consolas,monospace;background:#EAEFF3;padding:0 4px;border-radius:4px}
+.md pre,.toolcard pre{background:#10171E;color:#D9E2EA;border-radius:8px;padding:8px 10px;overflow:auto;max-height:280px;font-size:12.5px;margin:4px 0 8px}
+.md pre code,.toolcard pre code{background:none;padding:0;color:inherit}
+.toolcard{align-self:flex-start;max-width:94%;background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--agent);border-radius:0 8px 8px 0;padding:6px 10px;font-size:13px}
+.toolcard.ask{border-left-color:var(--you);background:#FAF9FF}
+.toolcard .row{display:flex;gap:8px;align-items:center;margin-top:6px}
+.toolcard summary{cursor:pointer;color:var(--muted);font-size:12px}
+.diff .del{color:#FFB3C1;text-decoration:line-through} .diff .add{color:#9FE3C9}
+.small{font-size:12px} .ok{color:var(--agent);font-weight:600}
+.hint{color:var(--muted);font-size:13.5px;max-width:52ch;margin:auto 0}
+.hint b{color:var(--ink);display:block;margin-bottom:4px}
+.composer{border-top:1px solid var(--rule);padding:8px 10px;background:var(--panel)}
+.composer textarea{width:100%;border:1.5px solid var(--rule);border-radius:10px;padding:8px 10px;font:14px var(--body);resize:vertical;min-height:58px}
+.composer textarea:focus{outline:none;border-color:var(--you)}
+.composer-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+.primary{background:var(--you);color:#fff;border:1.5px solid var(--you);border-radius:8px;padding:5px 14px;font:600 13px var(--head)}
+.primary:disabled{opacity:.5;cursor:default}
+.primary.small,.ghost.small{padding:2px 10px;font-size:12px}
+dialog{border:1px solid var(--rule);border-radius:12px;padding:18px 20px;width:min(460px,92vw);box-shadow:0 18px 50px rgba(22,32,42,.25)}
+dialog::backdrop{background:rgba(22,32,42,.35)}
+dialog h3{margin:0 0 4px;font:600 18px var(--head)}
+dialog label{display:block;font:600 13px var(--head);margin:10px 0 0}
+dialog input,dialog select{display:block;width:100%;margin-top:4px;border:1px solid var(--rule);border-radius:7px;padding:6px 8px;font:14px var(--body)}
+dialog .row{display:flex;gap:8px;margin-top:14px;align-items:center}
+.err{color:var(--blocked);font-size:13px;min-height:1em;margin:8px 0 0}
+.empty.left-align{margin:0;text-align:left}
+code{font-family:"Cascadia Mono",Consolas,monospace}
+
+/* ---- v1.2: model bars, decision cards, team table ---- */
+.modelbar{display:flex;gap:10px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--rule);background:var(--panel);flex-wrap:wrap;font-size:12.5px}
+.modelbar label{display:flex;gap:6px;align-items:center;color:var(--muted);font:600 12px var(--head)}
+.modelbar select,.modelbar input{border:1px solid var(--rule);border-radius:7px;padding:3px 6px;background:#fff;font:12.5px var(--body);max-width:22ch}
+.pill{border:1px solid var(--rule);border-radius:14px;padding:2px 8px;background:#F3F5F8;font-size:12px;max-width:18ch;color:var(--ink)}
+#modelPick.pill{max-width:24ch}
+.composer-row{flex-wrap:wrap}
+.composer-row .auto{display:flex;gap:4px;align-items:center}
+.ask{align-self:stretch;border:1.5px solid var(--you);border-radius:10px;padding:10px 12px;background:#FAF9FF}
+.ask .q{font:600 14px var(--head);margin-bottom:8px}
+.ask .opts{display:flex;flex-direction:column;gap:6px}
+.opt{display:block;text-align:left;width:100%;border:1px solid var(--rule);border-radius:8px;background:#fff;padding:7px 10px;cursor:pointer}
+.opt:hover{border-color:var(--you)}
+.opt b{font-weight:600} .opt small{display:block;color:var(--muted);font-size:12px}
+.opt .rec{font:600 11px var(--head);color:var(--agent);border:1px solid var(--agent);border-radius:10px;padding:0 6px;margin-left:6px}
+.ask .other{display:flex;gap:6px;margin-top:6px} .ask .other input{flex:1;border:1px solid var(--rule);border-radius:8px;padding:5px 8px;font:13px var(--body)}
+.ask.done .opt{cursor:default;opacity:.55} .ask.done .opt.chosen{opacity:1;border-color:var(--you);box-shadow:inset 3px 0 0 var(--you)}
+.msg.note{align-self:stretch;color:var(--muted);font-size:12.5px}
+.avail{display:flex;gap:12px;flex-wrap:wrap;font-size:12.5px;margin:4px 0 8px}
+.avail label{display:flex;gap:5px;align-items:center}
+.team .trk{grid-template-columns:minmax(150px,1fr) minmax(200px,1.2fr) minmax(220px,1.6fr);min-width:600px}
+.team .trk>div{text-align:left}
+.team select{border:1px solid var(--rule);border-radius:7px;padding:3px 6px;background:#fff;font-size:12.5px;width:100%}
+.team small{color:var(--muted);font-size:12px}

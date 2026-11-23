@@ -1,53 +1,198 @@
-// AI Org Studio — browser side. Left: one terminal per engine. Right: real app, prototype, agents.
+// AI Org Studio — browser side. Product picker; left = Claude Code / Codex terminal or Studio-drawn chat; right = app, prototype, agents.
 (() => {
   "use strict";
   const $ = (s) => document.querySelector(s);
   const el = (tag, attrs = {}, ...kids) => {
     const e = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else e.setAttribute(k, v);
-    for (const k of kids) e.append(k);
+    for (const k of kids) if (k != null) e.append(k);
     return e;
   };
   const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } } };
-  let cfg = null, ws = null, engine = store.get("studio.engine", "claude"), board = null, lastAppUrl = "";
+  const api = async (path, opts = {}) => {
+    const r = await fetch(path, { cache: "no-store", ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
+    let d = {}; try { d = await r.json(); } catch { /* empty */ }
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  };
+  const wsUrl = (path) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`;
+  let cfg = null, product = null, engine = store.get("studio.engine", "claude"), board = null, lastAppUrl = "", pollTimer = null;
 
-  // ---------- terminal ----------
-  const term = new window.Terminal({ fontFamily: '"Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace', fontSize: 14, cursorBlink: true, scrollback: 5000, allowProposedApi: false,
+  // ---------- terminal (Claude Code / Codex) ----------
+  const term = new window.Terminal({ fontFamily: '"Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace', fontSize: 14, cursorBlink: true, scrollback: 5000,
     theme: { background: "#10171E", foreground: "#D9E2EA", cursor: "#8FD3C4", selectionBackground: "#2E4A5C" } });
   const fit = new window.FitAddon.FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new window.WebLinksAddon.WebLinksAddon((e, uri) => window.open(uri, "_blank", "noopener")));
   term.open($("#term"));
-  const sendJ = (m) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
-  const refit = () => { try { fit.fit(); sendJ({ t: "resize", cols: term.cols, rows: term.rows }); } catch { /* hidden */ } };
-  term.onData((d) => sendJ({ t: "in", d }));
+  let tws = null, retry = 0, retryTimer = null;
+  const tsend = (m) => { if (tws && tws.readyState === 1) tws.send(JSON.stringify(m)); };
+  const refit = () => { try { fit.fit(); tsend({ t: "resize", cols: term.cols, rows: term.rows }); } catch { /* hidden */ } };
+  term.onData((d) => tsend({ t: "in", d }));
   new ResizeObserver(() => refit()).observe($("#term"));
-
-  let retry = 0, retryTimer = null;
-  function connect(mode) {
+  const nameOf = (id) => cfg.terminals.find((e) => e.id === id)?.name || "Other models";
+  function connectTerm(mode) {
     clearTimeout(retryTimer);
-    if (ws) { ws.onclose = null; ws.close(); }
+    if (tws) { tws.onclose = null; tws.close(); }
     term.reset();
     $("#termState").textContent = `Connecting to ${nameOf(engine)}…`;
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${proto}://${location.host}/pty?engine=${engine}${mode ? `&mode=${mode}` : ""}`);
-    ws.onopen = () => { retry = 0; $("#termState").textContent = `${nameOf(engine)} · type below`; $("#termMsg").hidden = true; refit(); term.focus(); markRunning(engine, true); };
-    ws.onmessage = (e) => term.write(typeof e.data === "string" ? e.data : new Uint8Array(e.data));
-    ws.onclose = () => {
+    tws = new WebSocket(wsUrl(`/pty?product=${product.id}&engine=${engine}${mode ? `&mode=${mode}` : ""}`));
+    tws.onopen = () => { retry = 0; $("#termState").textContent = `${nameOf(engine)} · ${product.name} · type below`; $("#termMsg").hidden = true; refit(); term.focus(); };
+    tws.onmessage = (e) => term.write(typeof e.data === "string" ? e.data : new Uint8Array(e.data));
+    tws.onclose = () => {
+      if (engine === "other") return;
       $("#termState").textContent = "Disconnected. Reconnecting…";
-      retryTimer = setTimeout(() => connect(), Math.min(15000, 1000 * 2 ** retry++));
-      if (retry > 2) { $("#termMsg").hidden = false; $("#termMsg").textContent = "The Studio server is not reachable. If Cloud Shell went to sleep, start it again with: bash ~/ai-org-studio/bin/studio.sh"; }
+      retryTimer = setTimeout(() => connectTerm(), Math.min(15000, 1000 * 2 ** retry++));
+      if (retry > 2) { $("#termMsg").hidden = false; $("#termMsg").textContent = "The Studio server is not reachable. If the machine went to sleep, start it again: bash ~/ai-org-studio/bin/studio.sh"; }
     };
   }
-  const nameOf = (id) => cfg?.engines.find((e) => e.id === id)?.name || id;
-  function markRunning(id, on) { const b = document.querySelector(`.eng[data-eng="${id}"]`); if (b) b.classList.toggle("running", on); }
+  $("#btnRestart").onclick = () => { if (tws?.readyState === 1) { term.reset(); tsend({ t: "restart", mode: "new" }); } else connectTerm("new"); };
+  $("#btnContinue").onclick = () => { if (tws?.readyState === 1) { term.reset(); tsend({ t: "restart", mode: "continue" }); } else connectTerm("continue"); };
+
+  // ---------- Studio-drawn chat (Other models) ----------
+  const chat = window.StudioChat.create({ box: $("#msgs"), onBusy: (b) => { $("#btnStop").hidden = !b; $("#btnSend").disabled = b; } });
+  let chatId = "";
+  const prov = () => cfg.providers.find((p) => p.id === $("#providerPick").value);
+  async function loadModels(pid, keepModel) {
+    const p = cfg.providers.find((x) => x.id === pid); const pick = $("#modelPick");
+    let models = p.models || [];
+    if (p.hasKey || !p.needsKey) { try { const r = await api(`/api/providers/${pid}`); models = r.models?.length ? r.models : models; } catch { /* keep defaults */ } }
+    pick.replaceChildren(...models.map((m) => el("option", { value: m, text: m })));
+    if (!models.length) pick.append(el("option", { value: "", text: p.needsKey && !p.hasKey ? "Add a key first" : "No models found" }));
+    const want = keepModel || store.get(`studio.model.${pid}`, ""); if (want && models.includes(want)) pick.value = want;
+  }
+  async function refreshChats(selectId) {
+    const { chats } = await api(`/api/products/${product.id}/chats`);
+    const pick = $("#chatPick");
+    pick.replaceChildren(el("option", { value: "", text: chats.length ? "Pick a conversation" : "No conversations yet" }), ...chats.map((c) => el("option", { value: c.id, text: `${c.title} · ${c.model.split("/").pop()}` })));
+    if (selectId) pick.value = selectId;
+    return chats;
+  }
+  async function openChat(id) {
+    if (!id) { chat.close(); chatId = ""; $("#msgs").append(el("div", { class: "hint" }, el("b", { text: "Pick a provider and model above, then press New chat." }), el("p", { text: "Free options: NVIDIA, OpenRouter (:free models), Groq or Gemini — each needs a free key (Keys button). Ollama runs models on this machine." }))); return; }
+    const c = await api(`/api/products/${product.id}/chats/${id}`);
+    chatId = id; store.set(`studio.chat.${product.id}`, id); $("#chatPick").value = id;
+    $("#providerPick").value = c.provider; await loadModels(c.provider, c.model); $("#modelPick").value = c.model;
+    chat.open(c, wsUrl(`/chat?product=${product.id}&chat=${id}`));
+  }
+  async function newChat() {
+    const p = prov(), model = $("#modelPick").value;
+    if (!p || !model) { openKeys(p?.id); return; }
+    if (p.needsKey && !p.hasKey) { openKeys(p.id); return; }
+    const c = await api(`/api/products/${product.id}/chats`, { method: "POST", body: JSON.stringify({ provider: p.id, model }) });
+    await refreshChats(c.id); await openChat(c.id); $("#ask").focus();
+    // the title is set from the first message; refresh the list after it is sent
+    setTimeout(() => refreshChats(chatId).catch(() => {}), 1500);
+  }
+  $("#btnNewChat").onclick = () => newChat().catch((e) => alert(e.message));
+  $("#chatPick").onchange = () => openChat($("#chatPick").value);
+  $("#providerPick").onchange = async () => {
+    const pid = $("#providerPick").value; store.set("studio.provider", pid);
+    const p = cfg.providers.find((x) => x.id === pid);
+    if (p.needsKey && !p.hasKey) { openKeys(pid); return; }
+    await loadModels(pid); $("#modelPick").onchange();
+  };
+  $("#modelPick").onchange = async () => {
+    store.set(`studio.model.${$("#providerPick").value}`, $("#modelPick").value);
+    // Like Cursor: switching model applies to the open conversation from the next message.
+    if (chatId && $("#modelPick").value) await api(`/api/products/${product.id}/chats/${chatId}`, { method: "PATCH", body: JSON.stringify({ provider: $("#providerPick").value, model: $("#modelPick").value }) }).catch(() => {});
+  };
+  $("#effortPick").value = store.get("studio.effort", "default");
+  $("#effortPick").onchange = () => store.set("studio.effort", $("#effortPick").value);
+  $("#composer").onsubmit = async (e) => {
+    e.preventDefault(); const text = $("#ask").value.trim(); if (!text) return;
+    if (!chatId) { await newChat(); if (!chatId) return; }
+    $("#ask").value = "";
+    if (!(await chat.send(text, $("#autoApprove").checked, $("#effortPick").value))) $("#ask").value = text;
+  };
+  $("#ask").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#composer").requestSubmit(); } });
+  $("#btnStop").onclick = () => chat.stop();
+
+  // keys dialog
+  function openKeys(pid) {
+    const sel = $("#kProvider");
+    sel.replaceChildren(...cfg.providers.map((p) => el("option", { value: p.id, text: `${p.name}${p.hasKey ? " ✓" : ""}` })));
+    sel.value = pid || $("#providerPick").value; keysFill(); $("#dlgKeys").showModal();
+  }
+  function keysFill() {
+    const p = cfg.providers.find((x) => x.id === $("#kProvider").value);
+    $("#kHelp").textContent = p.keyHelp; $("#kBaseWrap").hidden = !p.custom; $("#kBase").value = p.base || "";
+    $("#kKeyWrap").hidden = !p.needsKey && !p.custom; $("#kKey").value = ""; $("#kKey").placeholder = p.hasKey ? "Key saved. Paste a new one to replace it." : "Paste your key";
+    $("#kStatus").textContent = ""; $("#kRemove").hidden = !p.hasKey;
+  }
+  $("#kProvider").onchange = keysFill;
+  $("#btnKeys").onclick = () => openKeys();
+  $("#formKeys").addEventListener("submit", async (e) => {
+    if (e.submitter?.value !== "default") return;
+    e.preventDefault(); const id = $("#kProvider").value; $("#kStatus").textContent = "Checking…";
+    try {
+      const r = await api(`/api/providers/${id}`, { method: "PUT", body: JSON.stringify({ key: $("#kKey").value, base: $("#kBase").value }) });
+      cfg = await api("/api/config");
+      $("#kStatus").textContent = r.warning ? `Saved, but: ${r.warning}` : `Saved. ${r.models.length} models available.`;
+      $("#providerPick").value = id; await loadModels(id); keysFill();
+      $("#kStatus").textContent = r.warning ? `Saved, but: ${r.warning}` : `Saved. ${r.models.length} models available.`;
+    } catch (err) { $("#kStatus").textContent = err.message; }
+  });
+  $("#kRemove").onclick = async () => { await api(`/api/providers/${$("#kProvider").value}`, { method: "DELETE" }); cfg = await api("/api/config"); keysFill(); };
+
+  // ---------- model + thinking above the Claude Code / Codex screen ----------
+  const EFFORT_NAME = { default: "Default", none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+  async function loadTermModels() {
+    if (engine === "other") return;
+    const d = await api(`/api/products/${product.id}/terminal/${engine}`).catch(() => null); if (!d) return;
+    $("#tModel").replaceChildren(...d.models.map((m) => el("option", { value: m.id, text: m.name })), ...(d.freeText ? [el("option", { value: "__other", text: "Other model…" })] : []));
+    $("#tEffort").replaceChildren(...d.efforts.map((e) => el("option", { value: e, text: EFFORT_NAME[e] || e })));
+    const cur = d.current || {};
+    const known = d.models.some((m) => m.id === (cur.model || ""));
+    $("#tModel").value = known ? cur.model || "" : "__other"; $("#tModelFree").hidden = known; $("#tModelFree").value = known ? "" : cur.model || "";
+    $("#tEffort").value = cur.effort || "default"; $("#tNote").textContent = "";
+  }
+  $("#tModel").onchange = () => { $("#tModelFree").hidden = $("#tModel").value !== "__other"; if (!$("#tModelFree").hidden) $("#tModelFree").focus(); };
+  $("#tApply").onclick = async () => {
+    const model = $("#tModel").value === "__other" ? $("#tModelFree").value.trim() : $("#tModel").value;
+    try {
+      await api(`/api/products/${product.id}/terminal/${engine}`, { method: "PUT", body: JSON.stringify({ model, effort: $("#tEffort").value }) });
+      $("#tNote").textContent = "Restarted with your choice; your last chat is kept.";
+      if (tws?.readyState === 1) { term.reset(); tsend({ t: "restart", mode: "continue" }); } else connectTerm("continue");
+    } catch (e) { $("#tNote").textContent = e.message; }
+  };
+
+  // ---------- team: which AI each agent uses ----------
+  async function loadTeam(body) {
+    const t = $("#team");
+    try {
+      const d = body ? await api(`/api/products/${product.id}/team`, { method: "PUT", body: JSON.stringify(body) }) : await api(`/api/products/${product.id}/team`);
+      $("#teamNote").textContent = d.note; $("#teamErr").textContent = d.error || "";
+      $("#teamAvail").replaceChildren(el("span", { class: "small muted", text: "AI you have:" }), ...d.models.map((m) => {
+        const cb = el("input", { type: "checkbox", "data-id": m.id }); cb.checked = m.available;
+        cb.onchange = () => loadTeam({ availability: Object.fromEntries([...document.querySelectorAll("#teamAvail input")].map((x) => [x.dataset.id, x.checked])), overrides: currentOverrides() });
+        return el("label", {}, cb, `${m.name}${m.cost === 0 ? "" : m.cost === 2 ? " · pay per use" : ""}`);
+      }));
+      t.replaceChildren(el("div", { class: "trk head", role: "row" }, el("div", { role: "columnheader", text: "Agent" }), el("div", { role: "columnheader", text: "Uses" }), el("div", { role: "columnheader", text: "Why" })));
+      for (const r of d.rows) {
+        const sel = el("select", { "data-slug": r.slug, "aria-label": `Model for ${r.name}` }, el("option", { value: "", text: r.pick ? `Auto: ${r.pick.name}` : "Auto (no AI available)" }), ...d.models.filter((m) => m.available).map((m) => el("option", { value: m.id, text: m.name })));
+        sel.value = r.overridden ? r.pick?.id || "" : "";
+        sel.onchange = () => loadTeam({ overrides: currentOverrides() });
+        t.append(el("div", { class: "trk", role: "row" }, el("div", { role: "rowheader" }, el("b", { text: r.name }), el("br"), el("small", { text: r.role })), el("div", { role: "cell" }, sel),
+          el("div", { role: "cell" }, el("small", { text: r.why + (r.fallback ? ` Backup: ${r.fallback.name}.` : "") }))));
+      }
+    } catch (e) { $("#teamErr").textContent = `Team could not load: ${e.message}`; }
+  }
+  const currentOverrides = () => Object.fromEntries([...document.querySelectorAll("#team select")].map((s) => [s.dataset.slug, s.value]).filter(([, v]) => v));
+
+  // ---------- engine tabs ----------
+  function renderEngines() {
+    const tabs = [...cfg.terminals.map((t) => ({ id: t.id, name: t.name, sub: "your login" })), { id: "other", name: "Other models", sub: "free or API key" }];
+    $("#engines").replaceChildren(...tabs.map((t) => { const b = el("button", { class: "eng", role: "tab", "data-eng": t.id, "aria-selected": String(t.id === engine), title: t.sub }, el("span", { class: "dot" }), t.name); b.onclick = () => pickEngine(t.id); return b; }));
+  }
   function pickEngine(id) {
     engine = id; store.set("studio.engine", id);
     document.querySelectorAll(".eng").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.eng === id)));
-    connect();
+    const isTerm = id !== "other";
+    $("#termPane").hidden = !isTerm; $("#chatPane").hidden = isTerm;
+    if (isTerm) { connectTerm(); loadTermModels(); setTimeout(refit, 50); }
+    else { if (tws) { tws.onclose = null; tws.close(); tws = null; } refreshChats().then(() => openChat(store.get(`studio.chat.${product.id}`, "") && [...$("#chatPick").options].some((o) => o.value === store.get(`studio.chat.${product.id}`)) ? store.get(`studio.chat.${product.id}`) : "")); }
   }
-  $("#btnRestart").onclick = () => { if (ws?.readyState === 1) { term.reset(); sendJ({ t: "restart", mode: "new" }); } else connect("new"); };
-  $("#btnContinue").onclick = () => { if (ws?.readyState === 1) { term.reset(); sendJ({ t: "restart", mode: "continue" }); } else connect("continue"); };
 
   // ---------- resizable split ----------
   const split = $("#split"), div = $("#divider");
@@ -55,11 +200,10 @@
   setLeft(Number(store.get("studio.left", "42")));
   div.addEventListener("pointerdown", (e) => {
     div.setPointerCapture(e.pointerId);
-    const move = (ev) => setLeft(((ev.clientX - split.getBoundingClientRect().left) / split.clientWidth) * 100);
-    const up = () => { div.removeEventListener("pointermove", move); div.removeEventListener("pointerup", up); refit(); };
-    div.addEventListener("pointermove", move); div.addEventListener("pointerup", up);
     document.querySelectorAll("iframe").forEach((f) => (f.style.pointerEvents = "none"));
-    div.addEventListener("pointerup", () => document.querySelectorAll("iframe").forEach((f) => (f.style.pointerEvents = "")), { once: true });
+    const move = (ev) => setLeft(((ev.clientX - split.getBoundingClientRect().left) / split.clientWidth) * 100);
+    const up = () => { div.removeEventListener("pointermove", move); div.removeEventListener("pointerup", up); document.querySelectorAll("iframe").forEach((f) => (f.style.pointerEvents = "")); refit(); };
+    div.addEventListener("pointermove", move); div.addEventListener("pointerup", up);
   });
   div.addEventListener("keydown", (e) => { const cur = parseFloat(getComputedStyle(split).getPropertyValue("--left")); if (e.key === "ArrowLeft") setLeft(cur - 3); if (e.key === "ArrowRight") setLeft(cur + 3); refit(); });
 
@@ -67,34 +211,49 @@
   let tab = store.get("studio.tab", "");
   function showTab(p) {
     tab = p; store.set("studio.tab", p);
-    for (const t of ["app", "proto", "agents"]) {
-      $(`#tab-${t}`).setAttribute("aria-selected", String(t === p));
-      $(`#pane-${t}`).classList.toggle("show", t === p);
-    }
-    const href = p === "app" ? lastAppUrl : p === "proto" ? $("#protoFrame").getAttribute("src") : `https://github.com/${cfg?.product.repo}/issues?q=is%3Aopen+label%3Aai%3A*`;
+    for (const t of ["app", "proto", "agents"]) { $(`#tab-${t}`).setAttribute("aria-selected", String(t === p)); $(`#pane-${t}`).classList.toggle("show", t === p); }
+    const href = p === "app" ? lastAppUrl : p === "proto" ? $("#protoFrame").getAttribute("src") : `https://github.com/${product.repo}/issues?q=is%3Aopen+label%3Aai%3A*`;
     $("#openTab").hidden = !href; if (href) $("#openTab").href = href;
     $("#openTab").textContent = p === "agents" ? "Open on GitHub" : "Open in new tab";
+    $("#btnAppLink").hidden = p !== "app";
   }
   document.querySelectorAll(".rtab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.pane)));
   $(".rtabs").addEventListener("keydown", (e) => {
     const order = ["app", "proto", "agents"], i = order.indexOf(tab);
     if (e.key === "ArrowRight" || e.key === "ArrowLeft") { const n = order[(i + (e.key === "ArrowRight" ? 1 : 2)) % 3]; showTab(n); $(`#tab-${n}`).focus(); }
   });
-
   function setApp(app) {
     const banner = $("#appBanner");
-    if (app.kind === "none") { $("#appFrame").hidden = true; $("#appEmpty").hidden = false; banner.hidden = true; lastAppUrl = ""; return; }
+    if (!app || app.kind === "none") { $("#appFrame").hidden = true; $("#appFrame").removeAttribute("src"); $("#appEmpty").hidden = false; banner.hidden = true; lastAppUrl = ""; if (tab === "app") $("#openTab").hidden = true; return; }
     $("#appFrame").hidden = false; $("#appEmpty").hidden = true; banner.hidden = false;
     banner.className = "banner" + (app.kind === "preview" ? " preview" : "");
-    banner.replaceChildren(el("b", { text: app.kind === "preview" ? app.label : "Production" }),
-      el("span", { text: app.kind === "preview" ? "Ready to test. Try it here, then tell the AI on the left: approve, or what to change." : "The live app. When a feature is ready to test, its preview opens here automatically." }));
+    banner.replaceChildren(el("b", { text: app.kind === "preview" ? app.label : "Live app" }),
+      el("span", { text: app.kind === "preview" ? "Ready to test. Try it here, then tell the AI on the left: approve, or what to change." : "When a feature is ready to test, its preview opens here automatically." }));
     if (app.url !== lastAppUrl) {
-      const wasPreview = lastAppUrl && app.kind === "preview";
+      const toPreview = app.kind === "preview" && lastAppUrl !== app.url;
       lastAppUrl = app.url; $("#appFrame").src = app.url;
-      if (wasPreview || (app.kind === "preview" && tab !== "app")) showTab("app");
+      if (toPreview && tab !== "app" && board) showTab("app");
     }
-    if (tab === "app") $("#openTab").href = app.url;
+    if (tab === "app") { $("#openTab").hidden = false; $("#openTab").href = app.url; }
   }
+  // app link dialog
+  const openUrl = () => { $("#uUrl").value = product.productionUrl || ""; $("#uErr").textContent = ""; $("#dlgUrl").showModal(); };
+  $("#btnAppLink").onclick = openUrl; $("#btnAppLink2").onclick = openUrl;
+  $("#formUrl").addEventListener("submit", async (e) => {
+    if (e.submitter?.value !== "default") return; e.preventDefault();
+    try { await api(`/api/products/${product.id}`, { method: "PATCH", body: JSON.stringify({ productionUrl: $("#uUrl").value.trim() }) }); $("#dlgUrl").close(); await reloadConfig(product.id); }
+    catch (err) { $("#uErr").textContent = err.message; }
+  });
+
+  // prototypes
+  function renderPrototypes() {
+    const pick = $("#protoPick"), list = product.prototypes || [];
+    pick.replaceChildren(...list.map((p) => el("option", { value: p, text: p.replace(/\.html$/, "").replace(/[_-]+/g, " ") })));
+    $("#protoEmpty").hidden = !!list.length; $("#protoFrame").hidden = !list.length; pick.hidden = !list.length;
+    pick.onchange = () => { $("#protoFrame").src = `/proto/${product.id}/${encodeURIComponent(pick.value)}`; if (tab === "proto") $("#openTab").href = $("#protoFrame").getAttribute("src"); };
+    if (list.length) pick.onchange(); else $("#protoFrame").removeAttribute("src");
+  }
+  $("#btnRescan").onclick = async () => { await api(`/api/products/${product.id}`, { method: "PATCH", body: JSON.stringify({ rescan: true }) }); await reloadConfig(product.id); };
 
   // ---------- agents board ----------
   const KIND = { agent: "an agent is working", founder: "waiting for you", loop: "automatic checks", blocked: "blocked", done: "done", queued: "not started" };
@@ -105,7 +264,7 @@
     const st = $("#boardStatus");
     st.className = "statusline" + (b.error ? " err" : "");
     st.textContent = b.error ? `Agent status could not refresh (${b.error}). Showing what was last loaded at ${new Date(b.updatedAt).toLocaleTimeString()}.` : `Live from GitHub · updated ${new Date(b.updatedAt).toLocaleTimeString()}`;
-    // working now
+    $("#noAiOrg").hidden = !!b.aiOrg;
     const run = $("#running"); run.replaceChildren();
     if (!b.working.length) run.append(el("div", { class: "idle", text: b.next ? `No agents working. Next on the backlog: ${b.next.title}.` : "No agents working right now." }));
     for (const w of b.working) {
@@ -114,60 +273,77 @@
         el("span", {}, el("b", { text: w.who }), el("small", { text: `${w.what} · ${w.minutes} min` }))));
     }
     const badge = $("#workingBadge"); badge.hidden = !b.working.length; badge.textContent = `${b.working.length} working`;
-    // waiting for you
     $("#waitingWrap").hidden = !b.waiting.length;
     $("#waiting").replaceChildren(...b.waiting.map((r) => el("div", { class: "wait" }, el("b", { text: r.title }),
       el("small", { text: r.stage === "approve" ? "Its Feature Contract is ready. Ask the AI on the left for the 2-minute summary, then approve or request a change." : "Ready for your test. Try it in the Real app tab, then tell the AI: approve, or what to change." }))));
-    // tracks
     const t = $("#tracks"); t.replaceChildren();
     t.append(el("div", { class: "trk head", role: "row" }, el("div", { role: "columnheader", text: "Feature" }), ...b.stages.map((s) => el("div", { role: "columnheader", text: s.name }))));
     for (const r of b.rows) {
       const at = b.stages.findIndex((s) => s.id === r.stage);
       const cells = b.stages.map((s, i) => {
         let k = "none";
-        if (r.kind === "done") k = "done";
-        else if (r.kind !== "queued") k = i < at ? "done" : i === at ? r.kind : "none";
+        if (r.kind === "done") k = "done"; else if (r.kind !== "queued") k = i < at ? "done" : i === at ? r.kind : "none";
         return el("div", { role: "cell", "aria-label": `${s.name}: ${KIND[k] || "not started"}` }, el("div", { class: `st ${k}` }));
       });
       const sub = r.kind === "queued" ? "queued on the backlog" : r.kind === "done" ? "shipped" : `${r.who} · ${KIND[r.kind]}`;
       t.append(el("div", { class: "trk", role: "row" }, el("div", { class: "name", role: "rowheader" }, el("b", { text: r.title }), el("small", { text: sub })), ...cells));
     }
-    // feed
     $("#feed").replaceChildren(...(b.feed.length ? b.feed.map((f) => el("a", { href: f.url, target: "_blank", rel: "noopener" }, el("time", { text: ago(f.at) }), f.text)) : [el("div", { class: "idle", text: "Nothing yet." })]));
-    // focus in the top bar: the item waiting for you, else the one an agent is on
     const focus = b.rows.find((r) => r.kind === "founder") || b.rows.find((r) => r.kind === "agent" || r.kind === "loop" || r.kind === "blocked");
     $("#focus").hidden = !focus;
     if (focus) { $("#focusTitle").textContent = focus.title; const p = $("#focusStage"); p.className = `stagepill ${focus.kind}`; p.textContent = focus.kind === "founder" ? "Waiting for your OK" : `${b.stages.find((s) => s.id === focus.stage)?.name || ""}: ${focus.who}`; }
     setApp(b.app);
   }
   async function poll() {
+    const pid = product?.id; if (!pid) return;
     try {
-      const r = await fetch("/api/board", { cache: "no-store" });
-      const d = await r.json();
+      const r = await fetch(`/api/products/${pid}/board`, { cache: "no-store" }); const d = await r.json();
+      if (pid !== product.id) return;
       if (r.ok) renderBoard(d);
       else if (board) renderBoard({ ...board, error: d.error || `HTTP ${r.status}` });
       else { const s = $("#boardStatus"); s.className = "statusline err"; s.textContent = `Agent status could not load (${d.error || r.status}). The rest of the Studio keeps working.`; }
-    } catch (e) {
-      if (board) renderBoard({ ...board, error: "Studio server not reachable" });
-    }
+    } catch { if (board) renderBoard({ ...board, error: "Studio server not reachable" }); }
   }
+
+  // ---------- products ----------
+  function selectProduct(id) {
+    product = cfg.products.find((p) => p.id === id) || cfg.products[0];
+    store.set("studio.product", product.id); $("#productPick").value = product.id;
+    document.title = `${product.name} · AI Org Studio`;
+    board = null; lastAppUrl = ""; $("#focus").hidden = true; $("#tracks").replaceChildren(); $("#running").replaceChildren(); $("#feed").replaceChildren(); $("#boardStatus").textContent = "Loading…";
+    setApp(product.productionUrl ? { kind: "production", url: product.productionUrl } : { kind: "none" });
+    renderPrototypes();
+    showTab(tab || (product.productionUrl ? "app" : "proto"));
+    pickEngine(engine);
+    clearInterval(pollTimer); poll(); pollTimer = setInterval(poll, cfg.boardRefreshMs);
+    loadTeam();
+  }
+  async function reloadConfig(selectId) {
+    cfg = await api("/api/config");
+    $("#productPick").replaceChildren(...cfg.products.map((p) => el("option", { value: p.id, text: p.name })));
+    if (!cfg.products.length) { $("#dlgProduct").showModal(); return; }
+    if (product && selectId === product.id) { product = cfg.products.find((p) => p.id === selectId); setApp(product.productionUrl ? { kind: "production", url: product.productionUrl } : { kind: "none" }); renderPrototypes(); poll(); return; }
+    selectProduct(selectId || store.get("studio.product", ""));
+  }
+  $("#productPick").onchange = () => selectProduct($("#productPick").value);
+  $("#btnAddProduct").onclick = () => { $("#fErr").textContent = ""; $("#formProduct").reset(); $("#dlgProduct").showModal(); };
+  $("#formProduct").addEventListener("submit", async (e) => {
+    if (e.submitter?.value !== "default") return;
+    e.preventDefault(); $("#fErr").textContent = "Copying the repository… this can take a minute."; $("#fAdd").disabled = true;
+    try { const r = await api("/api/products", { method: "POST", body: JSON.stringify({ repo: $("#fRepo").value, name: $("#fName").value.trim(), productionUrl: $("#fUrl").value.trim() }) }); $("#dlgProduct").close(); await reloadConfig(r.id); }
+    catch (err) { $("#fErr").textContent = err.message; } finally { $("#fAdd").disabled = false; }
+  });
 
   // ---------- start ----------
   (async () => {
-    cfg = await (await fetch("/api/config", { cache: "no-store" })).json();
-    $("#productName").textContent = cfg.product.name; document.title = `${cfg.product.name} · AI Org Studio`;
-    $("#engines").replaceChildren(...cfg.engines.map((e) => {
-      const b = el("button", { class: "eng" + (e.running ? " running" : ""), role: "tab", "data-eng": e.id, "aria-selected": String(e.id === engine) }, el("span", { class: "dot" }), e.name);
-      b.onclick = () => pickEngine(e.id); return b;
-    }));
-    if (!cfg.engines.some((e) => e.id === engine)) engine = cfg.engines[0].id;
-    const pick = $("#protoPick");
-    pick.replaceChildren(...cfg.product.prototypes.map((p) => el("option", { value: p, text: p.replace(/\.html$/, "").replace(/_/g, " ") })));
-    pick.onchange = () => { $("#protoFrame").src = `/proto/${encodeURIComponent(pick.value)}`; if (tab === "proto") $("#openTab").href = $("#protoFrame").getAttribute("src"); };
-    if (cfg.product.prototypes.length) pick.onchange();
-    setApp(cfg.product.productionUrl ? { kind: "production", url: cfg.product.productionUrl } : { kind: "none" });
-    showTab(tab || (cfg.product.productionUrl ? "app" : "proto"));
-    connect();
-    poll(); setInterval(poll, cfg.boardRefreshMs);
+    cfg = await api("/api/config");
+    $("#where").textContent = `Private to you · ${cfg.platform.name}`;
+    renderEngines();
+    $("#providerPick").replaceChildren(...cfg.providers.map((p) => el("option", { value: p.id, text: p.name })));
+    $("#providerPick").value = store.get("studio.provider", "nvidia");
+    if (!$("#providerPick").value) $("#providerPick").value = "nvidia";
+    loadModels($("#providerPick").value);
+    if (!["claude", "codex", "other"].includes(engine)) engine = "claude";
+    await reloadConfig();
   })();
 })();
