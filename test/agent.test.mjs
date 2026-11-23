@@ -115,6 +115,9 @@ test("Cloud Shell without WEB_HOST: the link the Studio was opened at is remembe
   assert.equal(publicUrl(8484, { STUDIO_HOME: home }), "https://8484-cs-123-default.cs-asia-southeast1.cloudshell.dev");
   assert.equal(publicUrl(9000, { STUDIO_HOME: home }), "http://localhost:9000", "a different port is not guessed");
   assert.equal(publicUrl(8484, { STUDIO_HOME: home, WEB_HOST: "cs-9.cloudshell.dev" }), "https://8484-cs-9.cloudshell.dev", "WEB_HOST wins when present");
+  assert.equal(publicUrl(8484, { STUDIO_HOME: tmp(), WEB_HOST: "None", CLOUD_SHELL: "true" }), "http://localhost:8484", "Cloud Shell's literal 'None' is not a host");
+  writeFileSync(join(home, "public-url"), "https://8484-None\n");
+  assert.equal(publicUrl(8484, { STUDIO_HOME: home }), "http://localhost:8484", "a saved 'None' link is ignored");
   writeFileSync(join(home, "public-url"), "javascript:alert(1)\n");
   assert.equal(publicUrl(8484, { STUDIO_HOME: home }), "http://localhost:8484", "a bad saved value is ignored");
 });
