@@ -2,6 +2,12 @@
 # Stand-in for the GitHub CLI during tests: serves the 23-Nov Parent Plus snapshot.
 F="$(cd "$(dirname "$0")/../../test/fixtures" && pwd)"
 [ -f "${FAKE_GH_FAIL:-/nonexistent}" ] && { echo "HTTP 503: GitHub unavailable" >&2; exit 1; }
+if [ "$1 $2" = "repo view" ]; then
+  case "$3" in acme/Demo-App) echo '{"name":"Demo-App","nameWithOwner":"acme/Demo-App","homepageUrl":"","defaultBranchRef":{"name":"main"}}'; exit 0;; *) echo "GraphQL: Could not resolve to a Repository" >&2; exit 1;; esac
+fi
+if [ "$1 $2" = "repo clone" ]; then
+  d="$4"; mkdir -p "$d/prototypes" && cd "$d" && git init -q -b main && echo '<h1>demo</h1>' > prototypes/home.html && git add -A && git -c user.email=t@t -c user.name=t commit -qm init && exit 0
+fi
 [ "$1" = api ] || { echo "fake gh: unsupported $*" >&2; exit 2; }
 case "$2" in
   */issues\?state=open*) cat "$F/issues.json";;
@@ -9,6 +15,8 @@ case "$2" in
   */actions/runs*) cat "$F/runs.json";;
   */issues/comments*) cat "$F/comments.json";;
   */contents/docs/product/BACKLOG.md) cat "$F/backlog.json";;
+  */contents/org/agents\?ref=*) node -e 'const fs=require("fs"),d=process.argv[1];console.log(JSON.stringify(fs.readdirSync(d).map(n=>({name:n,path:"org/agents/"+n}))))' "$F/agents";;
+  */contents/org/agents/*.md\?ref=*) f="${2##*/org/agents/}"; f="${f%%\?*}"; node -e 'const fs=require("fs");console.log(JSON.stringify({content:fs.readFileSync(process.argv[1]).toString("base64")}))' "$F/agents/$f";;
   */deployments*) echo "[]";;
   *) echo "fake gh: no fixture for $2" >&2; exit 1;;
 esac

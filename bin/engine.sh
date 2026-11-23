@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Starts one AI engine inside the Studio's left panel. Usage: engine.sh claude|codex|free
+# Starts Claude Code or Codex inside the Studio's left panel. Usage: engine.sh claude|codex
+# ("Other models" do not use this script; the Studio talks to them directly, see server/agent.mjs.)
 # Uses the official, unmodified programs. Sign-in happens on their own screens; the Studio never sees credentials.
 set -uo pipefail
 ENGINE="${1:?engine}"; MODE="${STUDIO_MODE:-new}"
@@ -26,6 +27,9 @@ case "$ENGINE" in
     need claude @anthropic-ai/claude-code
     dim "Claude Code · $(claude --version 2>/dev/null) · ${STUDIO_PRODUCT:-product} · signed in with your own Claude account"
     ARGS=(--append-system-prompt "$RULES"); [ "$MODE" = continue ] && ARGS+=(--continue)
+    [ -n "${STUDIO_MODEL:-}" ] && ARGS+=(--model "$STUDIO_MODEL")
+    [ -n "${STUDIO_EFFORT:-}" ] && ARGS+=(--effort "$STUDIO_EFFORT")
+    [ -n "${STUDIO_MODEL:-}${STUDIO_EFFORT:-}" ] && dim "Model: ${STUDIO_MODEL:-default} · thinking effort: ${STUDIO_EFFORT:-default}"
     exec claude "${ARGS[@]}" ;;
   codex)
     need codex @openai/codex
@@ -37,32 +41,11 @@ case "$ENGINE" in
     dim "Codex · $(codex --version 2>/dev/null) · ${STUDIO_PRODUCT:-product} · signed in with your own ChatGPT account"
     # A JSON string is also a valid TOML string, so this passes the rules safely whatever characters they contain.
     TOML_RULES=$(printf '%s' "$RULES" | node -e 'process.stdout.write(JSON.stringify(require("fs").readFileSync(0,"utf8")))')
-    if [ "$MODE" = continue ]; then exec codex resume --last -c "developer_instructions=$TOML_RULES"; fi
-    exec codex -c "developer_instructions=$TOML_RULES" ;;
-  free)
-    need claude @anthropic-ai/claude-code
-    ENV="$HOME/.fcc/.env"
-    if ! grep -q '^NVIDIA_NIM_API_KEY=.\+' "$ENV" 2>/dev/null; then
-      say "The free engine needs your NVIDIA key once (free at build.nvidia.com → API keys)."
-      dim "Type it here; it is saved only in your Cloud Shell ($ENV), never shown and never sent to the chat."
-      read -r -s -p "NVIDIA key: " KEY; echo
-      [ -n "$KEY" ] || { say "No key entered. Press Restart to try again."; exit 1; }
-      mkdir -p "$HOME/.fcc" && umask 077 && printf 'NVIDIA_NIM_API_KEY=%s\nMODEL=%s\nHTTP_READ_TIMEOUT=600\nFCC_OPEN_BROWSER=false\n' "$KEY" "${STUDIO_FREE_MODEL:-nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b}" > "$ENV"
-      unset KEY
-    fi
-    if ! curl -s -o /dev/null http://127.0.0.1:8082/v1/models; then
-      if ! command -v fcc-server >/dev/null 2>&1; then
-        say "Installing the free-engine bridge (one time)…"
-        command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
-        uv tool install free-claude-code >/dev/null 2>&1 || { say "Could not install the free-engine bridge. Press Restart to try again."; exit 1; }
-      fi
-      mkdir -p "$HOME/.ai-org-studio"; nohup fcc-server > "$HOME/.ai-org-studio/fcc.log" 2>&1 &
-      for _ in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:8082/v1/models && break; sleep 1; done
-    fi
-    MODEL=$(sed -n 's/^MODEL=//p' "$ENV" | head -1)
-    dim "Free engine · Claude Code program on ${MODEL:-the free model} via NVIDIA (not a Claude model) · ${STUDIO_PRODUCT:-product}"
-    ARGS=(--append-system-prompt "$RULES
-You are running on ${MODEL:-a free NVIDIA model}, not a Claude model. Say so if asked."); [ "$MODE" = continue ] && ARGS+=(--continue)
-    ANTHROPIC_BASE_URL=http://127.0.0.1:8082 ANTHROPIC_AUTH_TOKEN=freecc API_TIMEOUT_MS=600000 DISABLE_AUTOUPDATER=1 exec claude "${ARGS[@]}" ;;
+    CX=(-c "developer_instructions=$TOML_RULES")
+    [ -n "${STUDIO_MODEL:-}" ] && CX+=(-m "$STUDIO_MODEL")
+    [ -n "${STUDIO_EFFORT:-}" ] && CX+=(-c "model_reasoning_effort=\"$STUDIO_EFFORT\"")
+    [ -n "${STUDIO_MODEL:-}${STUDIO_EFFORT:-}" ] && dim "Model: ${STUDIO_MODEL:-default} · thinking effort: ${STUDIO_EFFORT:-default}"
+    if [ "$MODE" = continue ]; then exec codex resume --last "${CX[@]}"; fi
+    exec codex "${CX[@]}" ;;
   *) echo "unknown engine $ENGINE"; exit 2 ;;
 esac

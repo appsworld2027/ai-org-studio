@@ -1,0 +1,94 @@
+// Tests for agent→model matching, decision cards (ask_user) and thinking effort.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { plan, needsFromText, parseAgent, ENGINE_MODELS } from "../server/team.mjs";
+import { normalizeQuestion, effortFields, runTurn, toolSchemas } from "../server/agent.mjs";
+
+const A = (slug, name, role = "", description = "") => ({ slug, name, role, description });
+const TEAM = [A("maya-ai-pm", "Maya", "AI Product Manager"), A("dev-coder", "Dev", "Coding Specialist"), A("quinn-qa", "Quinn", "QA Specialist"), A("rex-reviewer", "Rex", "Reviewer"), A("kiran-pjm-a", "Kiran", "Project Manager")];
+const all = (ids) => Object.fromEntries(ids.map((i) => [i, true]));
+const pick = (rows, slug) => rows.find((r) => r.slug === slug).pick?.id;
+
+test("only free models: builder and reviewers get DIFFERENT models", () => {
+  const rows = plan({ agents: TEAM, available: all(["free:nemotron", "free:mistral"]) });
+  const dev = pick(rows, "dev-coder");
+  assert.ok(dev);
+  assert.notEqual(pick(rows, "quinn-qa"), dev); assert.notEqual(pick(rows, "rex-reviewer"), dev);
+  assert.match(rows.find((r) => r.slug === "rex-reviewer").why, /different model from the builder/);
+});
+test("with Claude and Codex: product thinking and coding get the strongest; routine relay gets the fastest", () => {
+  const rows = plan({ agents: TEAM, available: all(ENGINE_MODELS.filter((m) => m.engine !== "free").map((m) => m.id)) });
+  assert.match(pick(rows, "maya-ai-pm"), /opus|codex/);
+  assert.equal(pick(rows, "kiran-pjm-a"), "claude:haiku");
+  assert.notEqual(pick(rows, "rex-reviewer"), pick(rows, "dev-coder"), "reviewer differs from builder");
+});
+test("a backup is offered when more than one AI is available", () => {
+  const rows = plan({ agents: TEAM, available: all(["claude:sonnet", "free:nemotron", "free:mistral"]) });
+  for (const r of rows) assert.ok(r.fallback && r.fallback.id !== r.pick.id, `${r.slug} has a different backup`);
+});
+test("only one AI available: still works, and says the check uses the same model", () => {
+  const rows = plan({ agents: TEAM, available: all(["free:nemotron"]) });
+  assert.equal(pick(rows, "quinn-qa"), "free:nemotron");
+  assert.match(rows.find((r) => r.slug === "quinn-qa").why, /only one AI/);
+});
+test("nothing available: no crash, plain message", () => {
+  const rows = plan({ agents: TEAM, available: {} });
+  assert.equal(rows[0].pick, null); assert.match(rows[0].why, /No AI connected/);
+});
+test("user overrides win (if available) and are flagged when they break independence", () => {
+  const avail = all(["free:nemotron", "free:mistral"]);
+  const base = plan({ agents: TEAM, available: avail });
+  const dev = pick(base, "dev-coder");
+  const rows = plan({ agents: TEAM, available: avail, overrides: { "rex-reviewer": dev, "maya-ai-pm": "claude:opus" } });
+  assert.equal(pick(rows, "rex-reviewer"), dev); assert.match(rows.find((r) => r.slug === "rex-reviewer").why, /same model as the builder/);
+  assert.notEqual(pick(rows, "maya-ai-pm"), "claude:opus", "an override for an AI you do not have is ignored");
+});
+test("custom agents of any product are matched from their job description", () => {
+  assert.ok(needsFromText("Writes database migrations and APIs").coding === 3);
+  assert.ok(needsFromText("Reviews pull requests for security").review === 3);
+  const rows = plan({ agents: [A("sec-bot", "Sentinel", "Security Auditor", "Audits code for security issues")], available: all(["free:nemotron", "free:mistral"]) });
+  assert.equal(pick(rows, "sec-bot"), "free:mistral", "the stronger reviewer of the two free models");
+});
+test("parseAgent reads AI Org role files", () => {
+  const a = parseAgent("---\nslug: dev-coder\nname: Dev\nrole: Coding Specialist\ndescription: Implements one issue.\nmodel: default\n---\n\n# Dev");
+  assert.deepEqual(a, { slug: "dev-coder", name: "Dev", role: "Coding Specialist", description: "Implements one issue." });
+});
+
+test("ask_user: questions are cleaned up; bad ones are rejected", () => {
+  assert.equal(toolSchemas().some((t) => t.function.name === "ask_user"), true);
+  assert.deepEqual(normalizeQuestion({ question: "Which?", options: ["A", { label: "B", detail: "slower" }], recommended: 1 }),
+    { question: "Which?", options: [{ label: "A", detail: "" }, { label: "B", detail: "slower" }], recommended: 1 });
+  assert.equal(normalizeQuestion({ question: "Which?", options: ["only one"] }), null);
+  assert.equal(normalizeQuestion({ question: "Q", options: ["a", "b", "c", "d", "e"], recommended: 9 }).options.length, 4);
+  assert.equal(normalizeQuestion({ question: "Q", options: ["a", "b"], recommended: 9 }).recommended, 0);
+});
+const sse = (...events) => { const s = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") + "data: [DONE]\n\n"; return (async function* () { yield new TextEncoder().encode(s); })(); };
+test("runTurn: ask_user waits for the owner's click and passes the answer back to the model", async () => {
+  const replies = [
+    sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "q1", function: { name: "ask_user", arguments: JSON.stringify({ question: "Where should Overdue go?", options: [{ label: "Top of Fees" }, { label: "Own tab" }], recommended: 0 }) } }] } }] }),
+    sse({ choices: [{ delta: { content: "Great, top of Fees it is." } }] }),
+  ];
+  const bodies = []; const events = []; const messages = [{ role: "user", content: "add overdue list" }];
+  await runTurn({ messages, provider: { id: "nvidia", base: "https://p/v1" }, model: "m", effort: "high", root: mkdtempSync(join(tmpdir(), "t-")), systemPrompt: "S", emit: (e) => events.push(e),
+    approve: async () => { throw new Error("must not ask approval for a question"); }, askUser: async (q) => { assert.equal(q.options[q.recommended].label, "Top of Fees"); return "Top of Fees (the recommended option)"; },
+    fetchImpl: async (u, o) => { bodies.push(JSON.parse(o.body)); return { ok: true, body: replies.shift() }; } });
+  assert.ok(events.some((e) => e.t === "ask" && e.question === "Where should Overdue go?"));
+  assert.match(messages.find((m) => m.role === "tool").content, /chose: Top of Fees/);
+  assert.equal(bodies[0].reasoning_effort, "high", "thinking level sent the standard way");
+  assert.equal(messages.at(-1).content, "Great, top of Fees it is.");
+});
+test("thinking effort: each provider gets its own field; a model that refuses it is retried without", async () => {
+  assert.deepEqual(effortFields("openrouter", "low"), { reasoning: { effort: "low" } });
+  assert.deepEqual(effortFields("groq", "medium"), { reasoning_effort: "medium" });
+  assert.deepEqual(effortFields("anthropic", "high"), {});
+  assert.deepEqual(effortFields("nvidia", "default"), {});
+  const bodies = [], events = [];
+  let n = 0;
+  await runTurn({ messages: [{ role: "user", content: "x" }], provider: { id: "groq", base: "https://p/v1" }, model: "m", effort: "high", root: mkdtempSync(join(tmpdir(), "t-")), systemPrompt: "", emit: (e) => events.push(e), approve: async () => true,
+    fetchImpl: async (u, o) => { bodies.push(JSON.parse(o.body)); return n++ === 0 ? { ok: false, status: 400, text: async () => '{"error":"reasoning_effort is not supported by this model"}' } : { ok: true, body: sse({ choices: [{ delta: { content: "ok" } }] }) }; } });
+  assert.equal(bodies.length, 2); assert.equal(bodies[0].reasoning_effort, "high"); assert.equal(bodies[1].reasoning_effort, undefined);
+  assert.ok(events.some((e) => e.t === "note" && /does not take a thinking level/.test(e.message)));
+});

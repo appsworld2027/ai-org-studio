@@ -1,0 +1,17 @@
+{
+  "name": "AI Org Studio",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "forwardPorts": [8484],
+  "portsAttributes": {
+    "8484": { "label": "AI Org Studio", "onAutoForward": "notify", "protocol": "http" }
+  },
+  "postCreateCommand": "npm ci --no-audit --no-fund --ignore-scripts=false",
+  "postStartCommand": "bash bin/studio.sh",
+  "hostRequirements": { "cpus": 2 },
+  "customizations": {
+    "codespaces": { "openFiles": ["README.md"] }
+  }
+}

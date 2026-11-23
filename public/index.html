@@ -10,23 +10,62 @@
 <body>
 <header class="top">
   <div class="brand">AI Org Studio</div>
-  <div class="crumb">Product <b id="productName">…</b></div>
+  <label class="crumb">Product
+    <select id="productPick" aria-label="Product"></select>
+  </label>
+  <button class="ghost" id="btnAddProduct">Add product</button>
   <div class="crumb" id="focus" hidden>Now <b id="focusTitle"></b> <span class="stagepill" id="focusStage"></span></div>
   <div class="spacer"></div>
-  <div class="note">Private to you · runs in your Cloud Shell</div>
+  <div class="note" id="where">Private to you</div>
 </header>
 
 <div class="split" id="split">
   <section class="left" aria-label="AI chat">
     <div class="engines" role="tablist" aria-label="AI engine" id="engines"></div>
-    <div class="termwrap"><div id="term" aria-label="AI chat terminal"></div>
-      <div class="termmsg" id="termMsg" hidden></div>
+
+    <!-- Claude Code / Codex: their own screens -->
+    <div class="leftpane" id="termPane">
+      <div class="modelbar" id="termModelBar">
+        <label>Model <select id="tModel" aria-label="Model for this engine"></select></label>
+        <input id="tModelFree" aria-label="Model name" placeholder="model name (optional)" hidden>
+        <label>Thinking <select id="tEffort" aria-label="Thinking effort"></select></label>
+        <button class="ghost small" id="tApply" type="button">Apply and restart</button>
+        <span class="small muted" id="tNote"></span>
+      </div>
+      <div class="termwrap"><div id="term" aria-label="AI chat terminal"></div>
+        <div class="termmsg" id="termMsg" hidden></div>
+      </div>
+      <div class="termbar">
+        <span id="termState" class="muted">Connecting…</span>
+        <span class="spacer"></span>
+        <button class="ghost" id="btnContinue" title="Reopen your last conversation">Continue last chat</button>
+        <button class="ghost" id="btnRestart" title="Start a fresh conversation">Restart</button>
+      </div>
     </div>
-    <div class="termbar">
-      <span id="termState" class="muted">Connecting…</span>
-      <span class="spacer"></span>
-      <button class="ghost" id="btnContinue" title="Reopen your last conversation with this engine">Continue last chat</button>
-      <button class="ghost" id="btnRestart" title="Start a fresh conversation">Restart</button>
+
+    <!-- Other models: Studio-drawn chat -->
+    <div class="leftpane chatpane" id="chatPane" hidden>
+      <div class="chatbar">
+        <select id="chatPick" aria-label="Conversation"></select>
+        <button class="ghost" id="btnNewChat">New chat</button>
+        <span class="spacer"></span>
+        <button class="ghost" id="btnKeys" title="Add or change model keys">Keys</button>
+      </div>
+      <div class="msgs" id="msgs" aria-live="polite"></div>
+      <form class="composer" id="composer">
+        <textarea id="ask" rows="3" aria-label="Message" placeholder="Describe a feature, a bug, or ask what the agents are doing. Enter to send, Shift+Enter for a new line."></textarea>
+        <div class="composer-row">
+          <select id="providerPick" aria-label="Provider" title="Provider" class="pill"></select>
+          <select id="modelPick" aria-label="Model" title="Model" class="pill"></select>
+          <select id="effortPick" aria-label="Thinking effort" title="Thinking effort: how long the model thinks before answering" class="pill">
+            <option value="default">Thinking: default</option><option value="low">Thinking: low</option><option value="medium">Thinking: medium</option><option value="high">Thinking: high</option>
+          </select>
+          <label class="muted small auto" title="Let it change files and run commands without asking"><input type="checkbox" id="autoApprove"> Auto</label>
+          <span class="spacer"></span>
+          <button type="button" class="ghost" id="btnStop" hidden>Stop</button>
+          <button type="submit" class="primary" id="btnSend">Send</button>
+        </div>
+      </form>
     </div>
   </section>
 
@@ -38,6 +77,7 @@
       <button class="rtab" role="tab" id="tab-proto" aria-controls="pane-proto" data-pane="proto">Prototype</button>
       <button class="rtab" role="tab" id="tab-agents" aria-controls="pane-agents" data-pane="agents">Agents <span class="badge" id="workingBadge" hidden></span></button>
       <span class="spacer"></span>
+      <button class="linkish" id="btnAppLink">Set app link</button>
       <a class="urlbar" id="openTab" target="_blank" rel="noopener" href="#">Open in new tab</a>
     </div>
 
@@ -45,8 +85,9 @@
       <div class="banner" id="appBanner"></div>
       <iframe id="appFrame" title="The real app" allow="clipboard-write" referrerpolicy="no-referrer"></iframe>
       <div class="empty" id="appEmpty" hidden>
-        <h3>No Vercel deployment yet</h3>
-        <p>Use the Prototype tab to try the design. The real app appears here as soon as Vercel is set up.</p>
+        <h3>No app link yet</h3>
+        <p>When the product is on Vercel (or any https address), add its link and it appears here. Until then, use the Prototype tab.</p>
+        <button class="primary" id="btnAppLink2">Add the app link</button>
       </div>
     </div>
 
@@ -54,10 +95,19 @@
       <div class="banner proto"><b>Prototype</b><span>The HTML design, not the real app.</span>
         <select id="protoPick" aria-label="Choose prototype"></select></div>
       <iframe id="protoFrame" title="HTML prototype"></iframe>
+      <div class="empty" id="protoEmpty" hidden>
+        <h3>No prototypes found</h3>
+        <p>The Studio looks for HTML files in folders named prototypes, mockups or design. Ask the AI on the left to create one, then press Rescan.</p>
+        <button class="ghost" id="btnRescan">Rescan</button>
+      </div>
     </div>
 
     <div class="pane agents" id="pane-agents" role="tabpanel" aria-labelledby="tab-agents">
       <div class="statusline" id="boardStatus" role="status"></div>
+      <div class="empty left-align" id="noAiOrg" hidden>
+        <h3>No AI Org agents on this product yet</h3>
+        <p>The board fills in once the product uses the AI Org loop (a backlog file and <code>ai:</code> labels). Ask the AI on the left: “Set this product up with the AI Org.”</p>
+      </div>
       <section aria-labelledby="hWorking">
         <h3 id="hWorking">Working now</h3>
         <div class="running" id="running"></div>
@@ -71,6 +121,13 @@
         <div class="tracks" id="tracks" role="table" aria-label="Stage of each feature"></div>
         <div class="legend"><span><i class="k-done"></i>done</span><span><i class="k-agent"></i>an agent is working</span><span><i class="k-founder"></i>waiting for you</span><span><i class="k-loop"></i>automatic checks</span><span><i class="k-blocked"></i>blocked</span><span><i class="k-none"></i>not started</span></div>
       </section>
+      <section aria-labelledby="hTeam">
+        <h3 id="hTeam">Team: which AI each agent uses</h3>
+        <p class="small muted" id="teamNote"></p>
+        <div class="avail" id="teamAvail" role="group" aria-label="AI you have"></div>
+        <div class="tracks team" id="team" role="table" aria-label="Agent to model"></div>
+        <p class="small err" id="teamErr"></p>
+      </section>
       <section aria-labelledby="hFeed">
         <h3 id="hFeed">What just happened</h3>
         <div class="feed" id="feed"></div>
@@ -79,9 +136,46 @@
   </section>
 </div>
 
+<!-- dialogs -->
+<dialog id="dlgProduct" aria-labelledby="dlgProductTitle">
+  <form method="dialog" id="formProduct">
+    <h3 id="dlgProductTitle">Add a product</h3>
+    <p class="muted">Any GitHub repository you can open. The Studio makes its own copy to work in.</p>
+    <label>GitHub repository<input id="fRepo" required placeholder="owner/repo or https://github.com/owner/repo" autocomplete="off"></label>
+    <label>Name (optional)<input id="fName" placeholder="Shown in the Studio" autocomplete="off"></label>
+    <label>App link (optional)<input id="fUrl" placeholder="https://your-app.vercel.app" autocomplete="off"></label>
+    <p class="err" id="fErr" role="alert"></p>
+    <div class="row"><span class="spacer"></span><button value="cancel" class="ghost" formnovalidate>Cancel</button><button id="fAdd" class="primary" value="default">Add product</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgKeys" aria-labelledby="dlgKeysTitle">
+  <form method="dialog" id="formKeys">
+    <h3 id="dlgKeysTitle">Keys for other models</h3>
+    <p class="muted">Saved only in this machine (in your home folder, readable by you only). Never shown again, never sent to the page.</p>
+    <label>Provider<select id="kProvider"></select></label>
+    <p class="small muted" id="kHelp"></p>
+    <label id="kBaseWrap" hidden>Server address<input id="kBase" placeholder="https://…/v1" autocomplete="off"></label>
+    <label id="kKeyWrap">Key<input id="kKey" type="password" autocomplete="off" placeholder="Paste your key"></label>
+    <p class="small" id="kStatus" role="status"></p>
+    <div class="row"><button type="button" class="ghost" id="kRemove">Remove key</button><span class="spacer"></span><button value="cancel" class="ghost" formnovalidate>Close</button><button id="kSave" class="primary" value="default">Save and load models</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgUrl" aria-labelledby="dlgUrlTitle">
+  <form method="dialog" id="formUrl">
+    <h3 id="dlgUrlTitle">App link</h3>
+    <p class="muted">The address where the real app runs, for example its Vercel link. Leave empty if there is none yet.</p>
+    <label>Link<input id="uUrl" placeholder="https://your-app.vercel.app" autocomplete="off"></label>
+    <p class="err" id="uErr" role="alert"></p>
+    <div class="row"><span class="spacer"></span><button value="cancel" class="ghost" formnovalidate>Cancel</button><button class="primary" value="default">Save</button></div>
+  </form>
+</dialog>
+
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/addon-fit.js"></script>
 <script src="/vendor/addon-web-links.js"></script>
+<script src="/chat.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
