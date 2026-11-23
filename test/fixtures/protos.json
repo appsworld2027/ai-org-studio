@@ -1,0 +1,50 @@
+[
+  {
+    "name": "ParentPlus_Coach_Tutor_App.html",
+    "path": "founders/prototypes/ParentPlus_Coach_Tutor_App.html",
+    "sha": "4549662a32ec3a0e134a05183a81d655d007da16",
+    "size": 90016,
+    "url": "https://api.github.com/repos/appsworld2027/Parent-plus-/contents/founders/prototypes/ParentPlus_Coach_Tutor_App.html?ref=main",
+    "html_url": "https://github.com/appsworld2027/Parent-plus-/blob/main/founders/prototypes/ParentPlus_Coach_Tutor_App.html",
+    "git_url": "https://api.github.com/repos/appsworld2027/Parent-plus-/git/blobs/4549662a32ec3a0e134a05183a81d655d007da16",
+    "download_url": "https://raw.githubusercontent.com/appsworld2027/Parent-plus-/main/founders/prototypes/ParentPlus_Coach_Tutor_App.html",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/appsworld2027/Parent-plus-/contents/founders/prototypes/ParentPlus_Coach_Tutor_App.html?ref=main",
+      "git": "https://api.github.com/repos/appsworld2027/Parent-plus-/git/blobs/4549662a32ec3a0e134a05183a81d655d007da16",
+      "html": "https://github.com/appsworld2027/Parent-plus-/blob/main/founders/prototypes/ParentPlus_Coach_Tutor_App.html"
+    }
+  },
+  {
+    "name": "Parent_Plus_Aurora.html",
+    "path": "founders/prototypes/Parent_Plus_Aurora.html",
+    "sha": "65a819f7e390da995217e912664610fd9b6baf69",
+    "size": 1060479,
+    "url": "https://api.github.com/repos/appsworld2027/Parent-plus-/contents/founders/prototypes/Parent_Plus_Aurora.html?ref=main",
+    "html_url": "https://github.com/appsworld2027/Parent-plus-/blob/main/founders/prototypes/Parent_Plus_Aurora.html",
+    "git_url": "https://api.github.com/repos/appsworld2027/Parent-plus-/git/blobs/65a819f7e390da995217e912664610fd9b6baf69",
+    "download_url": "https://raw.githubusercontent.com/appsworld2027/Parent-plus-/main/founders/prototypes/Parent_Plus_Aurora.html",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/appsworld2027/Parent-plus-/contents/founders/prototypes/Parent_Plus_Aurora.html?ref=main",
+      "git": "https://api.github.com/repos/appsworld2027/Parent-plus-/git/blobs/65a819f7e390da995217e912664610fd9b6baf69",
+      "html": "https://github.com/appsworld2027/Parent-plus-/blob/main/founders/prototypes/Parent_Plus_Aurora.html"
+    }
+  },
+  {
+    "name": "README.md",
+    "path": "founders/prototypes/README.md",
+    "sha": "8729700098e67d39cdc4c2d865d39702e754a82a",
+    "size": 770,
+    "url": "https://api.github.com/repos/appsworld2027/Parent-plus-/contents/founders/prototypes/README.md?ref=main",
+    "html_url": "https://github.com/appsworld2027/Parent-plus-/blob/main/founders/prototypes/README.md",
+    "git_url": "https://api.github.com/repos/appsworld2027/Parent-plus-/git/blobs/8729700098e67d39cdc4c2d865d39702e754a82a",
+    "download_url": "https://raw.githubusercontent.com/appsworld2027/Parent-plus-/main/founders/prototypes/README.md",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/appsworld2027/Parent-plus-/contents/founders/prototypes/README.md?ref=main",
+      "git": "https://api.github.com/repos/appsworld2027/Parent-plus-/git/blobs/8729700098e67d39cdc4c2d865d39702e754a82a",
+      "html": "https://github.com/appsworld2027/Parent-plus-/blob/main/founders/prototypes/README.md"
+    }
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "port": 8484,
+  "products": [
+    {
+      "name": "Parent Plus",
+      "repo": "appsworld2027/Parent-plus-",
+      "dir": "~/parent-plus-workspace/parent-plus-studio",
+      "productionUrl": "https://parent-plus-varcel.vercel.app",
+      "backlog": "docs/product/BACKLOG.md",
+      "prototypes": [
+        "founders/prototypes/ParentPlus_Coach_Tutor_App.html",
+        "founders/prototypes/Parent_Plus_Aurora.html"
+      ]
+    }
+  ]
+}

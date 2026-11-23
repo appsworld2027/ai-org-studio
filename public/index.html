@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Org Studio</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">AI Org Studio</div>
+  <div class="crumb">Product <b id="productName">…</b></div>
+  <div class="crumb" id="focus" hidden>Now <b id="focusTitle"></b> <span class="stagepill" id="focusStage"></span></div>
+  <div class="spacer"></div>
+  <div class="note">Private to you · runs in your Cloud Shell</div>
+</header>
+
+<div class="split" id="split">
+  <section class="left" aria-label="AI chat">
+    <div class="engines" role="tablist" aria-label="AI engine" id="engines"></div>
+    <div class="termwrap"><div id="term" aria-label="AI chat terminal"></div>
+      <div class="termmsg" id="termMsg" hidden></div>
+    </div>
+    <div class="termbar">
+      <span id="termState" class="muted">Connecting…</span>
+      <span class="spacer"></span>
+      <button class="ghost" id="btnContinue" title="Reopen your last conversation with this engine">Continue last chat</button>
+      <button class="ghost" id="btnRestart" title="Start a fresh conversation">Restart</button>
+    </div>
+  </section>
+
+  <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Resize panels" tabindex="0"></div>
+
+  <section class="right" aria-label="Product and agents">
+    <div class="rtabs" role="tablist" aria-label="Right panel">
+      <button class="rtab" role="tab" id="tab-app" aria-controls="pane-app" data-pane="app">Real app</button>
+      <button class="rtab" role="tab" id="tab-proto" aria-controls="pane-proto" data-pane="proto">Prototype</button>
+      <button class="rtab" role="tab" id="tab-agents" aria-controls="pane-agents" data-pane="agents">Agents <span class="badge" id="workingBadge" hidden></span></button>
+      <span class="spacer"></span>
+      <a class="urlbar" id="openTab" target="_blank" rel="noopener" href="#">Open in new tab</a>
+    </div>
+
+    <div class="pane" id="pane-app" role="tabpanel" aria-labelledby="tab-app">
+      <div class="banner" id="appBanner"></div>
+      <iframe id="appFrame" title="The real app" allow="clipboard-write" referrerpolicy="no-referrer"></iframe>
+      <div class="empty" id="appEmpty" hidden>
+        <h3>No Vercel deployment yet</h3>
+        <p>Use the Prototype tab to try the design. The real app appears here as soon as Vercel is set up.</p>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-proto" role="tabpanel" aria-labelledby="tab-proto">
+      <div class="banner proto"><b>Prototype</b><span>The HTML design, not the real app.</span>
+        <select id="protoPick" aria-label="Choose prototype"></select></div>
+      <iframe id="protoFrame" title="HTML prototype"></iframe>
+    </div>
+
+    <div class="pane agents" id="pane-agents" role="tabpanel" aria-labelledby="tab-agents">
+      <div class="statusline" id="boardStatus" role="status"></div>
+      <section aria-labelledby="hWorking">
+        <h3 id="hWorking">Working now</h3>
+        <div class="running" id="running"></div>
+      </section>
+      <section aria-labelledby="hWaiting" id="waitingWrap" hidden>
+        <h3 id="hWaiting">Waiting for you</h3>
+        <div id="waiting"></div>
+      </section>
+      <section aria-labelledby="hTracks">
+        <h3 id="hTracks">Features and workstreams</h3>
+        <div class="tracks" id="tracks" role="table" aria-label="Stage of each feature"></div>
+        <div class="legend"><span><i class="k-done"></i>done</span><span><i class="k-agent"></i>an agent is working</span><span><i class="k-founder"></i>waiting for you</span><span><i class="k-loop"></i>automatic checks</span><span><i class="k-blocked"></i>blocked</span><span><i class="k-none"></i>not started</span></div>
+      </section>
+      <section aria-labelledby="hFeed">
+        <h3 id="hFeed">What just happened</h3>
+        <div class="feed" id="feed"></div>
+      </section>
+    </div>
+  </section>
+</div>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/vendor/addon-web-links.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

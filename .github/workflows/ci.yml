@@ -1,0 +1,30 @@
+# Studio CI: unit tests + full browser end-to-end test (real server and terminal, stand-in GitHub and engines).
+name: Studio checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Unit tests
+        run: npm test
+      - name: Shell scripts parse
+        run: bash -n bin/studio.sh && bash -n bin/engine.sh && bash -n e2e/fake/gh
+      - name: Install a headless browser for the end-to-end test
+        run: |
+          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && npm install --no-audit --no-fund playwright@1 >/dev/null
+          npx --prefix /tmp/pw playwright install --with-deps chromium
+      - name: End-to-end test (ST-01..ST-14)
+        run: PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs node e2e/studio.e2e.mjs

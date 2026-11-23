@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Org Product Studio — mockup</title>
+<style>
+:root{
+  color-scheme: light;
+  --bg:#E9EDF1; --panel:#FFFFFF; --ink:#16202A; --muted:#5F6B76; --rule:#D3DAE1;
+  --you:#5B3FD6; --agent:#0E7C6B; --wait:#9A5A06; --proof:#B4235A; --term:#10171E;
+  --head:"Bahnschrift","DIN Next","Arial Narrow",sans-serif;
+  --body:"Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mono:"Cascadia Mono",Consolas,"SF Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--body);display:flex;flex-direction:column;min-height:640px}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--you);outline-offset:2px}
+
+/* top bar */
+.top{display:flex;align-items:center;gap:18px;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--rule);flex-wrap:wrap}
+.brand{font:600 17px var(--head);letter-spacing:.01em}
+.brand small{font:12px var(--body);color:var(--muted);margin-left:6px}
+.crumb{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.crumb b{color:var(--ink);font-weight:600}
+.stagepill{font:600 12px var(--head);color:var(--you);border:1.5px solid var(--you);border-radius:20px;padding:1px 10px}
+.top .spacer{flex:1}
+.note{font-size:12px;color:var(--muted)}
+
+/* split */
+.split{flex:1;display:grid;grid-template-columns:minmax(340px,40%) 1fr;gap:0;min-height:0}
+.left,.right{display:flex;flex-direction:column;min-height:0;background:var(--panel)}
+.left{border-right:1px solid var(--rule)}
+
+/* engine bar */
+.engines{display:flex;gap:4px;padding:8px 10px;border-bottom:1px solid var(--rule);align-items:center}
+.eng{border:1px solid transparent;background:none;padding:5px 10px;border-radius:7px;font:600 13px var(--head);color:var(--muted);display:flex;align-items:center;gap:6px}
+.eng .dot{width:8px;height:8px;border-radius:50%;background:#B9C2CA}
+.eng[aria-selected="true"]{background:#EEF1F4;border-color:var(--rule);color:var(--ink)}
+.eng.on .dot{background:var(--agent)}
+.engines .tools{margin-left:auto;font-size:12px;color:var(--muted);background:none;border:1px solid var(--rule);border-radius:7px;padding:4px 9px}
+
+/* chat */
+.chat{flex:1;overflow:auto;padding:16px 16px 8px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:92%}
+.msg.me{align-self:flex-end;background:#EEEAFE;border-radius:12px 12px 2px 12px;padding:9px 12px}
+.msg.ai{align-self:flex-start}
+.who{font:600 12px var(--head);color:var(--muted);margin-bottom:3px}
+.tool{font:12.5px var(--mono);color:#33414D;background:#F3F5F7;border-left:3px solid var(--agent);padding:5px 9px;border-radius:0 6px 6px 0;margin:6px 0}
+.tool .ok{color:var(--agent)}
+.opts{margin:6px 0 0;padding-left:18px}
+.opts li{margin-bottom:3px}
+.rec{font:600 11px var(--head);color:var(--agent);border:1px solid var(--agent);border-radius:10px;padding:0 6px;margin-left:4px}
+.gate{border:1.5px solid var(--you);border-radius:10px;padding:12px 14px;background:#FAF9FF}
+.gate h4{margin:0 0 4px;font:600 15px var(--head)}
+.gate p{margin:0 0 8px;color:var(--muted);font-size:13px}
+.gate .row{display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:1.5px solid var(--ink);background:var(--panel);border-radius:8px;padding:6px 12px;font:600 13px var(--head)}
+.btn.primary{background:var(--you);border-color:var(--you);color:#fff}
+.done{font-size:13px;color:var(--agent);font-weight:600}
+
+/* login screen */
+.login{flex:1;display:none;flex-direction:column;justify-content:center;align-items:flex-start;padding:28px;gap:10px;background:var(--term);color:#D9E2EA;font:13px/1.6 var(--mono)}
+.login .code{font-size:22px;letter-spacing:.15em;color:#fff;background:#1E2A35;padding:6px 14px;border-radius:6px}
+.login a{color:#8FD3C4}
+.login .why{font:12.5px/1.5 var(--body);color:#9FB0BE;max-width:46ch}
+
+.composer{border-top:1px solid var(--rule);padding:10px}
+.composer .box{border:1.5px solid var(--rule);border-radius:10px;padding:8px 10px;display:flex;gap:8px;align-items:flex-end}
+.composer textarea{flex:1;border:0;resize:none;font:14px var(--body);outline:none;min-height:40px;color:var(--ink);background:transparent}
+.composer .hint{font-size:12px;color:var(--muted);margin-top:6px}
+
+/* right tabs */
+.rtabs{display:flex;align-items:center;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--rule)}
+.rtab{border:1px solid transparent;border-bottom:0;background:none;padding:7px 14px;border-radius:8px 8px 0 0;font:600 13px var(--head);color:var(--muted);position:relative;top:1px}
+.rtab[aria-selected="true"]{background:var(--panel);border-color:var(--rule);color:var(--ink)}
+.rtab .badge{font:600 11px var(--head);color:#fff;background:var(--agent);border-radius:9px;padding:0 6px;margin-left:5px}
+.rtabs .urlbar{margin-left:auto;font:12px var(--mono);color:var(--muted);padding-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46%}
+.pane{flex:1;overflow:auto;display:none;background:#F6F8FA}
+.pane.show{display:flex}
+
+/* app pane */
+.app{flex-direction:column;align-items:center;padding:16px;gap:12px}
+.banner{width:100%;max-width:560px;font-size:13px;border-radius:8px;padding:8px 12px;display:flex;gap:10px;align-items:center}
+.banner.live{background:#E6F4F0;color:#0B5E51}
+.banner.proto{background:#FFF3DC;color:#7A4705}
+.phone{width:300px;height:560px;border-radius:30px;background:#141417;border:8px solid #2A2A31;padding:18px 14px;color:#EDEDF2;display:flex;flex-direction:column;gap:12px;box-shadow:0 10px 30px rgba(22,32,42,.18)}
+.phone h5{margin:0;font:600 20px var(--head)}
+.phone .sub{font-size:12px;color:#9A9AA8}
+.card{background:#1F1F25;border-radius:14px;padding:12px}
+.card .t{font:600 13px var(--head);margin-bottom:8px}
+.nrow{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid #2C2C34}
+.nrow:first-of-type{border-top:0}
+.ic{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:14px;font-weight:700}
+.nrow b{display:block;font-size:13px}
+.nrow small{color:#9A9AA8;font-size:11.5px}
+.chev{margin-left:auto;color:#8a8a96}
+.nrow[hidden]{display:none}
+.nav{margin-top:auto;display:flex;justify-content:space-around;font-size:11px;color:#8a8a96;border-top:1px solid #2C2C34;padding-top:8px}
+.nav .on{color:#fff}
+
+/* agents pane */
+.agents{flex-direction:column;padding:16px 18px;gap:16px}
+.agents h3{margin:0;font:600 16px var(--head)}
+.running{display:flex;gap:10px;flex-wrap:wrap}
+.runner{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:8px 12px}
+.av{width:30px;height:30px;border-radius:50%;background:var(--agent);color:#fff;font:600 14px var(--head);display:grid;place-items:center;position:relative}
+.av.busy::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid var(--agent);animation:ring 1.4s ease-out infinite}
+@keyframes ring{from{transform:scale(.9);opacity:.8}to{transform:scale(1.35);opacity:0}}
+.runner small{display:block;color:var(--muted);font-size:12px}
+.tracks{background:var(--panel);border:1px solid var(--rule);border-radius:10px;overflow:auto}
+.trk{display:grid;grid-template-columns:200px repeat(8,minmax(66px,1fr));align-items:center;border-top:1px solid var(--rule);min-width:760px}
+.trk:first-child{border-top:0}
+.trk.head{font:600 12px var(--head);color:var(--muted)}
+.trk>div{padding:9px 8px;text-align:center}
+.trk>div:first-child{text-align:left;padding-left:12px}
+.trk .name b{display:block;font-size:13.5px}
+.trk .name small{color:var(--muted);font-size:12px}
+.st{height:10px;border-radius:5px;background:#E4E9EE}
+.st.past{background:#9CC9BF}
+.st.now{background:var(--you);position:relative}
+.st.now::after{content:"";position:absolute;inset:-4px;border-radius:8px;border:2px solid var(--you);animation:ring 1.4s ease-out infinite}
+.st.agentnow{background:var(--agent);position:relative}
+.st.agentnow::after{content:"";position:absolute;inset:-4px;border-radius:8px;border:2px solid var(--agent);animation:ring 1.4s ease-out infinite}
+.legend2{display:flex;gap:16px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+.legend2 i{display:inline-block;width:22px;height:8px;border-radius:4px;margin-right:5px;vertical-align:middle}
+.feed{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:4px 12px}
+.feed div{padding:7px 0;border-top:1px solid var(--rule);font-size:13px}
+.feed div:first-child{border-top:0}
+.feed time{color:var(--muted);font-size:12px;margin-right:8px}
+
+@media (max-width:900px){.split{grid-template-columns:1fr}.left{border-right:0;border-bottom:1px solid var(--rule);min-height:460px}}
+@media (prefers-reduced-motion:reduce){.av.busy::after,.st.now::after,.st.agentnow::after{animation:none}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">AI Org Product Studio <small>mockup</small></div>
+  <div class="crumb">Product <b>Parent Plus</b></div>
+  <div class="crumb">Feature <b>Overdue fees in Needs you</b> <span class="stagepill">Waiting for your OK</span></div>
+  <div class="spacer"></div>
+  <div class="note">Runs in your Cloud Shell · only your Google account can open it</div>
+</header>
+
+<div class="split">
+  <!-- LEFT: the AI chat -->
+  <section class="left" aria-label="AI chat">
+    <div class="engines" role="tablist" aria-label="AI engine">
+      <button class="eng on" role="tab" aria-selected="true" data-eng="claude"><span class="dot"></span>Claude Code</button>
+      <button class="eng" role="tab" aria-selected="false" data-eng="codex"><span class="dot"></span>Codex</button>
+      <button class="eng on" role="tab" aria-selected="false" data-eng="free"><span class="dot"></span>Free engine</button>
+      <button class="tools" id="toolsBtn" aria-expanded="false">Tools: GitHub, Supabase, Vercel</button>
+    </div>
+
+    <div class="chat" id="chat" aria-live="polite">
+      <div class="msg me"><div class="who">You</div>Coaches should see overdue fees in Needs you, same as feedback.</div>
+      <div class="msg ai"><div class="who" id="engName">Claude Code (signed in with your Claude plan)</div>
+        I read the prototype, the Fees screen and the backlog. This is the next backlog item, so I handed it to the AI Org.
+        <div class="tool"><span class="ok">●</span> Maya wrote the Feature Contract: 15 checks</div>
+        <div class="tool"><span class="ok">●</span> Reviewed it against the code: 3 gaps found</div>
+        One decision for you. Tapping “3 fees overdue” should open:
+        <ol class="opts">
+          <li>An “Overdue” list across all months, oldest first <span class="rec">Recommended</span></li>
+          <li>This month’s overview only (older overdue fees would not show)</li>
+        </ol>
+      </div>
+      <div class="msg me"><div class="who">You</div>1</div>
+      <div class="msg ai"><div class="who">Claude Code</div>
+        <div class="tool"><span class="ok">●</span> Posted your change to Maya as you. She revised the contract in 3 minutes.</div>
+        <div class="gate" id="gate">
+          <h4>Contract ready: Overdue fees in Needs you</h4>
+          <p>18 checks. Includes overdue fees from any month, partial loading errors, and 600 students for the large-data test.</p>
+          <div class="row">
+            <button class="btn primary" id="approve">Approve and build</button>
+            <button class="btn" id="change">Request a change</button>
+            <button class="btn" id="read">Read the 2-minute summary</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="login" id="login" role="region" aria-label="Codex sign in">
+      <div>codex — sign in with ChatGPT</div>
+      <div>1. Open <a href="#" onclick="return false">auth.openai.com/codex/device</a></div>
+      <div>2. Enter this one-time code:</div>
+      <div class="code">K7QF-2MXD</div>
+      <div class="why">This is Codex’s own sign-in screen, running inside the Studio. Your password and tokens never pass through the Studio, and you stay signed in next time.</div>
+    </div>
+
+    <div class="composer">
+      <div class="box"><textarea id="ask" aria-label="Message" placeholder="Describe a feature, report a bug, or ask what the agents are doing…"></textarea><button class="btn primary" id="send">Send</button></div>
+      <div class="hint">The AI follows the AI Org rules: plain language, options with one Recommended. It posts your decisions for you; you never open GitHub.</div>
+    </div>
+  </section>
+
+  <!-- RIGHT: test the product / watch the agents -->
+  <section class="right" aria-label="Product and agents">
+    <div class="rtabs" role="tablist" aria-label="Right panel">
+      <button class="rtab" role="tab" aria-selected="true" data-pane="app">Real app</button>
+      <button class="rtab" role="tab" aria-selected="false" data-pane="proto">Prototype</button>
+      <button class="rtab" role="tab" aria-selected="false" data-pane="agents">Agents <span class="badge">2 working</span></button>
+      <span class="urlbar" id="url">parent-plus-varcel.vercel.app · production</span>
+    </div>
+
+    <div class="pane app show" id="pane-app" role="tabpanel">
+      <div class="banner live" id="appBanner"><b>Production build</b> The overdue-fees preview link appears here as soon as the Demo Pack is ready.</div>
+      <div class="phone" aria-label="Parent Plus app, Today screen">
+        <div><h5>Today</h5><div class="sub">Ankit MDS Skate Rollers</div></div>
+        <div class="card"><div class="t">Needs you</div>
+          <div class="nrow"><span class="ic" style="background:#3B2F66;color:#C9B8FF">★</span><span><b>2 children need feedback</b><small>No update for over a week</small></span><span class="chev">›</span></div>
+          <div class="nrow" id="feeRow" hidden><span class="ic" style="background:#4A2233;color:#FF9DB8">₹</span><span><b>3 fees overdue</b><small>₹7,500 pending</small></span><span class="chev">›</span></div>
+        </div>
+        <div class="card"><div class="t">Your teaching workspace</div><div class="sub">Next class 5:30 PM · Rink 2</div></div>
+        <div class="nav"><span class="on">Today</span><span>Students</span><span>Fees</span><span>More</span></div>
+      </div>
+    </div>
+
+    <div class="pane app" id="pane-proto" role="tabpanel">
+      <div class="banner proto"><b>Prototype</b> The HTML design, not the real app. Used until a Vercel build exists for this product.</div>
+      <div class="phone" aria-label="Prototype, Today screen">
+        <div><h5>Today</h5><div class="sub">Sample academy</div></div>
+        <div class="card"><div class="t">Needs you</div>
+          <div class="nrow"><span class="ic" style="background:#4A3A12;color:#FFD27A">◎</span><span><b>2 trial requests</b><small>From parents nearby</small></span><span class="chev">›</span></div>
+          <div class="nrow"><span class="ic" style="background:#3B2F66;color:#C9B8FF">★</span><span><b>4 children need feedback</b><small>No update for over a week</small></span><span class="chev">›</span></div>
+          <div class="nrow"><span class="ic" style="background:#4A2233;color:#FF9DB8">₹</span><span><b>3 fees overdue</b><small>₹7,500 pending</small></span><span class="chev">›</span></div>
+        </div>
+        <div class="nav"><span class="on">Today</span><span>Schedule</span><span>Fees</span><span>More</span></div>
+      </div>
+    </div>
+
+    <div class="pane agents" id="pane-agents" role="tabpanel">
+      <div>
+        <h3>Working now</h3>
+        <div class="running" id="running">
+          <div class="runner"><span class="av busy">M</span><span><b>Maya, product manager</b><small>Revising the overdue-fees contract · 2 min</small></span></div>
+          <div class="runner"><span class="av busy" style="background:var(--proof)">QA</span><span><b>QA lab (nightly)</b><small>1,000 personas · 7 min</small></span></div>
+        </div>
+      </div>
+      <div>
+        <h3 style="margin-bottom:8px">Features and workstreams</h3>
+        <div class="tracks" role="table" aria-label="Stage of each feature">
+          <div class="trk head" role="row"><div>Feature</div><div>Idea</div><div>Contract</div><div>Your OK</div><div>Tests</div><div>Build</div><div>QA + review</div><div>Demo</div><div>Shipped</div></div>
+          <div class="trk" role="row"><div class="name"><b>Coach “Needs you”</b><small>Coach app · Today</small></div><div><div class="st past"></div></div><div><div class="st past"></div></div><div><div class="st past"></div></div><div><div class="st past"></div></div><div><div class="st past"></div></div><div><div class="st past"></div></div><div><div class="st past"></div></div><div><div class="st past"></div></div></div>
+          <div class="trk" role="row" id="feesTrack"><div class="name"><b>Overdue fees in Needs you</b><small>Coach app · Today + Fees</small></div><div><div class="st past"></div></div><div><div class="st agentnow" id="s1"></div></div><div><div class="st" id="s2"></div></div><div><div class="st" id="s3"></div></div><div><div class="st" id="s4"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div></div>
+          <div class="trk" role="row"><div class="name"><b>Parent quick signals</b><small>Parent app · queued</small></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div></div>
+          <div class="trk" role="row"><div class="name"><b>Class announcements</b><small>Coach + Parent · queued</small></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div><div><div class="st"></div></div></div>
+        </div>
+        <div class="legend2" style="margin-top:8px"><span><i style="background:#9CC9BF"></i>done</span><span><i style="background:var(--agent)"></i>an agent is working</span><span><i style="background:var(--you)"></i>waiting for you</span><span><i style="background:#E4E9EE"></i>not started</span></div>
+      </div>
+      <div>
+        <h3 style="margin-bottom:8px">What just happened</h3>
+        <div class="feed" id="feed">
+          <div><time>09:47</time>Kiran passed your change to Maya.</div>
+          <div><time>09:26</time>I reviewed the contract and found 3 gaps.</div>
+          <div><time>09:19</time>Maya revised the contract: 15 checks.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  // engines
+  const names = {claude: 'Claude Code (signed in with your Claude plan)', codex: 'Codex', free: 'Free engine (Nemotron via NVIDIA, no subscription)'};
+  $$('.eng').forEach(b => b.addEventListener('click', () => {
+    $$('.eng').forEach(x => x.setAttribute('aria-selected', String(x === b)));
+    const e = b.dataset.eng, needsLogin = e === 'codex';
+    $('#chat').style.display = needsLogin ? 'none' : 'flex';
+    $('#login').style.display = needsLogin ? 'flex' : 'none';
+    $('.composer').style.display = needsLogin ? 'none' : 'block';
+    if (!needsLogin) $('#engName').textContent = names[e];
+  }));
+  $('#toolsBtn').addEventListener('click', e => {
+    const open = e.currentTarget.getAttribute('aria-expanded') === 'true';
+    e.currentTarget.setAttribute('aria-expanded', String(!open));
+    e.currentTarget.textContent = open ? 'Tools: GitHub, Supabase, Vercel' : 'Tools connected through MCP: GitHub, Supabase (dev), Vercel, Playwright browser. Add more in chat.';
+  });
+  // right tabs
+  const urls = {app: 'parent-plus-varcel.vercel.app · production', proto: 'founders/prototypes/ParentPlus_Coach_Tutor_App.html', agents: 'live from GitHub · updated every 30 s'};
+  function tab(p) {
+    $$('.rtab').forEach(x => x.setAttribute('aria-selected', String(x.dataset.pane === p)));
+    $$('.pane').forEach(x => x.classList.toggle('show', x.id === 'pane-' + p));
+    $('#url').textContent = urls[p];
+  }
+  $$('.rtab').forEach(b => b.addEventListener('click', () => tab(b.dataset.pane)));
+  // the founder gate inside chat
+  const feed = $('#feed');
+  function addFeed(t) { const d = document.createElement('div'); d.innerHTML = '<time>now</time>' + t; feed.prepend(d); }
+  function say(who, html) { const m = document.createElement('div'); m.className = 'msg ' + (who === 'You' ? 'me' : 'ai'); m.innerHTML = '<div class="who">' + who + '</div>' + html; $('#chat').append(m); $('#chat').scrollTop = 1e6; }
+  $('#approve').addEventListener('click', () => {
+    $('#gate .row').outerHTML = '<div class="done">Approved. I posted it for you; Quinn is writing the locked tests.</div>';
+    $('.stagepill').textContent = 'Building: tests'; $('#s1').className = 'st past'; $('#s2').className = 'st past'; $('#s3').className = 'st agentnow';
+    $('#running').insertAdjacentHTML('afterbegin', '<div class="runner"><span class="av busy">Q</span><span><b>Quinn, tester</b><small>Writing 18 locked tests · just started</small></span></div>');
+    $('#running .runner:nth-child(2)').remove();
+    addFeed('You approved the contract. Quinn started the locked tests.');
+    say('Claude Code', 'Next time I need you is the Demo Pack. Its test link will open on the right automatically. You can switch to <b>Agents</b> to watch progress.');
+    setTimeout(() => tab('agents'), 900);
+  });
+  $('#change').addEventListener('click', () => { $('#ask').value = 'Change: '; $('#ask').focus(); });
+  $('#read').addEventListener('click', () => say('Claude Code', 'Summary: coaches see “N fees overdue” and the amount in Needs you. Tapping it opens an Overdue list across all months. Not included: reminders to parents. How you will test it: 1) open Today, 2) check the count and amount, 3) tap it and find each student.'));
+  $('#send').addEventListener('click', () => { const v = $('#ask').value.trim(); if (!v) return; say('You', v.replace(/</g, '&lt;')); $('#ask').value = ''; setTimeout(() => say('Claude Code', 'Got it. (In the real Studio, the AI you picked above answers here.)'), 400); });
+  // demo: when the Demo Pack is ready the Real app tab switches to the preview
+  window.showDemo = () => { $('#feeRow').hidden = false; $('#appBanner').innerHTML = '<b>Preview: Overdue fees</b> Demo Pack ready. 18 of 18 checks passed. Test it here, then approve or request a change in chat.'; urls.app = 'parent-plus-git-ai-contract-needs-you-fees….vercel.app · preview'; tab('app'); };
+  $('#appBanner').addEventListener('dblclick', () => window.showDemo());
+})();
+</script>
+</body>
+</html>

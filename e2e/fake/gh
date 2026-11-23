@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Stand-in for the GitHub CLI during tests: serves the 23-Nov Parent Plus snapshot.
+F="$(cd "$(dirname "$0")/../../test/fixtures" && pwd)"
+[ -f "${FAKE_GH_FAIL:-/nonexistent}" ] && { echo "HTTP 503: GitHub unavailable" >&2; exit 1; }
+[ "$1" = api ] || { echo "fake gh: unsupported $*" >&2; exit 2; }
+case "$2" in
+  */issues\?state=open*) cat "$F/issues.json";;
+  */pulls\?state=open*) cat "$F/pulls.json";;
+  */actions/runs*) cat "$F/runs.json";;
+  */issues/comments*) cat "$F/comments.json";;
+  */contents/docs/product/BACKLOG.md) cat "$F/backlog.json";;
+  */deployments*) echo "[]";;
+  *) echo "fake gh: no fixture for $2" >&2; exit 1;;
+esac
