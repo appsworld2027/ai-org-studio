@@ -1,6 +1,6 @@
 {
   "name": "ai-org-studio",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "private": true,
   "description": "AI Org Product Studio: talk to Claude Code, Codex or the free engine on the left; test the real app, the prototype, or watch the agents on the right.",
   "type": "module",

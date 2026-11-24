@@ -11,12 +11,16 @@ const MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "im
 
 // Studio work modes → Claude Code permission modes. Ask first = Claude's default (reads free, edits and commands ask).
 export const CLAUDE_MODES = { auto: "acceptEdits", plan: "plan" };
-export function claudeArgs({ model, effort, resume, rules, mode }) {
+export function claudeArgs({ model, effort, resume, rules, mode, mcpConfig, extraDirs = [] }) {
   const a = ["-p", ...(CLAUDE_MODES[mode] ? ["--permission-mode", CLAUDE_MODES[mode]] : []), "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
     "--permission-prompt-tool", "stdio", "--append-system-prompt", rules || ""];
   if (model) a.push("--model", model);
   if (effort && effort !== "default") a.push("--effort", effort);
   if (resume) a.push("--resume", resume);
+  // Connected apps: the Studio's MCP file; the apps the user connected are pre-approved (no "allow?" for each call).
+  for (const d of extraDirs) a.push("--add-dir", d);   // the Garage: a second folder the AI may read and write
+  if (mcpConfig?.file) a.push("--mcp-config", mcpConfig.file);
+  if (mcpConfig?.allow?.length) a.push("--allowedTools", mcpConfig.allow.join(","));
   return a;
 }
 
@@ -106,8 +110,8 @@ export function controlResponse(requestId, req, answer) {
   return { type: "control_response", response: { subtype: "success", request_id: requestId, response: answer ? { behavior: "allow", updatedInput: req.input } : { behavior: "deny", message: "The user chose not to allow this. Ask what they want instead, or continue without it." } } };
 }
 
-export function startClaude({ bin = "claude", cwd, env, model, effort, resume, rules, mode = "ask", emit, onExit }) {
-  const p = spawn(bin, claudeArgs({ model, effort, resume, rules, mode }), { cwd, env: { ...env, DISABLE_AUTOUPDATER: "1" }, stdio: ["pipe", "pipe", "pipe"] });
+export function startClaude({ bin = "claude", cwd, env, model, effort, resume, rules, mode = "ask", mcpConfig, extraDirs = [], emit, onExit }) {
+  const p = spawn(bin, claudeArgs({ model, effort, resume, rules, mode, mcpConfig, extraDirs }), { cwd, env: { ...env, DISABLE_AUTOUPDATER: "1" }, stdio: ["pipe", "pipe", "pipe"] });
   const state = { tools: {}, pendingReq: {}, sessionId: null, stderr: "" };
   let buf = "";
   p.stdout.on("data", (d) => {

@@ -16,6 +16,7 @@
   <button class="ghost" id="btnAddProduct">Add product</button>
   <div class="crumb" id="focus" hidden>Now <b id="focusTitle"></b> <span class="stagepill" id="focusStage"></span></div>
   <div class="spacer"></div>
+  <button class="ghost" id="btnApps" title="Connect GitHub, Supabase, Vercel, Notion, Figma… once; every AI can then use them">Apps <span class="badge" id="appsBadge" hidden></span></button>
   <div class="note" id="where">Private to you</div>
 </header>
 
@@ -123,9 +124,12 @@
       <button class="rtab" role="tab" id="tab-proto" aria-controls="pane-proto" data-pane="proto">Prototype</button>
       <button class="rtab" role="tab" id="tab-agents" aria-controls="pane-agents" data-pane="agents">Agents <span class="badge" id="workingBadge" hidden></span></button>
       <button class="rtab" role="tab" id="tab-changes" aria-controls="pane-changes" data-pane="changes">Changes <span class="badge" id="changesBadge" hidden></span></button>
+      <button class="rtab" role="tab" id="tab-garage" aria-controls="pane-garage" data-pane="garage">Garage</button>
       <span class="spacer"></span>
+      <button class="linkish" id="btnReload" title="Reload the page shown here">Reload</button>
+      <button class="linkish" id="btnFlag" title="Tell the AI what is wrong on this screen; it checks the console and network errors itself">Flag issue</button>
       <button class="linkish" id="btnAppLink">Set app link</button>
-      <a class="urlbar" id="openTab" target="_blank" rel="noopener" href="#">Open in new tab</a>
+      <a class="urlbar" id="openTab" target="_blank" rel="noopener" href="#" title="Opens it in its own Chrome window, so DevTools (F12) shows only the app">Pop out</a>
     </div>
 
     <div class="pane" id="pane-app" role="tabpanel" aria-labelledby="tab-app">
@@ -146,6 +150,15 @@
         <h3>No prototypes found</h3>
         <p>The Studio looks for HTML files in folders named prototypes, mockups or design. Ask the AI on the left to create one, then press Rescan.</p>
         <button class="ghost" id="btnRescan">Rescan</button>
+      </div>
+    </div>
+
+    <div class="pane garage" id="pane-garage" role="tabpanel" aria-labelledby="tab-garage">
+      <div class="statusline" id="garageStatus" role="status"></div>
+      <div class="glayout"><div class="chlist" id="garageList"></div><div class="chdiff" id="garageView" hidden></div></div>
+      <div class="empty left-align" id="garageEmpty" hidden>
+        <h3>The Garage is not set up yet</h3>
+        <p>The Garage is a private GitHub repository where every AI saves notes, research, plans, reports, mockups and screenshots, plus the shared memory that every AI reads before it starts. The next Studio update script creates it for you.</p>
       </div>
     </div>
 
@@ -216,6 +229,32 @@
     <label id="kKeyWrap">Key<input id="kKey" type="password" autocomplete="off" placeholder="Paste your key"></label>
     <p class="small" id="kStatus" role="status"></p>
     <div class="row"><button type="button" class="ghost" id="kRemove">Remove key</button><span class="spacer"></span><button value="cancel" class="ghost" formnovalidate>Close</button><button id="kSave" class="primary" value="default">Save and load models</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgApps" class="wide" aria-labelledby="dlgAppsTitle">
+  <form method="dialog" id="formApps">
+    <div class="row"><h3 id="dlgAppsTitle">Apps every AI can use</h3><span class="spacer"></span><button value="cancel" class="ghost" formnovalidate>Close</button></div>
+    <p class="muted">Connect an app once. Claude Code, Codex and the other models then use it directly, without asking you for access again. Keys stay on this machine (readable by you only), are never shown again, never sent to the AI, and never saved to GitHub.</p>
+    <div class="applist" id="appList"></div>
+    <details class="custom"><summary>Add any other MCP server</summary>
+      <label>Name<input id="cId" placeholder="e.g. linear" autocomplete="off"></label>
+      <label>Command, or https address<input id="cCmd" placeholder="npx -y some-mcp-server   or   https://mcp.example.com/mcp" autocomplete="off"></label>
+      <label>Key name and value (optional)<span class="row"><input id="cKeyName" placeholder="API_KEY" autocomplete="off"><input id="cKeyVal" type="password" placeholder="value" autocomplete="off"></span></label>
+      <p class="err" id="cErr" role="alert"></p>
+      <div class="row"><span class="spacer"></span><button type="button" class="primary" id="cAdd">Add and check</button></div>
+    </details>
+  </form>
+</dialog>
+
+<dialog id="dlgFlag" aria-labelledby="dlgFlagTitle">
+  <form method="dialog" id="formFlag">
+    <h3 id="dlgFlagTitle">Flag an issue</h3>
+    <p class="muted" id="flagWhere"></p>
+    <label>What is wrong?<textarea id="flagText" rows="4" required placeholder="e.g. Tapping Save does nothing on the fee screen"></textarea></label>
+    <p class="small muted">Tip: paste a screenshot here with Ctrl+V. The AI opens the same page in its own Chrome, reads the console and network errors, and fixes it.</p>
+    <div class="chips" id="flagChips"></div>
+    <div class="row"><span class="spacer"></span><button value="cancel" class="ghost" formnovalidate>Cancel</button><button class="primary" value="default">Send to the AI</button></div>
   </form>
 </dialog>
 

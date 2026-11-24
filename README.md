@@ -44,7 +44,18 @@ You need the GitHub CLI signed in (`gh auth login`) for *Add product* and the Ag
 bash ~/ai-org-studio/bin/studio.sh link     # print the link again
 bash ~/ai-org-studio/bin/studio.sh restart  # after an update
 bash ~/ai-org-studio/bin/studio.sh stop
+bash ~/ai-org-studio/bin/studio.sh web      # start a new web link (any browser, any phone)
 ```
+
+### Web link and always-on
+
+`studio.sh` also starts a free Cloudflare tunnel and prints a **web link** (`https://…trycloudflare.com/?k=…`) that opens from any laptop or phone. The chat reconnects by itself if the connection drops, and Claude Code / Codex keep working on the server while you are away.
+
+Limits on Cloud Shell: the machine sleeps after ~40 minutes without you in the Cloud Shell tab, and every session ends after 12 hours; then the Studio and the link stop until you open Cloud Shell again. Chats, memory (Garage) and connected apps are kept.
+
+**Always-on (recommended for daily use):** run the Studio on a small always-on Linux machine (e.g. a Google Compute Engine e2-small, about US$13–15 a month; or any VPS). Same two commands. For a fixed address, use a named Cloudflare tunnel with your own domain instead of the quick tunnel.
+
+**Why not Vercel:** Vercel runs short-lived functions (connections end after 5–30 minutes, no lasting disk), which cannot keep Claude Code / Codex sessions, your logins and product folders alive. Vercel stays the place where the *products* are deployed and tested.
 
 ## How it works
 

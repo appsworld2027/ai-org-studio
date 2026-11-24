@@ -335,3 +335,30 @@ svg.ico.sm{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8
 .echat .composer-row .pill{field-sizing:content;max-width:30ch;font-weight:500;padding-right:4px}
 #eMode,#eModel,#eEffort{max-width:30ch}
 .echat .composer-row{flex-wrap:wrap}
+/* v2.2 — Apps, Garage, Flag issue, reconnect, phone */
+dialog.wide{width:min(760px,96vw);max-height:90vh}
+.applist{display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:62vh;overflow:auto}
+.appcard{border:1px solid var(--rule);border-radius:10px;padding:8px 12px;background:#fff}
+.appcard>summary{display:flex;align-items:center;gap:4px;cursor:pointer;list-style:none}
+.appcard>summary::-webkit-details-marker{display:none}
+.appcard[open]{border-color:var(--you)}
+.appst{font:600 11.5px var(--head);border-radius:20px;padding:1px 9px;background:#E6EBF0;color:#4A5866;white-space:nowrap}
+.appst.on{background:#E2F2EE;color:var(--agent)}
+.appbody ol{margin:8px 0 4px 18px;padding:0;font-size:13.5px} .appbody li{margin:3px 0}
+.appbody .ok{color:var(--agent)} .appbody .err{color:var(--blocked)}
+details.custom{margin-top:12px;font-size:13.5px} details.custom summary{cursor:pointer;color:var(--muted)}
+details.custom .row input{margin-top:0}
+#btnApps .badge{margin-left:4px}
+.glayout{display:grid;grid-template-columns:minmax(300px,44%) 1fr;gap:12px;align-items:start}
+.glayout .chp{white-space:normal;word-break:break-all}
+.pane.garage{padding:14px 18px;overflow:auto}
+.gmd{padding:10px 14px;font-size:14px} .gimg{max-width:100%;display:block}
+#dlgFlag textarea{width:100%;margin-top:4px;border:1px solid var(--rule);border-radius:7px;padding:6px 8px;font:14px var(--body)}
+.activity.offline{color:#9A5A06;background:#FBF4E6}
+@media (max-width:900px){
+  .top{gap:8px;padding:6px 10px} .top .crumb#focus,.top .note{display:none}
+  .split{grid-template-rows:62% 0 1fr}
+  .rtabs{overflow-x:auto;flex-wrap:nowrap} .rtab{flex:none}
+  .glayout{grid-template-columns:1fr}
+  .echat .composer-row{gap:4px} .echat .composer-row .pill{max-width:16ch}
+}

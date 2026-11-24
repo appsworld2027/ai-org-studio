@@ -61,13 +61,18 @@ const TOKEN = "e2e-test-key-0123456789";
 // Claude Code / Codex for the chat checks: the REAL programs when STUDIO_REAL_CLAUDE / STUDIO_REAL_CODEX point at them
 // (CI installs them), talking to stand-in model servers; otherwise small recorded stand-ins (e2e/fake/claude, codex).
 const anthropicPort = await freePort(), openaiPort = await freePort();
-const fakeModels = startFakeModels({ anthropicPort, openaiPort, projectDir: prod });
+
 const engineHome = join(tmp, "engine-home"); mkdirSync(join(engineHome, ".codex"), { recursive: true });
+// The Garage: a local "GitHub" (bare repo) and its clone, as studio.sh / iter22 sets up for real.
+const garageRemote = join(tmp, "garage.git"), garageDir = join(tmp, "studio-garage");
+execFileSync("git", ["init", "-q", "--bare", "-b", "main", garageRemote]); execFileSync("git", ["clone", "-q", garageRemote, garageDir], { stdio: "ignore" });
+execFileSync("git", ["-C", garageDir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "start"]); execFileSync("git", ["-C", garageDir, "push", "-q", "origin", "HEAD"]);
+const fakeModels = startFakeModels({ anthropicPort, openaiPort, projectDir: prod, garageDir: join(garageDir, "parent-plus") });
 // No pre-trust here: the Studio itself must mark the product folder trusted for Claude Code and Codex.
 const realClaude = process.env.STUDIO_REAL_CLAUDE || "", realCodex = process.env.STUDIO_REAL_CODEX || "";
 const env = { ...process.env, HOME: engineHome, ANTHROPIC_BASE_URL: `http://127.0.0.1:${anthropicPort}`, ANTHROPIC_API_KEY: "sk-ant-test", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", FAKE_OPENAI_KEY: "test",
   STUDIO_CLAUDE_BIN: realClaude || join(ROOT, "e2e/fake/claude"), STUDIO_CODEX_BIN: realCodex || join(ROOT, "e2e/fake/codex"),
-  STUDIO_CODEX_CONFIG: ['model_provider="fake"', 'model_providers.fake.name="fake"', `model_providers.fake.base_url="http://127.0.0.1:${openaiPort}/v1"`, 'model_providers.fake.env_key="FAKE_OPENAI_KEY"', 'model_providers.fake.wire_api="responses"', 'model_providers.fake.supports_websockets=false', 'model="gpt-fake"'].join("\n"), STUDIO_HOME: home, STUDIO_PORT: String(port), STUDIO_HOST: "127.0.0.1", STUDIO_TOKEN: TOKEN, STUDIO_GH: join(ROOT, "e2e/fake/gh"),
+  STUDIO_CODEX_CONFIG: ['model_provider="fake"', 'model_providers.fake.name="fake"', `model_providers.fake.base_url="http://127.0.0.1:${openaiPort}/v1"`, 'model_providers.fake.env_key="FAKE_OPENAI_KEY"', 'model_providers.fake.wire_api="responses"', 'model_providers.fake.supports_websockets=false', 'model="gpt-fake"'].join("\n"), STUDIO_HOME: home, STUDIO_GARAGE: garageDir, STUDIO_GARAGE_REPO: "appsworld2027/studio-garage", FAKE_GARAGE_DIR: join(garageDir, "parent-plus"), STUDIO_PORT: String(port), STUDIO_HOST: "127.0.0.1", STUDIO_TOKEN: TOKEN, STUDIO_GH: join(ROOT, "e2e/fake/gh"),
   STUDIO_CONFIG: join(tmp, "none.json"), FAKE_GH_FAIL: failFlag, STUDIO_BOARD_TTL_MS: "500", STUDIO_POLL_MS: "1000", STUDIO_WORKSPACE: join(tmp, "ws"),
   STUDIO_HEARD_FILE: join(tmp, "heard.txt"), STUDIO_CMD_CLAUDE: fakeEngine("CLAUDE"), STUDIO_CMD_CODEX: fakeEngine("CODEX"), WEB_HOST: "", CODESPACE_NAME: "", STUDIO_PUBLIC_URL: "" };
 const srv = spawn(process.execPath, [join(ROOT, "server/server.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -259,6 +264,84 @@ try {
     if (process.env.STUDIO_SHOTS) await page.screenshot({ path: join(process.env.STUDIO_SHOTS, "v21-changes.png") });
     await page.click("#tab-app");
   });
+  await check("ST-33", "Apps: connect an app once (key never shown again); Claude Code uses it without asking and saves a note in the Garage", async () => {
+    await page.click("#btnApps"); await page.waitForSelector("#dlgApps[open] .appcard[data-app=supabase]");
+    assert(/Supabase/.test(await page.textContent("#appList")) && /Vercel/.test(await page.textContent("#appList")), "catalog listed");
+    await page.click(".appcard[data-app=notion] summary");
+    assert(/notion\.so\/profile\/integrations/.test(await page.textContent(".appcard[data-app=notion]")), "clear steps where to get the key");
+    // A custom MCP server (the test 'echo' app) with a key.
+    await page.click("details.custom summary"); await page.fill("#cId", "echo"); await page.fill("#cCmd", `${process.execPath} ${join(ROOT, "test/fixtures/echo-mcp.mjs")}`);
+    await page.fill("#cKeyName", "ECHO_KEY"); await page.fill("#cKeyVal", "KEYABC123XYZ"); await page.click("#cAdd");
+    await page.waitForSelector('.appcard[data-app=echo] .appst.on', { timeout: 30000 });
+    if (process.env.STUDIO_SHOTS) { await page.click(".appcard[data-app=supabase] summary"); await page.screenshot({ path: join(process.env.STUDIO_SHOTS, "v22-apps.png") }); }
+    const apps = await page.evaluate(() => fetch("/api/apps").then((r) => r.text()));
+    assert(!apps.includes("KEYABC123XYZ") && apps.includes("…3XYZ"), "the key is never sent back to the page");
+    await page.keyboard.press("Escape");
+    await page.click(".eng[data-eng=claude]"); await page.waitForSelector("#ePane:not([hidden])"); await page.click("#eNew"); await page.selectOption("#eMode", "auto");
+    await page.fill("#eAsk", "APPCHECK who am I in the echo app? note it in the Garage"); await page.press("#eAsk", "Enter");
+    await page.waitForFunction(() => /Echo says/.test(document.querySelector("#eMsgs").innerText), null, { timeout: 40000 });
+    assert(!(await page.$("#eMsgs .approve:not(.answered)")), "a connected app runs without asking each time");
+    assert(/account for key KEYABC/.test(await chatText()), `the app got its key: ${(await chatText()).slice(-200)}`);
+    assert(/Echo: whoami/.test(await page.$eval("#eMsgs", (m) => m.textContent)), "app step named in plain words");
+    await page.waitForFunction(() => document.querySelector("#eActivity").hidden, null, { timeout: 10000 });
+  });
+  await check("ST-34", "Garage: AI-made files and a journal line are saved to GitHub automatically; secrets are removed; shown in the Garage tab", async () => {
+    const t0 = Date.now(); let log = "";
+    while (Date.now() - t0 < 15000) { log = execFileSync("git", ["--git-dir", garageRemote, "log", "--oneline", "main"]).toString(); if (/claude: APPCHECK/.test(log)) break; await page.waitForTimeout(400); }
+    assert(/claude: APPCHECK/.test(log), `garage pushed after the reply: ${log}`);
+    const files = execFileSync("git", ["--git-dir", garageRemote, "ls-tree", "-r", "--name-only", "main"]).toString();
+    assert(files.includes("parent-plus/notes/2026-11-24-app-check.md") && files.includes("parent-plus/MEMORY.md") && /parent-plus\/journal\/\d{4}-\d{2}\.md/.test(files), files);
+    const journal = execFileSync("git", ["--git-dir", garageRemote, "show", `main:parent-plus/journal/${new Date().toISOString().slice(0, 7)}.md`]).toString();
+    assert(/· claude[^·]*· asked: APPCHECK who am I/.test(journal), journal);
+    await page.click("#tab-garage"); await page.waitForSelector("#garageList .chfile", { timeout: 8000 });
+    assert(/notes\/2026-11-24-app-check\.md/.test(await page.textContent("#garageList")), "Garage tab lists the note");
+    await page.click('#garageList .chfile[data-path="MEMORY.md"]'); await page.waitForSelector("#garageView:not([hidden]) .gmd");
+    assert(/shared memory for every AI/.test(await page.textContent("#garageView")), "memory readable in the Studio");
+    if (process.env.STUDIO_SHOTS) await page.screenshot({ path: join(process.env.STUDIO_SHOTS, "v22-garage.png") });
+  });
+  await check("ST-35", "Memory across AIs: Codex (another engine, another login) starts knowing what Claude did, and uses the same app", async () => {
+    // Write a founder decision into the shared memory, as an AI would.
+    const mem = join(garageDir, "parent-plus/MEMORY.md");
+    writeFileSync(mem, readFileSync(mem, "utf8").replace("## Decisions (newest first)\n", "## Decisions (newest first)\n- 2026-11-24 Founder: overdue fees go at the top of the Fees tab.\n"));
+    await page.click(".eng[data-eng=codex]"); await page.waitForSelector("#ePane:not([hidden])"); await page.click("#eNew"); await page.selectOption("#eMode", "ask");
+    await page.fill("#eAsk", "APPCHECK who am I in the echo app?"); await page.press("#eAsk", "Enter");
+    await page.waitForFunction(() => /Echo says/.test(document.querySelector("#eMsgs").innerText), null, { timeout: 40000 });
+    assert(!(await page.$("#eMsgs .approve:not(.answered)")), "Codex: connected app pre-approved");
+    assert(/account for key KEYABC/.test(await chatText()), "Codex reached the app with its key");
+    const sent = fakeModels.log.openai.filter((l) => /APPCHECK/.test(l.input)).map((l) => l.instructionsAll || "").join("");
+    assert(/overdue fees go at the top/.test(sent) && /APPCHECK who am I in the echo app\? note it in the Garage/.test(sent), "Codex was given the shared memory and the journal of Claude's turn");
+  });
+  await check("ST-36", "Flag issue: from the test screen, the description and the page address go to the AI", async () => {
+    await page.click("#tab-proto"); await page.click("#btnFlag"); await page.waitForSelector("#dlgFlag[open]");
+    await page.fill("#flagText", "The Save button does nothing"); await page.click("#formFlag button.primary");
+    await page.waitForFunction(() => /Issue flagged from the test screen/.test(document.querySelector("#eMsgs").innerText), null, { timeout: 15000 });
+    assert(/Page: the HTML prototype ParentPlus_Coach_Tutor_App\.html/.test(await chatText()), "page named");
+    await page.waitForFunction(() => document.querySelector("#eActivity").hidden || /reconnect/.test(document.querySelector("#eActivity").textContent), null, { timeout: 30000 }).catch(() => {});
+  });
+  await check("ST-37", "Connection drops (laptop sleeps, tunnel restarts): the chat reconnects by itself and shows the conversation again", async () => {
+    const before = await chatText();
+    // Drop the connection the way a network change does: the server side goes away (here: the page's socket is closed).
+    const closed = await page.evaluate(() => window.__studioEchat?.dropConnection?.());
+    assert(closed, "connection dropped");
+    await page.waitForFunction(() => /reconnecting/.test(document.querySelector("#eActivity").textContent), null, { timeout: 5000 });
+    await page.waitForFunction(() => !document.querySelector("#eActivity").classList.contains("offline"), null, { timeout: 15000 });
+    assert((await chatText()).includes("Issue flagged from the test screen") && before.length > 0, "conversation shown again after reconnect");
+  });
+  await check("ST-38", "Web link: a tunnel address saved by studio.sh is accepted for the key link and the chat; other addresses are not", async () => {
+    writeFileSync(join(home, "web-url"), "https://happy-test-words.trycloudflare.com\n");
+    const up = (origin) => new Promise((ok) => { const s = net.connect(port, "127.0.0.1", () => s.write(`GET /pty?product=parent-plus&engine=claude HTTP/1.1\r\nHost: happy-test-words.trycloudflare.com\r\nCookie: studio_key=${TOKEN}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: ${origin}\r\n\r\n`)); s.on("data", (d) => { ok(d.toString().split("\r\n")[0]); s.destroy(); }); });
+    assert(/101/.test(await up("https://happy-test-words.trycloudflare.com")), "tunnel origin accepted");
+    assert(/401|403/.test(await up("https://other-words.trycloudflare.com")), "another tunnel refused");
+    rmSync(join(home, "web-url"));
+  });
+  await check("ST-39", "Phone: the Studio fits a phone screen (chat on top, test screen below, tabs scroll)", async () => {
+    const m = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    await m.addCookies([{ name: "studio_key", value: TOKEN, url: base }]); const ph = await m.newPage(); await ph.goto(base);
+    await ph.waitForSelector("#ePane:not([hidden]), #chatPane:not([hidden])");
+    const w = await ph.evaluate(() => document.documentElement.scrollWidth); assert(w <= 392, `no sideways scrolling: ${w}px`);
+    assert(await ph.isVisible("#eSend, #btnSend") && await ph.isVisible("#tab-app"), "composer and tabs visible");
+    await m.close();
+  });
   await check("ST-28", "sign-in status: shows who is signed in or offers the official sign-in", async () => {
     const a = await page.evaluate(() => fetch("/api/engines/claude/account").then((r) => r.json()));
     assert(typeof a.signedIn === "boolean", `claude account: ${JSON.stringify(a)}`);
@@ -385,7 +468,7 @@ try {
     await page.selectOption("#productPick", "parent-plus"); await waitTerm(/CLAUDE heard|CLAUDE ready/);
   });
   await check("ST-14", "keyboard: tabs reachable with arrow keys, visible focus", async () => {
-    await page.focus("#tab-changes"); await page.keyboard.press("ArrowRight");
+    await page.focus("#tab-garage"); await page.keyboard.press("ArrowRight");
     assert((await page.getAttribute("#tab-app", "aria-selected")) === "true", "arrow moves to next tab");
     const outline = await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle);
     assert(outline && outline !== "none", `focus outline: ${outline}`);

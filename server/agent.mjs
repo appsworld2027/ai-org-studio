@@ -37,8 +37,11 @@ export function normalizeQuestion(args = {}) {
 }
 export const needsApproval = (name, args = {}) => name === "write_file" || name === "edit_file" || (name === "run_command" && !isReadOnlyCommand(args.command));
 
-// Keep every path inside the product folder (no "..", no symlink escapes).
-export function safePath(root, p = ".") {
+// Keep every path inside the product folder (no "..", no symlink escapes). "garage/…" maps to the Garage folder
+// when one is given (root = { product, garage } or a plain product path).
+export function safePath(rootIn, p = ".") {
+  let root = rootIn;
+  if (typeof rootIn === "object") { const g = String(p).replace(/^\/+/, ""); if (rootIn.garage && /^garage(\/|$)/.test(g)) { root = rootIn.garage; p = g.replace(/^garage\/?/, "") || "."; } else root = rootIn.product; }
   const rootReal = realpathSync(root);
   const abs = resolve(rootReal, String(p).replace(/^\/+/, ""));
   if (abs !== rootReal && !abs.startsWith(rootReal + sep)) throw new Error(`path is outside the product folder: ${p}`);
@@ -78,17 +81,17 @@ export async function runTool(root, name, args = {}, { shell = "bash", timeoutMs
     }
     case "write_file": {
       const f = safePath(root, args.path); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, String(args.content ?? ""));
-      return `Wrote ${relative(realpathSync(root), f)} (${String(args.content ?? "").split("\n").length} lines).`;
+      return `Wrote ${args.path} (${String(args.content ?? "").split("\n").length} lines).`;
     }
     case "edit_file": {
       const f = safePath(root, args.path), text = readFileSync(f, "utf8"), n = text.split(String(args.old_text)).length - 1;
       if (n !== 1) return `Not changed: old_text appears ${n} times (it must appear exactly once). Read the file and use a longer, unique piece.`;
-      writeFileSync(f, text.replace(String(args.old_text), () => String(args.new_text))); return `Edited ${relative(realpathSync(root), f)}.`;
+      writeFileSync(f, text.replace(String(args.old_text), () => String(args.new_text))); return `Edited ${args.path}.`;
     }
     case "run_command":
       // Plain (non-login) shell: login shells print welcome banners (e.g. Cloud Shell's) into every result.
       // The Studio's own environment already carries the user's PATH, so tools like gh, git and npm are found.
-      return new Promise((ok) => execFile(shell, ["-c", String(args.command)], { cwd: realpathSync(root), timeout: timeoutMs, maxBuffer: 16 << 20, env: { ...process.env, GH_PAGER: "", PAGER: "cat", GIT_PAGER: "cat", CI: "1" } },
+      return new Promise((ok) => execFile(shell, ["-c", String(args.command)], { cwd: realpathSync(typeof root === "object" ? root.product : root), timeout: timeoutMs, maxBuffer: 16 << 20, env: { ...process.env, GH_PAGER: "", PAGER: "cat", GIT_PAGER: "cat", CI: "1" } },
         (e, out, err) => ok(cap(`exit ${e ? (e.killed ? "timeout" : e.code ?? 1) : 0}\n${out || ""}${err ? `\n[stderr]\n${err}` : ""}`))));
     default: return `Unknown tool ${name}`;
   }
@@ -130,14 +133,17 @@ export function effortFields(providerId, effort) {
   if (providerId === "anthropic") return {};            // Anthropic's OpenAI layer ignores it; use Claude Code for thinking control
   return { reasoning_effort: effort };
 }
-export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, askUser, signal, fetchImpl = fetch, maxRounds = 30 }) {
+// apps: [{ name, app, tool, description, schema, session, readOnly }] from mcp-client.openApps — connected apps (MCP).
+// roots: extra folders the agent may read/write besides the product (e.g. the Garage).
+export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [] }) {
+  const appSchemas = apps.map((a) => ({ type: "function", function: { name: a.name, description: `[${a.app}] ${a.description}`, parameters: a.schema?.type === "object" ? a.schema : { type: "object", properties: {} } } }));
   let extra = effortFields(provider.id, effort);
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) return emit({ t: "stopped" });
     const call = () => fetchImpl(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,
       headers: { "Content-Type": "application/json", ...(provider.key ? { Authorization: `Bearer ${provider.key}` } : {}), ...(provider.extraHeaders || {}) },
-      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...messages], tools: toolSchemas(), tool_choice: "auto", ...extra }),
+      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...messages], tools: [...toolSchemas(), ...appSchemas], tool_choice: "auto", ...extra }),
     });
     let res = await call();
     // Some models refuse a thinking level they do not support: retry once without it and say so.
@@ -159,6 +165,12 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
       let args; try { args = JSON.parse(c.args || "{}"); } catch { args = null; }
       let result;
       if (!args) result = "Your tool arguments were not valid JSON. Try again.";
+      else if (apps.some((a) => a.name === c.name)) {
+        // Connected apps were approved when the user connected them, so their tools run without a per-call question.
+        const a = apps.find((x) => x.name === c.name);
+        emit({ t: "tool", id: c.id, name: c.name, args, ask: false, app: a.app, tool: a.tool });
+        try { const r = await a.session.callTool(a.tool, args); result = (r.isError ? "The app returned an error: " : "") + r.text; } catch (e) { result = `Error: ${e.message}`; }
+      }
       else if (!TOOLS.some((t) => t.name === c.name)) result = `There is no tool named ${c.name}.`;
       else if (c.name === "ask_user") {
         const q = normalizeQuestion(args);

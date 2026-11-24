@@ -51,3 +51,15 @@ Last reviewed: 2026-11-24 (v2.0 chat). Re-check these sources before selling or 
 **"Allow for this chat".** For Claude Code it adds a session-only rule (e.g. allow `npm …` commands, or auto-accept edits) via the documented `updatedPermissions`; for Codex it answers `acceptForSession`. Nothing is written to your settings files; a new chat starts asking again.
 
 **Changes tab** only reads `git status` / `git diff` in the product folder. It never commits, pushes or discards.
+
+## v2.2 additions (2026-11-24)
+
+**Apps (MCP connectors).** Keys you paste in Apps are stored only in `~/.ai-org-studio/connectors.json` (mode 600). They are never sent to the browser, never put in Claude Code's / Codex's config or environment, and never given to the AI's shell: `bin/mcp-run.mjs` reads the key and starts only that app's official MCP server with it. Connected apps are pre-approved for every AI (that is the point of connecting them); each app's own permissions still apply — use narrow tokens (Supabase: read-only + DEV project ref; Figma: read-only scope; Vercel: the Studio's own read-only Vercel server).
+
+**Garage.** A private GitHub repo you own (`studio-garage`). The Studio commits and pushes it after every AI reply. Before each save it replaces anything that looks like a key or token with `[REDACTED]`. Do not put customer personal data there.
+
+**Shared memory across AIs and logins.** Every chat (Claude Code, Codex, other models) starts with the same text: Studio rules + Garage rules + `MEMORY.md` + the last 25 journal lines + the AI Org's `docs/ai-memory/*` (read-only). Memory lives in your GitHub, not in any AI vendor's account, so it survives switching accounts, models or vendors. Vendors' own memories (ChatGPT memory, Claude projects) are separate and are not read.
+
+**Web link.** A Cloudflare Quick Tunnel (free, no account) gives an https address. Anyone with the address AND your private key can use the Studio, which can run commands as you — never share the key link. Quick Tunnels have no uptime guarantee and the address changes on restart. For a permanent setup use an always-on machine (see README, "Always-on").
+
+**Browser app.** Runs Chrome for Testing headless with an isolated, temporary profile — no access to your own Chrome, cookies or passwords.

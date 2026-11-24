@@ -43,7 +43,9 @@ window.StudioChat = (() => {
   }
   const TOOL_LABEL = { list_files: "Looked at files", read_file: "Read", search: "Searched", write_file: "Wants to write", edit_file: "Wants to edit", run_command: "Wants to run" };
   const DONE_LABEL = { write_file: "Wrote", edit_file: "Edited", run_command: "Ran" };
+  const appLabel = (name) => { const m = String(name).match(/^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/); return m ? `${m[1].charAt(0).toUpperCase()}${m[1].slice(1)}: ${m[2].replace(/_/g, " ")}` : null; };
   function toolSummary(name, args) {
+    if (appLabel(name)) return Object.values(args || {}).map(String).join(" · ").slice(0, 80);
     if (name === "run_command") return args.command;
     if (name === "search") return `“${args.pattern}”${args.path ? ` in ${args.path}` : ""}`;
     return args.path || ".";
@@ -61,7 +63,7 @@ window.StudioChat = (() => {
     }
     function toolCard(id, name, args, ask, result) {
       const card = el("div", { class: "toolcard" + (ask ? " ask" : ""), "data-id": id },
-        el("div", { class: "tline" }, el("b", { text: (result != null && DONE_LABEL[name]) || TOOL_LABEL[name] || name }), " ", el("code", { text: toolSummary(name, args) })));
+        el("div", { class: "tline" }, el("b", { text: (result != null && DONE_LABEL[name]) || TOOL_LABEL[name] || appLabel(name) || name }), " ", el("code", { text: toolSummary(name, args) })));
       if (name === "write_file" || name === "edit_file") {
         const d = el("details", {}, el("summary", { text: "Show the change" }));
         if (name === "edit_file") d.append(el("pre", { class: "diff" }, el("span", { class: "del", text: args.old_text }), "\n", el("span", { class: "add", text: args.new_text })));

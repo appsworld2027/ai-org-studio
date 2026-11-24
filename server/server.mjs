@@ -16,6 +16,9 @@ import { parseBacklog, buildBoard, feedFrom, appTarget } from "./status.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
 import { runTurn } from "./agent.mjs";
+import { makeConnectors, CATALOG } from "./connectors.mjs";
+import { openApps } from "./mcp-client.mjs";
+import { makeGarage } from "./garage.mjs";
 import { makeEngineChats, MODES } from "./engine-chats.mjs";
 import { startCodex } from "./engines/codex.mjs";
 import { UPLOAD_DIR, UPLOAD_MAX, safeUploadName, readRaw, ensureIgnored, pruneUploads } from "./uploads.mjs";
@@ -24,6 +27,8 @@ import { ENGINE_MODELS, plan as teamPlanFor, parseAgent } from "./team.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const store = makeStore();
+const garage = makeGarage({ dir: expand(process.env.STUDIO_GARAGE || "~/studio-garage"), repo: process.env.STUDIO_GARAGE_REPO || "", log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
+const connectors = makeConnectors({ dir: store.dir, root: resolve(dirname(fileURLToPath(import.meta.url)), ".."), log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
 const settings = (() => { try { return JSON.parse(readFileSync(process.env.STUDIO_CONFIG || join(ROOT, "studio.config.json"), "utf8")); } catch { return {}; } })();
 const PORT = Number(process.env.STUDIO_PORT || settings.port || 8484);
 const HOST = process.env.STUDIO_HOST || "0.0.0.0";
@@ -61,7 +66,11 @@ function originOk(req) {
 function isOwnProxyOrigin(o) {
   let u; try { u = new URL(o); } catch { return false; }
   if (u.protocol !== "https:") return false;
-  return (u.hostname.startsWith(`${PORT}-`) && /\.cloudshell\.dev$/.test(u.hostname)) || (/-\d+\.app\.github\.dev$/.test(u.hostname) && u.hostname.endsWith(`-${PORT}.app.github.dev`));
+  return (u.hostname.startsWith(`${PORT}-`) && /\.cloudshell\.dev$/.test(u.hostname)) || (/-\d+\.app\.github\.dev$/.test(u.hostname) && u.hostname.endsWith(`-${PORT}.app.github.dev`))
+    || tunnelHost() === u.hostname;
+}
+// The web link (Cloudflare tunnel) studio.sh started for this Studio, if any: ~/.ai-org-studio/web-url.
+function tunnelHost() { try { return new URL(readFileSync(join(store.dir, "web-url"), "utf8").trim()).hostname; } catch { return ""; }
 }
 const learnedOrigins = () => { try { return [readFileSync(join(store.dir, "public-url"), "utf8").trim()]; } catch { return []; } };
 // The address you opened the Studio at, so `studio.sh` can print the right link next time (Cloud Shell may not tell us).
@@ -202,8 +211,10 @@ async function teamPlan(p) {
   const available = saved.availability || { "claude:opus": has("claude"), "claude:sonnet": has("claude"), "claude:haiku": has("claude"), "codex:default": has("codex"), "free:nemotron": nvidia, "free:mistral": nvidia };
   let agents = [], error = "";
   try { agents = await teamAgents(p); } catch (e) { error = `Could not read the AI Org team: ${e.message}`; }
-  return { models: ENGINE_MODELS.map((m) => ({ id: m.id, name: m.name, cost: m.cost, available: !!available[m.id] })), rows: teamPlanFor({ agents, available, overrides: saved.overrides || {} }), error,
-    note: "The AI Org's background agents use this table once the AI Org reads it (next AI Org update). In the Studio chat, pick any model directly." };
+  const rows = teamPlanFor({ agents, available, overrides: saved.overrides || {} });
+  if (agents.length) { try { garage.publishTeam(p, { rows }); } catch (e) { log(`team export: ${e.message}`); } }
+  return { models: ENGINE_MODELS.map((m) => ({ id: m.id, name: m.name, cost: m.cost, available: !!available[m.id] })), rows, error,
+    note: `Published to the Garage as ${p.id}/team-models.json for the AI Org's background agents (the AI Org router reads it once the AI Org track adds that). In the Studio chat, pick any model directly.` };
 }
 const execFileSyncSafe = (cmd, args) => { try { return require_execFileSync(cmd, args, { encoding: "utf8", timeout: 5000 }).trim(); } catch { return ""; } };
 
@@ -228,12 +239,13 @@ async function listModels(id) {
 function systemPromptFor(p) {
   let rules = ""; try { rules = readFileSync(RULES, "utf8"); } catch { /* none */ }
   const extra = ["AGENTS.md", "CLAUDE.md"].map((f) => { try { return `\n\n## ${f} (from the product)\n` + readFileSync(join(p.dir, f), "utf8").slice(0, 12000); } catch { return ""; } }).join("");
-  return `You are the AI product team inside AI Org Studio, working on the product "${p.name}" (GitHub ${p.repo}). Your tools act inside its folder.\n\n${rules}${extra}`;
+  return `You are the AI product team inside AI Org Studio, working on the product "${p.name}" (GitHub ${p.repo}). Your tools act inside its folder; paths starting with "garage/" go to the Garage.\n\n${rules}\n\n${connectedAppsNote()}\n\n${memoryBlock(p).replaceAll(garage.productDir(p.id), "garage")}${extra}`;
 }
 const live = new Map(); // `${product}:${chat}` -> { abort, pending: Map(callId -> resolve), clients:Set }
 const EFFORTS = ["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"];
 async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
   const c = store.chats.get(p.id, chatId); if (!c) throw new Error("Chat not found");
+  await garage.pull();
   const pc = providerConf(c.provider); if (!pc) throw new Error("This chat's provider is not set up. Open Keys.");
   if (PROVIDERS[c.provider].needsKey && !pc.key) throw new Error("Add your key for this provider under Keys.");
   const key = `${p.id}:${chatId}`; if (live.get(key)?.abort) throw new Error("Still working on the last message.");
@@ -245,11 +257,18 @@ async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
   store.chats.save(p.id, c);
   try {
     if (effort) { c.effort = effort; }
-    await runTurn({ messages: c.messages, provider: pc, model: c.model, effort: c.effort, root: p.dir, systemPrompt: systemPromptFor(p), signal: ac.signal, emit,
+    // Connected apps (MCP) for this turn; started fresh so new connections apply at once, stopped afterwards.
+    L.apps = await openApps(connectors.servers(), { env: ENGINE_ENV, log }).catch(() => ({ tools: [], problems: [], close() {} }));
+    if (L.apps.problems.length) emit({ t: "note", message: `Some connected apps did not start: ${L.apps.problems.join("; ").slice(0, 300)}` });
+    await runTurn({ messages: c.messages, provider: pc, model: c.model, effort: c.effort, root: garage.ready() ? { product: p.dir, garage: garage.ensureProduct(p) } : p.dir, systemPrompt: systemPromptFor(p), signal: ac.signal, emit, apps: L.apps.tools,
       approve: (call) => auto ? Promise.resolve(true) : new Promise((ok) => L.pending.set(call.id, ok)),
       askUser: (q) => new Promise((ok) => L.pending.set(q.id, ok)) });
   } catch (e) { if (!ac.signal.aborted) emit({ t: "error", message: e.message }); }
-  finally { L.abort = null; L.pending.clear(); store.chats.save(p.id, c); emit({ t: "idle" }); }
+  finally {
+    L.apps?.close(); L.apps = null; L.abort = null; L.pending.clear(); store.chats.save(p.id, c); emit({ t: "idle" });
+    const last = [...c.messages].reverse().find((m) => m.role === "assistant" && m.content);
+    afterTurn(p, c, { engine: `free:${c.provider}`, model: c.model, ask: text, did: last?.content || "" });
+  }
 }
 
 // ---------- Claude Code / Codex chats (official programs in structured mode, the user's own login) ----------
@@ -258,7 +277,18 @@ const TOOLS_BIN = join(HOME, ".ai-org-studio/tools/node_modules/.bin");
 const ENGINE_ENV = { ...process.env, PATH: `${TOOLS_BIN}:${process.env.PATH}`, GH_NO_UPDATE_NOTIFIER: "1", GH_PROMPT_DISABLED: "1" };
 const BINS = { claude: process.env.STUDIO_CLAUDE_BIN || "claude", codex: process.env.STUDIO_CODEX_BIN || "codex" };
 const CODEX_CONFIG = (process.env.STUDIO_CODEX_CONFIG || "").split("\n").filter(Boolean);   // tests point Codex at a stand-in model server
-const engineRules = (p) => { let r = ""; try { r = readFileSync(RULES, "utf8"); } catch { /* none */ } return `You are working on the product "${p.name}" (GitHub ${p.repo}) inside AI Org Studio.\n\n${r}`; };
+// Every chat starts with: the Studio rules + the Garage rules + the shared memory pack (same for every AI and login).
+const memoryBlock = (p) => { if (!garage.ready()) return ""; garage.ensureProduct(p); const m = garage.memoryPack(p); return `${garage.rules(p)}\n\n## What happened before (shared by every AI and login — read it before you start)\n${m}`; };
+const connectedAppsNote = () => { const on = connectors.list().filter((a) => a.enabled); return on.length ? `## Connected apps (already set up by the founder — use them directly, never ask for keys)\n${on.map((a) => `- ${a.name}: ${a.what}`).join("\n")}\nIf a task needs an app that is not connected, say which one and tell the founder: "Open Apps (top bar) → ${"<app>"} → follow the steps → Connect". Never ask them to paste a key into the chat.` : `## Connected apps\nNone yet. If a task needs one (Supabase, Vercel, Notion, Figma, Sentry…), tell the founder: "Open Apps (top bar) → <app> → follow the steps → Connect". Never ask for keys in the chat.`; };
+const engineRules = (p) => { let r = ""; try { r = readFileSync(RULES, "utf8"); } catch { /* none */ } return `You are working on the product "${p.name}" (GitHub ${p.repo}) inside AI Org Studio.\n\n${r}\n\n${connectedAppsNote()}\n\n${memoryBlock(p)}`; };
+const appsForEngines = () => { const servers = connectors.servers(); return { claude: servers.length ? connectors.claudeConfig() : null, codex: connectors.codexConfig(), stamp: JSON.stringify(servers) }; };
+const garageDirs = (p) => (garage.ready() ? [garage.ensureProduct(p)] : []);
+// After every reply: one journal line (which AI, what was asked, what it did) and save the Garage to GitHub.
+function afterTurn(p, chat, info) {
+  if (!garage.ready()) return;
+  try { garage.journal(p, info); } catch (e) { log(`garage journal: ${e.message}`); }
+  garage.save(p, `${info.engine}: ${String(info.ask || "").replace(/\s+/g, " ").slice(0, 70)}`);
+}
 // The product folders are the user's own repositories, added by them in the Studio, so mark them trusted for the
 // official programs (the same choice the user would make on their "Do you trust this folder?" screen).
 function trustFolder(dir, engine) {
@@ -275,7 +305,8 @@ function trustFolder(dir, engine) {
     }
   } catch (e) { log(`could not mark ${dir} as trusted for ${engine}: ${e.message}`); }
 }
-const engineChats = makeEngineChats({ store, env: ENGINE_ENV, rulesFor: engineRules, bins: BINS, codexConfig: CODEX_CONFIG, log, trustFolder });
+const engineChats = makeEngineChats({ store, env: ENGINE_ENV, rulesFor: engineRules, bins: BINS, codexConfig: CODEX_CONFIG, log, trustFolder, apps: appsForEngines, extraDirs: garageDirs,
+  beforeTurn: () => garage.pull(), afterTurn });
 // Sign-in status: asks the official programs; never reads their credential files.
 async function engineAccount(engine) {
   if (engine === "claude") {
@@ -391,6 +422,26 @@ const server = http.createServer(async (req, res) => {
         const all = store.readJson("team.json", {}); all[p.id] = { overrides: ov, availability: b.availability && typeof b.availability === "object" ? Object.fromEntries(Object.entries(b.availability).filter(([k]) => ENGINE_MODELS.some((x) => x.id === k)).map(([k, v]) => [k, !!v])) : all[p.id]?.availability };
         store.writeJson("team.json", all); return json(res, 200, await teamPlan(p));
       }
+    }
+    // ---------- Apps (connectors) ----------
+    if (path === "/api/apps" && req.method === "GET") return json(res, 200, { apps: connectors.list() });
+    if ((m = path.match(/^\/api\/apps\/([a-z][a-z0-9-]{1,30})$/))) {
+      if (req.method === "PUT") { const b = await readBody(req, 64 << 10); try { return json(res, 200, connectors.set(m[1], { enabled: b.enabled, keys: b.keys, custom: b.custom })); } catch (e) { return json(res, 400, { error: e.message }); } }
+      if (req.method === "DELETE") { connectors.remove(m[1]); return json(res, 200, { ok: true }); }
+    }
+    if ((m = path.match(/^\/api\/apps\/([a-z][a-z0-9-]{1,30})\/check$/)) && req.method === "POST") return json(res, 200, await connectors.check(m[1]));
+    // ---------- Garage ----------
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/garage$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      if (!garage.ready()) return json(res, 200, { ready: false, files: [] });
+      garage.ensureProduct(p);
+      const f = url.searchParams.get("file");
+      if (f) { try { const buf = garage.readFile(p, f); const isText = /\.(md|txt|json|csv|ya?ml|js|ts|tsx|sql|log)$/i.test(f); return isText ? json(res, 200, { file: f, text: buf.toString("utf8").slice(0, 200000) }) : send(res, 200, buf, /\.png$/i.test(f) ? "image/png" : /\.jpe?g$/i.test(f) ? "image/jpeg" : /\.html?$/i.test(f) ? "text/plain; charset=utf-8" : "application/octet-stream"); } catch { return json(res, 404, { error: "Not found" }); } }
+      return json(res, 200, { ready: true, repo: garage.repo, folder: p.id, files: garage.files(p).slice(0, 500) });
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/garage\/save$/)) && req.method === "POST") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await garage.save(p, "Saved from the Studio"));
     }
     // @-mention: the product's files (tracked + new, never ignored ones), filtered by what the user typed.
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/files$/)) && req.method === "GET") {
