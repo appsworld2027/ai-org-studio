@@ -12,13 +12,22 @@ async function turn(threadId, turnId, input) {
   for (;;) {
     const r = await (await fetch(`${base}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: cfg.model, input: hist, stream: true }) })).text();
     let item = null; for (const l of r.split("\n")) if (l.startsWith("data: ")) { const e = JSON.parse(l.slice(6)); if (e.type === "response.output_item.done") item = e.item; if (e.type === "response.output_text.delta") send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: e.item_id, delta: e.delta } }); }
+    if (item?.type === "function_call" && item.name === "update_plan") {
+      const a = JSON.parse(item.arguments);
+      send({ method: "turn/plan/updated", params: { threadId, turnId, explanation: a.explanation, plan: a.plan.map((p) => ({ step: p.step, status: p.status === "in_progress" ? "inProgress" : p.status })) } });
+      hist.push({ type: "function_call_output", call_id: item.call_id, output: "Plan updated" }); continue;
+    }
     if (item?.type === "function_call") {
-      const a = JSON.parse(item.arguments); const it = { type: "commandExecution", id: item.call_id, command: `/bin/bash -lc '${a.cmd}'`, cwd, status: "inProgress" };
+      const a = JSON.parse(item.arguments);
+      const actions = /^cat (\S+)$/.test(a.cmd) ? [{ type: "read", command: a.cmd, name: a.cmd.split(" ")[1], path: `${cwd}/${a.cmd.split(" ")[1]}` }] : [{ type: "unknown", command: a.cmd }];
+      const it = { type: "commandExecution", id: item.call_id, command: `/bin/bash -lc '${a.cmd}'`, cwd, status: "inProgress", commandActions: actions };
       send({ method: "item/started", params: { threadId, turnId, item: it } });
-      const res = await ask("item/commandExecution/requestApproval", { threadId, turnId, itemId: item.call_id, command: it.command, cwd, reason: a.justification });
+      send({ method: "thread/tokenUsage/updated", params: { threadId, turnId, tokenUsage: { last: { inputTokens: 25800, outputTokens: 10 }, total: { inputTokens: 25800 }, modelContextWindow: 258000 } } });
+      const res = a.sandbox_permissions === "require_escalated" ? await ask("item/commandExecution/requestApproval", { threadId, turnId, itemId: item.call_id, command: it.command, cwd, reason: a.justification }) : { decision: "accept" };
       let outp = "declined", code = null;
-      if (res.decision === "accept") { try { outp = cp.execSync(a.cmd, { cwd }).toString(); code = 0; } catch (e) { code = 1; outp = String(e); } }
-      send({ method: "item/completed", params: { threadId, turnId, item: { ...it, status: res.decision === "accept" ? "completed" : "declined", exitCode: code, aggregatedOutput: outp } } });
+      const ok = res.decision === "accept" || res.decision === "acceptForSession";
+      if (ok) { try { outp = cp.execSync(a.cmd, { cwd }).toString(); code = 0; } catch (e) { code = 1; outp = String(e); } send({ method: "item/commandExecution/outputDelta", params: { threadId, turnId, itemId: item.call_id, delta: outp } }); }
+      send({ method: "item/completed", params: { threadId, turnId, item: { ...it, status: ok ? "completed" : "declined", exitCode: code, aggregatedOutput: null } } });
       hist.push({ type: "function_call_output", call_id: item.call_id, output: outp }); continue;
     }
     if (item?.type === "message") { send({ method: "item/started", params: { threadId, turnId, item: { type: "agentMessage", id: item.id, text: "" } } }); send({ method: "item/completed", params: { threadId, turnId, item: { type: "agentMessage", id: item.id, text: item.content[0].text } } }); }

@@ -28,7 +28,9 @@ jobs:
           mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && node -e "const f='package.json',p=require('./'+f);p.allowScripts={'@anthropic-ai/claude-code':true,'@openai/codex':true};require('fs').writeFileSync(f,JSON.stringify(p))" && npm install --no-audit --no-fund --ignore-scripts=false playwright@1 @anthropic-ai/claude-code @openai/codex >/dev/null
           npx --prefix /tmp/pw playwright install --with-deps chromium
           /tmp/pw/node_modules/.bin/claude --version && /tmp/pw/node_modules/.bin/codex --version
-      - name: End-to-end test with stand-in engines (ST-01..ST-28)
+      - name: Let Codex's sandbox run (Ubuntu 24.04 blocks the user namespaces it needs by default)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: End-to-end test with stand-in engines (ST-01..ST-32)
         run: PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs node e2e/studio.e2e.mjs
       - name: End-to-end test with the real Claude Code and Codex
         run: PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs STUDIO_REAL_CLAUDE=/tmp/pw/node_modules/.bin/claude STUDIO_REAL_CODEX=/tmp/pw/node_modules/.bin/codex node e2e/studio.e2e.mjs

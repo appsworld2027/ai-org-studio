@@ -16,7 +16,7 @@ import { parseBacklog, buildBoard, feedFrom, appTarget } from "./status.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
 import { runTurn } from "./agent.mjs";
-import { makeEngineChats } from "./engine-chats.mjs";
+import { makeEngineChats, MODES } from "./engine-chats.mjs";
 import { startCodex } from "./engines/codex.mjs";
 import { UPLOAD_DIR, UPLOAD_MAX, safeUploadName, readRaw, ensureIgnored, pruneUploads } from "./uploads.mjs";
 import { publicUrl, platform } from "./platform.mjs";
@@ -254,7 +254,8 @@ async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
 
 // ---------- Claude Code / Codex chats (official programs in structured mode, the user's own login) ----------
 const TOOLS_BIN = join(HOME, ".ai-org-studio/tools/node_modules/.bin");
-const ENGINE_ENV = { ...process.env, PATH: `${TOOLS_BIN}:${process.env.PATH}` };
+// GH_NO_UPDATE_NOTIFIER: gh inside Codex's read-only sandbox must not try to write its update-check file.
+const ENGINE_ENV = { ...process.env, PATH: `${TOOLS_BIN}:${process.env.PATH}`, GH_NO_UPDATE_NOTIFIER: "1", GH_PROMPT_DISABLED: "1" };
 const BINS = { claude: process.env.STUDIO_CLAUDE_BIN || "claude", codex: process.env.STUDIO_CODEX_BIN || "codex" };
 const CODEX_CONFIG = (process.env.STUDIO_CODEX_CONFIG || "").split("\n").filter(Boolean);   // tests point Codex at a stand-in model server
 const engineRules = (p) => { let r = ""; try { r = readFileSync(RULES, "utf8"); } catch { /* none */ } return `You are working on the product "${p.name}" (GitHub ${p.repo}) inside AI Org Studio.\n\n${r}`; };
@@ -389,6 +390,33 @@ const server = http.createServer(async (req, res) => {
         store.writeJson("team.json", all); return json(res, 200, await teamPlan(p));
       }
     }
+    // @-mention: the product's files (tracked + new, never ignored ones), filtered by what the user typed.
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/files$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      const q = String(url.searchParams.get("q") || "").toLowerCase().slice(0, 80);
+      const out = await run("git", ["-C", p.dir, "ls-files", "--cached", "--others", "--exclude-standard"]).catch(() => "");
+      const files = out.split("\n").filter((f) => f && !f.startsWith(".studio-uploads/"));
+      const score = (f) => { const l = f.toLowerCase(), b = l.split("/").pop(); return b.startsWith(q) ? 0 : b.includes(q) ? 1 : l.includes(q) ? 2 : 9; };
+      return json(res, 200, { files: (q ? files.filter((f) => score(f) < 9).sort((x, y) => score(x) - score(y) || x.length - y.length) : files.slice(0, 400)).slice(0, 30) });
+    }
+    // Changes: what the AI has changed in the product folder and not yet saved to GitHub (like the "Changes" view in Cursor).
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/changes$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      const st = await run("git", ["-C", p.dir, "status", "--porcelain=v1", "--untracked-files=all"]).catch(() => "");
+      const num = await run("git", ["-C", p.dir, "diff", "HEAD", "--numstat"]).catch(() => "");
+      const counts = Object.fromEntries(num.split("\n").filter(Boolean).map((l) => { const [a, d, f] = l.split("\t"); return [f, { added: +a || 0, removed: +d || 0 }]; }));
+      const files = st.split("\n").filter(Boolean).map((l) => ({ code: l.slice(0, 2).trim(), path: l.slice(3).replace(/^"|"$/g, "") })).filter((f) => !f.path.startsWith(".studio-uploads/"))
+        .map((f) => ({ path: f.path, status: f.code === "??" || f.code === "A" ? "new" : f.code === "D" ? "deleted" : "changed", ...(counts[f.path] || { added: 0, removed: 0 }) }))
+        .map((f) => { if (f.status === "new" && !f.added) { try { const t = readFileSync(join(p.dir, f.path), "utf8"); f.added = t ? t.replace(/\n$/, "").split("\n").length : 0; } catch { /* binary or gone */ } } return f; });
+      const one = String(url.searchParams.get("file") || "");
+      if (one && files.some((f) => f.path === one)) {
+        const f = files.find((x) => x.path === one);
+        const diff = f.status === "new" ? (() => { try { return readFileSync(join(p.dir, one), "utf8").slice(0, 60000).split("\n").map((l) => `+${l}`).join("\n"); } catch { return ""; } })()
+          : await run("git", ["-C", p.dir, "diff", "HEAD", "--", one]).catch(() => "");
+        return json(res, 200, { file: one, diff: String(diff).slice(0, 80000) });
+      }
+      return json(res, 200, { files: files.slice(0, 300), branch: (await run("git", ["-C", p.dir, "branch", "--show-current"]).catch(() => "")).trim() });
+    }
     // Attachments for the Claude Code / Codex composer: saved inside the product folder (git-ignored) so the official
     // program can read them by path, exactly as if the user had typed @path. Never executed by the Studio.
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/uploads$/)) && req.method === "POST") {
@@ -426,7 +454,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "GET") return json(res, 200, { chats: store.chats.list(p.id) });
       if (req.method === "POST") {
         const b = await readBody(req);
-        if (b.engine === "claude" || b.engine === "codex") return json(res, 200, store.chats.create(p.id, { engine: b.engine, model: /^[A-Za-z0-9._:\/-]{0,80}$/.test(b.model || "") ? b.model || "" : "", effort: EFFORTS.includes(b.effort) ? b.effort : "" }));
+        if (b.engine === "claude" || b.engine === "codex") return json(res, 200, store.chats.create(p.id, { engine: b.engine, model: /^[A-Za-z0-9._:\/-]{0,80}$/.test(b.model || "") ? b.model || "" : "", effort: EFFORTS.includes(b.effort) ? b.effort : "", mode: MODES.includes(b.mode) ? b.mode : "ask" }));
         if (!PROVIDERS[b.provider] || !b.model) return json(res, 400, { error: "Pick a provider and model." });
         return json(res, 200, store.chats.create(p.id, { provider: b.provider, model: String(b.model).slice(0, 200) }));
       }
@@ -476,7 +504,7 @@ server.on("upgrade", (req, socket, head) => {
         let msg; try { msg = JSON.parse(raw); } catch { return; }
         const files = Array.isArray(msg.files) ? msg.files.filter((f) => typeof f?.path === "string" && f.path.startsWith(".studio-uploads/") && !f.path.includes("..")).slice(0, 10) : [];
         if (msg.t === "send" && typeof msg.text === "string" && (msg.text.trim() || files.length))
-          engineChats.send(p, chatId, { text: msg.text.slice(0, 20000), files, effort: EFFORTS.includes(msg.effort) ? (msg.effort === "default" ? "" : msg.effort) : undefined, model: typeof msg.model === "string" && /^[A-Za-z0-9._:\/-]{0,80}$/.test(msg.model) ? msg.model : undefined })
+          engineChats.send(p, chatId, { text: msg.text.slice(0, 20000), files, effort: EFFORTS.includes(msg.effort) ? (msg.effort === "default" ? "" : msg.effort) : undefined, model: typeof msg.model === "string" && /^[A-Za-z0-9._:\/\[\]-]{0,80}$/.test(msg.model) ? msg.model : undefined, mode: MODES.includes(msg.mode) ? msg.mode : undefined })
             .catch((e) => ws.send(JSON.stringify({ t: "error", message: e.message })));
         else if (msg.t === "answer") engineChats.answer(p, chatId, String(msg.id), msg.answer);
         else if (msg.t === "stop") engineChats.interrupt(p, chatId);

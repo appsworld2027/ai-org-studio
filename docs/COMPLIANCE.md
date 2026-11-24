@@ -41,3 +41,13 @@ Last reviewed: 2026-11-24 (v2.0 chat). Re-check these sources before selling or 
 | Typing into the wrong moment | A message arrives while the AI is asking a yes/no question | The AI's own screen stays visible. The composer is for new messages; answer the AI's questions on its screen. Stop sends Esc. |
 | The programs change their screens | A future Claude Code / Codex update changes how pasting works | The Studio uses only the standard terminal paste, so the impact is small. The CI browser test and a manual check after each upgrade catch it. |
 | Data leaves the machine | Prompts and files go to Anthropic or OpenAI | Same as using Claude Code or Codex directly; their data policies apply. Remote Control (if used) stores the transcript at Anthropic. |
+
+## v2.1 additions (2026-11-24)
+
+**Work modes.** "Ask first" (default), "Auto-edit" and "Plan only" map onto each program's own documented settings: Claude Code `--permission-mode` (default / acceptEdits / plan) and Codex `approvalPolicy` + `sandboxPolicy` (read-only / workspace-write / read-only with no approvals). The Studio never uses Claude's `bypassPermissions` or Codex's `danger-full-access`.
+
+**Network inside Codex's sandbox is on.** Codex blocks the network by default, which made `gh` look signed out. The Studio turns network access on (`networkAccess: true`) so GitHub, npm and documentation look-ups work. File changes are still blocked in "Ask first" and "Plan only" unless you press Allow. Risk: an AI command can now reach the internet without asking; this is the same as Claude Code's default and is what the VS Code extensions do.
+
+**"Allow for this chat".** For Claude Code it adds a session-only rule (e.g. allow `npm …` commands, or auto-accept edits) via the documented `updatedPermissions`; for Codex it answers `acceptForSession`. Nothing is written to your settings files; a new chat starts asking again.
+
+**Changes tab** only reads `git status` / `git diff` in the product folder. It never commits, pushes or discards.
