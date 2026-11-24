@@ -106,7 +106,7 @@ test("the private link is right on Cloud Shell, Codespaces and elsewhere", () =>
   assert.equal(publicUrl(8484, { WEB_HOST: "cs-1-abc.cs-asia-southeast1.cloudshell.dev" }), "https://8484-cs-1-abc.cs-asia-southeast1.cloudshell.dev");
   assert.equal(publicUrl(8484, { CODESPACE_NAME: "fuzzy-train-123", GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: "app.github.dev" }), "https://fuzzy-train-123-8484.app.github.dev");
   assert.equal(publicUrl(8484, { STUDIO_PUBLIC_URL: "https://studio.example.com/" }), "https://studio.example.com");
-  assert.equal(publicUrl(8484, {}), "http://localhost:8484");
+  assert.equal(publicUrl(8484, { STUDIO_HOME: tmp() }), "http://localhost:8484", "nothing known → localhost (never reads the real home folder)");
   assert.equal(platform({ CODESPACE_NAME: "x" }).id, "codespaces"); assert.equal(platform({ CLOUD_SHELL: "true" }).id, "cloudshell"); assert.equal(platform({}).id, "other");
 });
 test("Cloud Shell without WEB_HOST: the link the Studio was opened at is remembered for this port only", () => {
@@ -124,4 +124,15 @@ test("Cloud Shell without WEB_HOST: the link the Studio was opened at is remembe
 test("OpenRouter lists free models first", () => {
   assert.deepEqual(sortModels("openrouter", ["b/paid", "a/x:free", "c/y:free"]).slice(0, 2), ["a/x:free", "c/y:free"]);
   assert.equal(sortModels("nvidia", ["z/z"])[0], "nvidia/nemotron-3-ultra-550b-a55b", "verified defaults stay on top");
+});
+test("attachment names are made safe; only document/image/code types are accepted", async () => {
+  const { safeUploadName } = await import("../server/uploads.mjs");
+  assert.equal(safeUploadName("Screen Shot 2026-11-23 at 10.00.png"), "Screen_Shot_2026-11-23_at_10.00.png");
+  assert.equal(safeUploadName("../../etc/passwd.txt"), "passwd.txt", "no folders, no ..");
+  assert.equal(safeUploadName("..\\\\windows\\\\evil.md"), "evil.md");
+  assert.equal(safeUploadName(".notes.md"), "notes.md", "no hidden files");
+  assert.equal(safeUploadName("setup.sh"), "", "no shell scripts");
+  assert.equal(safeUploadName("run.exe"), ""); assert.equal(safeUploadName("x.png.exe"), ""); assert.equal(safeUploadName("noext"), "");
+  assert.equal(safeUploadName("Brief.PDF"), "Brief.PDF");
+  assert.ok(safeUploadName("a".repeat(300) + ".csv").length <= 80);
 });

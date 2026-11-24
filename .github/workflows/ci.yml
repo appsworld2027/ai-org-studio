@@ -26,5 +26,5 @@ jobs:
         run: |
           mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && npm install --no-audit --no-fund playwright@1 >/dev/null
           npx --prefix /tmp/pw playwright install --with-deps chromium
-      - name: End-to-end test (ST-01..ST-23)
+      - name: End-to-end test (ST-01..ST-24)
         run: PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs node e2e/studio.e2e.mjs

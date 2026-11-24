@@ -1,6 +1,6 @@
 # Feature Contract: AI Org Studio
 
-Status: v1.2 approved by the founder (2026-11-23: model picker, agent-model matching, decision cards)
+Status: v1.3 approved by the founder (2026-11-24: chat box with attachments under Claude Code and Codex)
 Repo: `appsworld2027/ai-org-studio` (private). A product of its own, separate from any product built with it.
 
 ## What it is
@@ -38,6 +38,7 @@ A chat-first studio where a founder or AI PM builds professional products with A
 | ST-20 | Other models chat | The AI needs a product decision | Clickable cards: 2–4 options, one marked Recommended, plus "type your own"; the click goes back to the AI, and the card stays answered after a reload |
 | ST-21 | Other models chat | Pick a model / thinking level under the text box | The next message uses it (like Cursor); a model that refuses a thinking level continues without it and says so |
 | ST-22 | Claude Code or Codex | Pick model and thinking above the screen, Apply | The program restarts with that model and effort and keeps the last conversation |
+| ST-24 | Claude Code or Codex | Type in the chat box (Shift+Enter for new lines), attach with the button, Ctrl+V or drag-and-drop, then Enter | The official program receives one message with the text and the file paths (`@path` for Claude Code); files are saved in the product but never committed; unsupported types are refused; the program's own screen stays visible. See docs/COMPLIANCE.md |
 | ST-23 | AI Org product | Open Agents → Team | Every agent shows which AI it uses and why; builders and their reviewers get different models when possible; a backup is named; the owner can override any row |
 
 ## Out of scope (next)

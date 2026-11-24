@@ -2,7 +2,7 @@
 // Run: node e2e/studio.e2e.mjs   (needs Playwright + Chromium; set PLAYWRIGHT_MODULE if Playwright is not installed locally)
 // Each check maps to the Feature Contract (docs/FEATURE_CONTRACT.md). Exit 1 on any failure.
 import { spawn, execFileSync } from "node:child_process";
-import { writeFileSync, mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, statSync } from "node:fs";
+import { writeFileSync, mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, statSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,11 +53,11 @@ const model = http.createServer((req, res) => {
 
 const port = await freePort();
 const failFlag = join(tmp, "gh-down");
-const fakeEngine = (name) => `printf '${name} ready (mode=%s, product=%s) model=%s effort=%s\\n' "$STUDIO_MODE" "$STUDIO_PRODUCT" "$STUDIO_MODEL" "$STUDIO_EFFORT"; while IFS= read -r line; do printf '${name} heard: %s\\n' "$line"; done`;
+const fakeEngine = (name) => `printf '${name} ready (mode=%s, product=%s) model=%s effort=%s\\n' "$STUDIO_MODE" "$STUDIO_PRODUCT" "$STUDIO_MODEL" "$STUDIO_EFFORT"; while IFS= read -r line; do line=$(printf '%s' "$line" | sed -e 's/\\x1b\\[200~/<paste>/g' -e 's/\\x1b\\[201~/<\\/paste>/g'); printf '${name} heard: %s\\n' "$line"; printf '%s\\n' "$line" >> "$STUDIO_HEARD_FILE"; done`;
 const TOKEN = "e2e-test-key-0123456789";
 const env = { ...process.env, STUDIO_HOME: home, STUDIO_PORT: String(port), STUDIO_HOST: "127.0.0.1", STUDIO_TOKEN: TOKEN, STUDIO_GH: join(ROOT, "e2e/fake/gh"),
   STUDIO_CONFIG: join(tmp, "none.json"), FAKE_GH_FAIL: failFlag, STUDIO_BOARD_TTL_MS: "500", STUDIO_POLL_MS: "1000", STUDIO_WORKSPACE: join(tmp, "ws"),
-  STUDIO_CMD_CLAUDE: fakeEngine("CLAUDE"), STUDIO_CMD_CODEX: fakeEngine("CODEX"), WEB_HOST: "", CODESPACE_NAME: "", STUDIO_PUBLIC_URL: "" };
+  STUDIO_HEARD_FILE: join(tmp, "heard.txt"), STUDIO_CMD_CLAUDE: fakeEngine("CLAUDE"), STUDIO_CMD_CODEX: fakeEngine("CODEX"), WEB_HOST: "", CODESPACE_NAME: "", STUDIO_PUBLIC_URL: "" };
 const srv = spawn(process.execPath, [join(ROOT, "server/server.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
 let srvOut = ""; srv.stdout.on("data", (d) => (srvOut += d)); srv.stderr.on("data", (d) => (srvOut += d));
 const base = `http://127.0.0.1:${port}`;
@@ -129,6 +129,39 @@ try {
     await page.click("#btnRestart"); await waitTerm(/CLAUDE ready \(mode=new/);
   });
 
+  await check("ST-24", "chat box under Claude Code: multi-line text, Ctrl+V image paste, attach a file; delivered to the program as one message with file paths", async () => {
+    await page.click(".eng[data-eng=claude]"); await waitTerm(/CLAUDE ready/);
+    await page.fill("#tAsk", "Fix the spacing on Today\nKeep the colours");
+    // Ctrl+V of an image from the clipboard
+    await page.evaluate(() => {
+      const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+      const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const dt = new DataTransfer(); dt.items.add(new File([bin], "image.png", { type: "image/png" }));
+      document.querySelector("#tAsk").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+    await page.setInputFiles("#tFile", { name: "brief.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 test") });
+    await page.waitForFunction(() => document.querySelectorAll("#tChips .chip:not(.up)").length === 2, null, { timeout: 8000 });
+    assert(await page.isVisible("#tChips .chip img"), "image thumbnail shown");
+    await page.setInputFiles("#tFile", { name: "run.exe", mimeType: "application/octet-stream", buffer: Buffer.from("MZ") });
+    await page.waitForSelector("#tChips .chip.bad", { timeout: 8000 });
+    await page.click("#tChips .chip.bad button");
+    await page.press("#tAsk", "Enter");
+    await waitTerm(/CLAUDE heard: .*Attached: @\.studio-uploads\/\S+-pasted-\S+\.png @\.studio-uploads\/\S+-brief\.pdf/);
+    const heard = readFileSync(join(tmp, "heard.txt"), "utf8");
+    assert(/<paste>Fix the spacing on Today/.test(heard) && /Keep the colours/.test(heard), `message arrives as one paste: ${heard.slice(-300)}`);
+    const up = readdirSync(join(prod, ".studio-uploads"));
+    assert(up.some((f) => f.endsWith("-brief.pdf")) && up.some((f) => /pasted-.*\.png$/.test(f)), `files saved in the product: ${up}`);
+    assert(!up.some((f) => f.endsWith(".exe")), "unsupported type refused");
+    assert(readFileSync(join(prod, ".git/info/exclude"), "utf8").includes(".studio-uploads/"), "uploads kept out of git");
+    assert(execFileSync("git", ["-C", prod, "status", "--porcelain"]).toString().trim() === "", "git sees no new files");
+    assert((await page.$$("#tChips .chip")).length === 0 && (await page.inputValue("#tAsk")) === "", "box cleared after send");
+    await page.click(".eng[data-eng=codex]"); await waitTerm(/CODEX ready/);
+    await page.fill("#tAsk", "hello codex"); await page.setInputFiles("#tFile", { name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("# n") });
+    await page.waitForFunction(() => document.querySelectorAll("#tChips .chip:not(.up)").length === 1, null, { timeout: 8000 });
+    await page.press("#tAsk", "Enter");
+    await waitTerm(/CODEX heard: .*Attached: \.studio-uploads\/\S+-notes\.md/);
+    assert(!/@\.studio-uploads\/\S+-notes/.test(await termText()), "Codex gets plain paths (no @)");
+  });
   await check("ST-15", "Other models: add a custom model server and key (key never returned to the page)", async () => {
     await page.click(".eng[data-eng=other]"); await page.waitForSelector("#chatPane:not([hidden])");
     await page.click("#btnKeys"); await page.selectOption("#kProvider", "custom");

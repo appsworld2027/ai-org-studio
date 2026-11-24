@@ -35,6 +35,18 @@
       <div class="termwrap"><div id="term" aria-label="AI chat terminal"></div>
         <div class="termmsg" id="termMsg" hidden></div>
       </div>
+      <form class="tcomposer" id="tComposer" aria-label="Message to the AI">
+        <div class="chips" id="tChips" aria-live="polite"></div>
+        <textarea id="tAsk" rows="3" aria-label="Message" placeholder="Message Claude Code… Enter to send · Shift+Enter new line · Ctrl+V or drop files to attach"></textarea>
+        <div class="composer-row">
+          <button type="button" class="ghost small" id="tAttach" title="Attach files (images, PDFs, documents, code)">＋ Attach</button>
+          <input type="file" id="tFile" multiple hidden>
+          <span class="small muted" id="tHint" title="The AI's own screen above stays live: answer its questions there, or type here.">Answer the AI's questions above, or type here.</span>
+          <span class="spacer"></span>
+          <button type="button" class="ghost small" id="tEsc" title="Stop the AI (Esc)">Stop</button>
+          <button type="submit" class="primary" id="tSend">Send</button>
+        </div>
+      </form>
       <div class="termbar">
         <span id="termState" class="muted">Connecting…</span>
         <span class="spacer"></span>
