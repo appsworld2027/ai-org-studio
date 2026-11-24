@@ -318,8 +318,10 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://x"), path = url.pathname;
     if (path === "/healthz") return send(res, 200, "ok");
-    if (url.searchParams.get("k")) {
-      if (!same(url.searchParams.get("k"), TOKEN)) return send(res, 401, "Wrong Studio key. Use the link printed when the Studio started.");
+    // The key may arrive as ?k=… or, when typed after Cloud Shell's own "?authuser=0", as "?authuser=0?k=…".
+    const k = url.searchParams.get("k") || (String(req.url).match(/[?&]k=([A-Za-z0-9_-]{16,})/) || [])[1] || "";
+    if (k) {
+      if (!same(k, TOKEN)) return send(res, 401, "Wrong Studio key. Use the link printed when the Studio started.");
       if (req.headers["x-forwarded-host"]) rememberPublicUrl(`https://${String(req.headers["x-forwarded-host"]).split(",")[0].trim()}`);
       return send(res, 302, "", "text/plain", { Location: "/", "Set-Cookie": `${COOKIE}=${TOKEN}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000` });
     }
