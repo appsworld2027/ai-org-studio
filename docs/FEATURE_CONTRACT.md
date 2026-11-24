@@ -46,6 +46,13 @@ A chat-first studio where a founder or AI PM builds professional products with A
 | ST-30 | Codex chat | "Ask first" mode, ask what a file says | Reading runs without asking, shown as "Read README.md" (never `/bin/bash -lc …`), with its output under the step; the plan checklist and memory meter work as in ST-29. GitHub, npm and web look-ups work (network on in every mode) |
 | ST-31 | Both chats | Type @ and part of a file name | A list of the product's files; Enter/Tab inserts `@path`; Esc closes |
 | ST-32 | Right panel | Open "Changes" after the AI edits | Every changed file (New / Changed / Deleted, +/− lines), click one for a readable diff; attachments are not listed; a badge counts the files |
+| ST-33 | Apps | Open Apps, connect an app (steps say exactly where to get the key) | Key never shown again or sent to the page; Claude Code uses the app's tools without asking each time |
+| ST-34 | Garage | After any AI reply | AI-made files + one journal line are pushed to the private studio-garage repo automatically; secret-looking values removed first; Garage tab shows files and MEMORY.md |
+| ST-35 | Memory across AIs | Start a Codex chat after a Claude chat (different engine/login) | Codex starts with the same shared memory and the journal of Claude's work; uses the same connected app |
+| ST-36 | Flag issue | On the test screen press Flag issue, describe it | The description and the page address go to the AI chat |
+| ST-37 | Reconnect | Connection drops | The chat says "reconnecting", reconnects by itself and shows the conversation again |
+| ST-38 | Web link | Open via the tunnel address | Accepted (key link + chat); any other address refused |
+| ST-39 | Phone | Open on a 390 px wide screen | No sideways scrolling; chat and test screen usable |
 | ST-23 | AI Org product | Open Agents → Team | Every agent shows which AI it uses and why; builders and their reviewers get different models when possible; a backup is named; the owner can override any row |
 
 ## Out of scope (next)

@@ -10,6 +10,19 @@ const base = process.env.ANTHROPIC_BASE_URL, session = crypto.randomUUID(), out 
 const history = []; let pendingCtl = null;
 let mode = args.includes("--permission-mode") ? args[args.indexOf("--permission-mode") + 1] : "default";
 const FREE = ["Read", "TodoWrite", "Glob", "Grep"];
+// --mcp-config / --allowedTools like the real program: start the listed MCP servers and offer their tools.
+const mcpFile = args.includes("--mcp-config") ? args[args.indexOf("--mcp-config") + 1] : "";
+const allowed = args.includes("--allowedTools") ? args[args.indexOf("--allowedTools") + 1].split(",") : [];
+const addDirs = args.flatMap((a, i) => (a === "--add-dir" ? [args[i + 1]] : []));
+const mcp = {};
+if (mcpFile) for (const [id, s] of Object.entries(JSON.parse(fs.readFileSync(mcpFile, "utf8")).mcpServers || {})) {
+  if (!s.command) continue;
+  const cp = require("child_process").spawn(s.command, s.args || [], { stdio: ["pipe", "pipe", "inherit"], env: process.env }); let b = "", n = 0; const w = new Map();
+  cp.stdout.on("data", (d) => { b += d; let k; while ((k = b.indexOf("\n")) >= 0) { const l = b.slice(0, k); b = b.slice(k + 1); try { const m = JSON.parse(l); w.get(m.id)?.(m.result); } catch {} } });
+  const call = (method, params) => new Promise((ok) => { const id = ++n; w.set(id, ok); cp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"); });
+  mcp[id] = { call, ready: call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake-claude", version: "0" } }).then(() => call("tools/list", {})) };
+}
+const isFree = (name) => FREE.includes(name) || allowed.some((a) => name === a || name.startsWith(a + "__"));
 out({ type: "system", subtype: "init", cwd: process.cwd(), session_id: session, model: "claude-test", tools: ["Write", "AskUserQuestion"] });
 async function turn() {
   out({ type: "system", subtype: "status", status: "requesting", session_id: session });
@@ -26,7 +39,8 @@ async function turn() {
   history.push({ role: "assistant", content: blocks });
   for (const b of blocks) out({ type: "assistant", message: { role: "assistant", content: [b], usage: { input_tokens: 4000, cache_read_input_tokens: 46000, output_tokens: 20 } }, parent_tool_use_id: null, session_id: session });
   const tool = blocks.find((b) => b.type === "tool_use");
-  if (tool && (FREE.includes(tool.name) || (tool.name === "Write" && mode === "acceptEdits"))) return runTool(tool, { behavior: "allow", updatedInput: tool.input });
+  const insideAllowed = tool?.name === "Write" && [process.cwd(), ...addDirs].some((d) => String(tool.input.file_path).startsWith(d + "/"));
+  if (tool && (isFree(tool.name) || (tool.name === "Write" && mode === "acceptEdits" && insideAllowed))) return runTool(tool, { behavior: "allow", updatedInput: tool.input });
   if (!tool) { out({ type: "result", subtype: "success", is_error: false, result: blocks.map((b) => b.text || "").join(""), session_id: session, total_cost_usd: 0, duration_ms: 1 }); return; }
   const rid = crypto.randomUUID();
   pendingCtl = { rid, tool };
@@ -38,6 +52,7 @@ async function runTool(tool, resp) {
   else if (tool.name === "Write") { fs.mkdirSync(path.dirname(tool.input.file_path), { recursive: true }); fs.writeFileSync(tool.input.file_path, tool.input.content); content = `File created successfully at: ${tool.input.file_path}`; }
   else if (tool.name === "Read") content = fs.readFileSync(tool.input.file_path, "utf8").split("\n").map((l, i) => `${i + 1}\t${l}`).join("\n");
   else if (tool.name === "TodoWrite") content = "Todos have been modified successfully.";
+  else if (tool.name.startsWith("mcp__")) { const [, app, t] = tool.name.match(/^mcp__([^_]+)__(.+)$/) || []; if (!mcp[app]) { content = `No such tool available: ${tool.name}`; isErr = true; } else { await mcp[app].ready; const r = await mcp[app].call("tools/call", { name: t, arguments: tool.input }); content = (r.content || []).map((c) => c.text).join("\n"); } }
   else content = `Your questions have been answered: ${JSON.stringify(resp.updatedInput.answers)}`;
   const res = { type: "tool_result", tool_use_id: tool.id, content, ...(isErr ? { is_error: true } : {}) };
   history.push({ role: "user", content: [res] }); out({ type: "user", message: { role: "user", content: [res] }, session_id: session });

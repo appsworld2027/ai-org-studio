@@ -30,7 +30,7 @@ jobs:
           /tmp/pw/node_modules/.bin/claude --version && /tmp/pw/node_modules/.bin/codex --version
       - name: Let Codex's sandbox run (Ubuntu 24.04 blocks the user namespaces it needs by default)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: End-to-end test with stand-in engines (ST-01..ST-32)
+      - name: End-to-end test with stand-in engines (ST-01..ST-39)
         run: PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs node e2e/studio.e2e.mjs
       - name: End-to-end test with the real Claude Code and Codex
         run: PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs STUDIO_REAL_CLAUDE=/tmp/pw/node_modules/.bin/claude STUDIO_REAL_CODEX=/tmp/pw/node_modules/.bin/codex node e2e/studio.e2e.mjs

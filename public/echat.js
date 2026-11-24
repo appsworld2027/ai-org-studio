@@ -40,7 +40,7 @@ window.EngineChat = (() => {
   };
 
   function create({ box, statusEl, planEl, metaEl, onBusy, onSend, onChanges }) {
-    let ws = null, cur = null, curText = "", group = null, ready = Promise.resolve(), name = "AI", drawn = false, think = null, thinkText = "", thinkStart = 0;
+    let ws = null, cur = null, curText = "", group = null, ready = Promise.resolve(), name = "AI", drawn = false, think = null, thinkText = "", thinkStart = 0, tries = 0, retryT = null, curUrl = "";
     const nearBottom = () => box.scrollHeight - box.scrollTop - box.clientHeight < 240;
     const scroll = (force) => { if (force || nearBottom()) box.scrollTop = box.scrollHeight; };
     const add = (n) => { const stick = nearBottom(); box.append(n); if (stick) box.scrollTop = box.scrollHeight; return n; };
@@ -198,7 +198,7 @@ window.EngineChat = (() => {
 
     function handle(e) {
       switch (e.t) {
-        case "history": if (!drawn) { render(e.chat); drawn = true; } if (e.busy) { onBusy(true); setActivity("Working"); } break;
+        case "history": if (!drawn) { render(e.chat); drawn = true; statusEl.classList.remove("offline"); } if (e.busy) { onBusy(true); setActivity("Working"); } break;
         case "user": break;   // already shown when sent (other open tabs see it on reload)
         case "activity": setActivity(e.text); onBusy(true); break;
         case "thinking_start": think = thinkingBlock("", null); think.classList.add("live"); thinkText = ""; thinkStart = Date.now(); break;
@@ -241,15 +241,25 @@ window.EngineChat = (() => {
     }
     const send = (m) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
     return {
-      open(url, engineName) {
-        name = engineName; drawn = false; if (ws) { ws.onclose = null; ws.close(); }
-        box.replaceChildren(); setActivity(""); showPlan(null); meta = { context: null, limits: null }; showMeta();
+      open(url, engineName, reconnecting = false) {
+        name = engineName; if (ws) { ws.onclose = null; ws.close(); }
+        // A reconnect redraws from the saved conversation (the server keeps working while you are away).
+        drawn = false; clearTimeout(retryT);
+        if (!reconnecting) { tries = 0; box.replaceChildren(); setActivity(""); showPlan(null); meta = { context: null, limits: null }; showMeta(); }
+        curUrl = url;
         ws = new WebSocket(url);
         // Ready = connected AND the saved conversation is drawn (so a new message is never wiped by the history).
         let gotHistory; const history = new Promise((ok) => (gotHistory = ok));
         ready = Promise.race([Promise.all([new Promise((ok) => ws.addEventListener("open", ok, { once: true })), history]), new Promise((ok) => ws.addEventListener("close", ok, { once: true }))]);
         ws.onmessage = (ev) => { const m = JSON.parse(ev.data); handle(m); if (m.t === "history") gotHistory(); };
-        ws.onclose = () => { onBusy(false); setActivity(""); };
+        ws.onopen = () => { tries = 0; statusEl.classList.remove("offline"); };
+        ws.onclose = () => {
+          onBusy(false); setActivity("");
+          // Lost the connection (laptop slept, tunnel restarted, phone switched network): try again, quietly.
+          const wait = Math.min(15000, 1000 * 2 ** Math.min(tries++, 4));
+          statusEl.hidden = false; statusEl.classList.add("offline"); statusEl.replaceChildren(el("span", { text: `Connection lost — reconnecting in ${Math.round(wait / 1000)}s…` }));
+          retryT = setTimeout(() => this.open(curUrl, name, true), wait);
+        };
       },
       async send(text, files, opts = {}) {
         await ready;
@@ -259,7 +269,9 @@ window.EngineChat = (() => {
         onSend?.(); return true;
       },
       stop() { send({ t: "stop" }); },
-      close() { if (ws) { ws.onclose = null; ws.close(); ws = null; } box.replaceChildren(); setActivity(""); showPlan(null); meta = { context: null, limits: null }; showMeta(); },
+      // For the browser test: drop the connection like a network change would (keeps the reconnect logic in play).
+      dropConnection() { if (!ws) return false; ws.close(); return true; },
+      close() { clearTimeout(retryT); if (ws) { ws.onclose = null; ws.close(); ws = null; } box.replaceChildren(); setActivity(""); showPlan(null); meta = { context: null, limits: null }; showMeta(); },
     };
   }
   return { create, icon };

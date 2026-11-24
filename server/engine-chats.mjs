@@ -6,7 +6,9 @@ import { startCodex } from "./engines/codex.mjs";
 const KEEP_EVENTS = ["user", "assistant_start", "delta", "tool", "tool_done", "approve", "ask", "answered", "error", "note", "done", "thinking_start", "thinking", "plan", "context", "limits", "mode"];
 export const MODES = ["ask", "auto", "plan"];
 
-export function makeEngineChats({ store, env, rulesFor, bins = {}, codexConfig = [], log = () => {}, trustFolder }) {
+// apps(): { claude: {file, allow}, codex: [-c ...], stamp } — the connected apps (MCP) every chat gets.
+// rulesFor(p, chat) may return fresh rules each start (it includes the shared memory pack).
+export function makeEngineChats({ store, env, rulesFor, bins = {}, codexConfig = [], log = () => {}, trustFolder, apps = () => ({ claude: null, codex: [], stamp: "" }), extraDirs = () => [], beforeTurn = async () => {}, afterTurn = () => {} }) {
   const live = new Map(); // `${pid}:${chatId}` -> { engine, clients:Set, busy, chat }
 
   function broadcast(L, e) { for (const ws of L.clients) if (ws.readyState === 1) ws.send(JSON.stringify(e)); }
@@ -33,15 +35,17 @@ export function makeEngineChats({ store, env, rulesFor, bins = {}, codexConfig =
     trustFolder?.(p.dir, c.engine);
     const emit = (e) => {
       if (e.t === "session") { c.sessionId = e.id; if (e.model && !c.modelShown) c.modelShown = e.model; save(p, L); }
-      if (e.t === "done" || e.t === "idle") L.busy = false;
+      if (e.t === "done" || e.t === "idle") { const was = L.busy; L.busy = false;
+        if (was && L.turn) { const t = L.turn; L.turn = null; const said = [...c.events].reverse().find((x) => x.t === "assistant")?.text || ""; try { afterTurn(p, c, { engine: c.engine, model: c.modelShown || c.model, account: L.account || "", ask: t.text, did: said }); } catch (er) { log(`afterTurn: ${er.message}`); } } }
       record(p, L, e); broadcast(L, e);
       if (["done", "tool_done", "error", "approve", "ask"].includes(e.t)) save(p, L);
     };
-    const common = { cwd: p.dir, env: { ...env, STUDIO: "1" }, model: c.model || "", effort: c.effort || "", mode: c.mode || "ask", rules: rulesFor(p), emit,
+    const A = apps(); L.appStamp = A.stamp;
+    const common = { cwd: p.dir, env: { ...env, STUDIO: "1" }, model: c.model || "", effort: c.effort || "", mode: c.mode || "ask", rules: rulesFor(p, c), extraDirs: extraDirs(p), emit,
       onExit: () => { L.engine = null; L.busy = false; } };
     L.engine = c.engine === "claude"
-      ? startClaude({ ...common, bin: bins.claude || "claude", resume: c.sessionId || undefined })
-      : startCodex({ ...common, bin: bins.codex || "codex", threadId: c.sessionId || undefined, extraConfig: codexConfig });
+      ? startClaude({ ...common, bin: bins.claude || "claude", resume: c.sessionId || undefined, mcpConfig: A.claude })
+      : startCodex({ ...common, bin: bins.codex || "codex", threadId: c.sessionId || undefined, extraConfig: [...codexConfig, ...A.codex] });
     log(`${p.id}: ${c.engine} chat ${c.id} started${c.sessionId ? " (resumed)" : ""}`);
   }
 
@@ -67,8 +71,10 @@ export function makeEngineChats({ store, env, rulesFor, bins = {}, codexConfig =
       const c = L.chat;
       const settingsChanged = (effort !== undefined && effort !== c.effort) || (model !== undefined && model !== c.model) || (mode !== undefined && mode !== (c.mode || "ask"));
       if (effort !== undefined) c.effort = effort; if (model !== undefined) c.model = model; if (mode !== undefined) c.mode = mode;
-      if (settingsChanged && L.engine) { L.engine.stop(); L.engine = null; }   // restart with the new model/effort; the conversation resumes
-      if (!L.engine) start(p, L);
+      // Restart with the new model/effort/mode or newly connected apps; the conversation resumes where it was.
+      if ((settingsChanged || (L.engine && L.appStamp !== apps().stamp)) && L.engine) { L.engine.stop(); L.engine = null; }
+      if (!L.engine) { await beforeTurn(p).catch(() => {}); start(p, L); }
+      L.turn = { text };
       if (c.title === "New chat" && text) c.title = text.replace(/\s+/g, " ").slice(0, 60);
       const ev = { t: "user", text, files: files.map((f) => ({ name: f.name, path: f.path, image: !!f.image })) };
       c.events.push({ ...ev, at: Date.now() }); save(p, L); broadcast(L, ev);

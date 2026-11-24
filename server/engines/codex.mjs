@@ -82,12 +82,19 @@ export function translateRequest(m, state) {
     return { t: "ask", id: String(m.id), questions: (p.questions || []).map((q) => ({ id: q.id, question: q.question, header: q.header, multi: false,
       options: (q.options || []).map((o) => ({ label: o.label, detail: o.description || "" })), recommended: (q.options || []).findIndex((o) => /recommended/i.test(`${o.label} ${o.description}`)) })) };
   }
+  // A connected app (MCP server) wants to run one of its tools, or asks for a small form.
+  if (m.method === "mcpServer/elicitation/request") {
+    const meta = p._meta || {};
+    if (meta.codex_approval_kind === "mcp_tool_call") { const d = describeMcp(p.serverName, meta.tool_name || ""); return { t: "approve", id: String(m.id), kind: "app", title: d.title, detail: meta.tool_description || "", reason: "" }; }
+    return { t: "approve", id: String(m.id), kind: "app", title: `${describeMcp(p.serverName, "").title.replace(/:\s*$/, "")} needs your OK`, detail: String(p.message || "").slice(0, 300) };
+  }
   if (m.method === "item/permissions/requestApproval") return { t: "approve", id: String(m.id), kind: "run", title: "Allow extra access", detail: JSON.stringify(p.permissions || p).slice(0, 300) };
   return null;
 }
 export function requestResult(method, answer, questions = []) {
   if (method === "item/tool/requestUserInput") { const answers = {}; questions.forEach((q, i) => { answers[q.id] = { answers: [].concat(answer?.[i] ?? []).map(String) }; }); return { answers }; }
   if (method === "execCommandApproval" || method === "applyPatchApproval") return { decision: answer ? "approved" : "denied" };
+  if (method === "mcpServer/elicitation/request") return answer === "session" ? { action: "accept", content: {}, _meta: { persist: "session" } } : answer ? { action: "accept", content: {} } : { action: "decline" };
   if (method === "item/permissions/requestApproval") return answer ? { decision: "accept" } : { decision: "decline" };
   return { decision: answer === "session" ? "acceptForSession" : answer ? "accept" : "decline" };
 }
@@ -104,13 +111,13 @@ export function threadMode(mode = "ask") {
   if (mode === "plan") return { approvalPolicy: "never", sandbox: "read-only", config: net };
   return { approvalPolicy: "on-request", sandbox: "read-only", config: net };
 }
-export function turnMode(mode = "ask") {
-  if (mode === "auto") return { approvalPolicy: "on-request", sandboxPolicy: { type: "workspaceWrite", networkAccess: true } };
+export function turnMode(mode = "ask", writableRoots = []) {
+  if (mode === "auto") return { approvalPolicy: "on-request", sandboxPolicy: { type: "workspaceWrite", networkAccess: true, writableRoots } };
   return { approvalPolicy: mode === "plan" ? "never" : "on-request", sandboxPolicy: { type: "readOnly", networkAccess: true } };
 }
 export const ASK_FIRST = "SAFETY MODE: you are in a read-only sandbox. Reading needs no permission. The network is available for reading (gh, curl, web). If a command needs to change files (including git commit/push, npm install), run it with escalated permissions so the user gets an Allow button. Never conclude that a sign-in (GitHub, npm, etc.) is broken just because the sandbox blocked the network.";
 export const PLAN_ONLY = "PLAN MODE: the user wants a plan only. Read and research as needed, but do not change any file or run anything that changes state. End with a short numbered plan and ask whether to go ahead.";
-export function startCodex({ bin = "codex", cwd, env, model, effort, rules, threadId, extraConfig = [], mode = "ask", emit, onExit }) {
+export function startCodex({ bin = "codex", cwd, env, model, effort, rules, threadId, extraConfig = [], mode = "ask", extraDirs = [], emit, onExit }) {
   const args = ["app-server", ...extraConfig.flatMap((c) => ["-c", c])];
   const p = spawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
   const state = { items: {}, turnId: null, threadId: null, pendingReq: {}, stderr: "" };
@@ -151,7 +158,7 @@ export function startCodex({ bin = "codex", cwd, env, model, effort, rules, thre
     async loginDeviceCode() { await ready; return call("account/login/start", { type: "chatgptDeviceCode" }); },
     async send(text, files, root, opts = {}) {
       await ready; const tid = await ensureThread();
-      await call("turn/start", { threadId: tid, input: userInput(text, files, root), ...(model ? { model } : {}), ...(effort && effort !== "default" ? { effort } : {}), ...turnMode(mode), summary: "auto" });
+      await call("turn/start", { threadId: tid, input: userInput(text, files, root), ...(model ? { model } : {}), ...(effort && effort !== "default" ? { effort } : {}), ...turnMode(mode, extraDirs), summary: "auto" });
     },
     answer(reqId, answer) { const r = state.pendingReq[reqId]; if (!r) return false; delete state.pendingReq[reqId]; send({ id: r.id, result: requestResult(r.method, answer, r.questions || []) }); return true; },
     interrupt() { if (state.threadId && state.turnId) call("turn/interrupt", { threadId: state.threadId, turnId: state.turnId }).catch(() => {}); },

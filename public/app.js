@@ -90,7 +90,7 @@
   }
 
   // ---------- Claude Code / Codex chat (like the VS Code extension) ----------
-  const echat = window.EngineChat.create({ box: $("#eMsgs"), statusEl: $("#eActivity"), planEl: $("#ePlan"), metaEl: $("#eMeta"),
+  const echat = window.__studioEchat = window.EngineChat.create({ box: $("#eMsgs"), statusEl: $("#eActivity"), planEl: $("#ePlan"), metaEl: $("#eMeta"),
     onBusy: (b) => { $("#eStop").hidden = !b; $("#eSend").disabled = b; }, onChanges: () => loadChanges(true) });
   // ---------- Changes (what the AI changed, not yet on GitHub) ----------
   let changesTimer = null;
@@ -398,18 +398,104 @@
 
   // ---------- right tabs ----------
   let tab = store.get("studio.tab", "");
+  const TABS = ["app", "proto", "agents", "changes", "garage"];
+  // Pop out: the app in its own Chrome window (a named window, reused), so F12 DevTools shows only the app.
+  $("#openTab").addEventListener("click", (e) => { if (!["app", "proto"].includes(tab)) return; e.preventDefault(); window.open($("#openTab").href, "studio-app", "popup,width=430,height=900"); });
+  $("#btnReload").onclick = () => { const f = tab === "proto" ? $("#protoFrame") : $("#appFrame"); const s = f.getAttribute("src"); if (s) { f.src = "about:blank"; setTimeout(() => (f.src = s), 50); } };
+  // ---------- Garage ----------
+  async function loadGarage() {
+    const d = await api(`/api/products/${product.id}/garage`).catch(() => ({ ready: false, files: [] }));
+    $("#garageEmpty").hidden = d.ready; $("#garageList").hidden = !d.ready || !d.files.length;
+    $("#garageStatus").textContent = d.ready ? `${d.files.length} file${d.files.length === 1 ? "" : "s"} · private repo ${d.repo || "studio-garage"} / ${d.folder} · saved to GitHub after every AI reply` : "";
+    $("#garageList").replaceChildren(...d.files.map((f) => { const b = el("button", { type: "button", class: "chfile", "data-path": f.path }, el("span", { class: `chs ${f.path === "MEMORY.md" ? "new" : ""}`, text: f.path.split("/")[0].replace(/\.md$/, "") === f.path ? "file" : f.path.split("/")[0] }), el("span", { class: "chp", text: f.path }), el("span", { class: "chnum muted", text: f.modified.slice(0, 10) }));
+      b.onclick = () => showGarageFile(f.path); return b; }));
+  }
+  async function showGarageFile(f) {
+    document.querySelectorAll("#garageList .chfile").forEach((x) => x.classList.toggle("sel", x.dataset.path === f));
+    const v = $("#garageView"); v.hidden = false;
+    if (/\.(png|jpe?g)$/i.test(f)) { v.replaceChildren(el("div", { class: "chhead" }, el("b", { text: f })), el("img", { src: `/api/products/${product.id}/garage?file=${encodeURIComponent(f)}`, alt: f, class: "gimg" })); return; }
+    const d = await api(`/api/products/${product.id}/garage?file=${encodeURIComponent(f)}`).catch(() => null); if (!d) return;
+    v.replaceChildren(el("div", { class: "chhead" }, el("b", { text: f })), /\.md$/i.test(f) ? el("div", { class: "gmd" }, window.StudioChat.md(d.text)) : el("pre", { text: d.text }));
+  }
+  // ---------- Apps (connectors) ----------
+  async function loadApps() {
+    const { apps } = await api("/api/apps").catch(() => ({ apps: [] }));
+    const on = apps.filter((a) => a.enabled).length; $("#appsBadge").hidden = !on; $("#appsBadge").textContent = String(on);
+    $("#appList").replaceChildren(...apps.map(appCard)); return apps;
+  }
+  function appCard(a) {
+    const st = el("span", { class: `appst ${a.enabled ? "on" : ""}`, text: a.enabled ? "Connected" : a.builtin ? "Off" : "Not connected" });
+    const card = el("details", { class: "appcard", "data-app": a.id }, el("summary", {}, el("b", { text: a.name }), el("span", { class: "muted small", text: ` — ${a.what}` }), el("span", { class: "spacer" }), st));
+    const body = el("div", { class: "appbody" });
+    if (a.steps?.length) body.append(el("ol", {}, ...a.steps.map((s) => el("li", {}, ...linkify(s)))));
+    if (a.link) body.append(el("p", { class: "small" }, el("a", { href: a.link, target: "_blank", rel: "noopener", text: `Open ${a.name}'s page for this` })));
+    if (a.safety) body.append(el("p", { class: "small ok", text: a.safety }));
+    const inputs = {};
+    for (const k of a.keys || []) { const i = el("input", { type: k.secret ? "password" : "text", autocomplete: "off", placeholder: k.set ? `saved ${k.tail}` : k.hint || "", "aria-label": k.label }); inputs[k.env] = i; body.append(el("label", {}, `${k.label}${k.set ? " (saved)" : ""}`, i)); }
+    const status = el("p", { class: "small", role: "status" });
+    const connect = el("button", { type: "button", class: "primary", text: a.enabled ? "Save and check" : "Connect" });
+    const off = el("button", { type: "button", class: "ghost", text: a.custom ? "Remove" : "Disconnect" }); off.hidden = !a.enabled && !a.custom;
+    connect.onclick = async () => {
+      connect.disabled = true; status.className = "small"; status.textContent = "Connecting and checking (the first time can take a minute while the app's helper downloads)…";
+      const keys = Object.fromEntries(Object.entries(inputs).filter(([, i]) => i.value.trim()).map(([k, i]) => [k, i.value.trim()]));
+      try {
+        const saved = await api(`/api/apps/${a.id}`, { method: "PUT", body: JSON.stringify({ keys, enabled: true }) });
+        if (!saved.ready) throw new Error("Paste the key first.");
+        const r = await api(`/api/apps/${a.id}/check`, { method: "POST", body: "{}" });
+        status.className = `small ${r.ok ? "ok" : "err"}`; status.textContent = r.ok ? `${r.detail}. Every AI can use ${a.name} from its next message.` : `Not working yet: ${r.detail}`;
+        if (!r.ok) await api(`/api/apps/${a.id}`, { method: "PUT", body: JSON.stringify({ enabled: false }) });
+        for (const i of Object.values(inputs)) i.value = "";
+      } catch (e) { status.className = "small err"; status.textContent = e.message; }
+      connect.disabled = false; const keepOpen = a.id; await loadApps(); const c = document.querySelector(`.appcard[data-app="${keepOpen}"]`); if (c) { c.open = true; c.querySelector('[role="status"]').replaceWith(status); }
+    };
+    off.onclick = async () => { await api(`/api/apps/${a.id}`, a.custom ? { method: "DELETE" } : { method: "PUT", body: JSON.stringify({ enabled: false }) }); loadApps(); };
+    body.append(el("div", { class: "row" }, el("span", { class: "spacer" }), off, connect), status);
+    card.append(body); return card;
+  }
+  const linkify = (s) => { const out = []; let last = 0; for (const m of s.matchAll(/`([^`]+)`/g)) { out.push(s.slice(last, m.index), el("code", { text: m[1] })); last = m.index + m[0].length; } out.push(s.slice(last)); return out; };
+  $("#btnApps").onclick = async () => { await loadApps(); $("#dlgApps").showModal(); };
+  $("#cAdd").onclick = async () => {
+    const id = $("#cId").value.trim().toLowerCase(), cmd = $("#cCmd").value.trim(); $("#cErr").textContent = "";
+    const custom = /^https:\/\//.test(cmd) ? { url: cmd, name: id } : { command: cmd.split(/\s+/)[0], args: cmd.split(/\s+/).slice(1), name: id };
+    const keys = $("#cKeyName").value.trim() ? { [$("#cKeyName").value.trim().toUpperCase()]: $("#cKeyVal").value } : undefined;
+    try { await api(`/api/apps/${id}`, { method: "PUT", body: JSON.stringify({ custom, keys, enabled: true }) }); const r = await api(`/api/apps/${id}/check`, { method: "POST", body: "{}" }); $("#cErr").textContent = r.ok ? "" : `Added, but: ${r.detail}`; for (const x of ["#cId", "#cCmd", "#cKeyName", "#cKeyVal"]) $(x).value = ""; loadApps(); }
+    catch (e) { $("#cErr").textContent = e.message; }
+  };
+  loadApps().catch(() => {});
+  // ---------- Flag issue: describe what is wrong on the right-hand screen; it goes to the chat with the page address ----------
+  const flagAtt = { files: [] };
+  $("#btnFlag").onclick = () => {
+    const where = tab === "proto" ? `Prototype ${$("#protoPick").value}` : lastAppUrl || "the app";
+    $("#flagWhere").textContent = `On: ${where}`; $("#flagText").value = ""; flagAtt.files = []; $("#flagChips").replaceChildren(); $("#dlgFlag").showModal(); $("#flagText").focus();
+  };
+  $("#flagText").addEventListener("paste", async (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter((f) => /^image\//.test(f.type)); if (!files.length) return; e.preventDefault();
+    for (const f of files) { const r = await fetch(`/api/products/${product.id}/uploads`, { method: "POST", headers: { "X-File-Name": encodeURIComponent(f.name || "screenshot.png"), "Content-Type": "application/octet-stream" }, body: f }).then((x) => x.json()).catch(() => null);
+      if (r?.path) { flagAtt.files.push({ name: r.name, path: r.path, image: true }); $("#flagChips").append(el("div", { class: "chip" }, el("img", { src: URL.createObjectURL(f), alt: "" }), el("span", { text: r.name }))); } }
+  });
+  $("#formFlag").addEventListener("submit", async (e) => {
+    if (e.submitter?.value === "cancel") return;
+    const what = $("#flagText").value.trim(); if (!what) return;
+    const page = tab === "proto" ? `the HTML prototype ${$("#protoPick").value} (in the product repo)` : lastAppUrl;
+    const msg = `Issue flagged from the test screen.\nPage: ${page}\nWhat the founder sees: ${what}\n\nPlease: open the page in your own Chrome (Browser app) if it is connected, read the console and network errors, find the cause in the code, then propose the fix (follow the current work mode).`;
+    if (engine === "other") { $("#ask").value = msg; $("#composer").requestSubmit(); return; }
+    if (!eChatId) { const c = await api(`/api/products/${product.id}/chats`, { method: "POST", body: JSON.stringify({ engine, model: $("#eModel").value, effort: $("#eEffort").value, mode: $("#eMode").value }) }); await refreshEChats(c.id); await openEChat(c.id); }
+    await echat.send(msg, flagAtt.files, { model: $("#eModel").value, effort: $("#eEffort").value, mode: $("#eMode").value });
+  });
   function showTab(p) {
     tab = p; store.set("studio.tab", p);
-    for (const t of ["app", "proto", "agents", "changes"]) { $(`#tab-${t}`).setAttribute("aria-selected", String(t === p)); $(`#pane-${t}`).classList.toggle("show", t === p); }
+    for (const t of TABS) { $(`#tab-${t}`).setAttribute("aria-selected", String(t === p)); $(`#pane-${t}`).classList.toggle("show", t === p); }
     if (p === "changes") loadChanges();
-    const href = p === "app" ? lastAppUrl : p === "proto" ? $("#protoFrame").getAttribute("src") : p === "changes" ? "" : `https://github.com/${product.repo}/issues?q=is%3Aopen+label%3Aai%3A*`;
+    if (p === "garage") loadGarage();
+    const href = p === "app" ? lastAppUrl : p === "proto" ? $("#protoFrame").getAttribute("src") : ["changes", "garage"].includes(p) ? "" : `https://github.com/${product.repo}/issues?q=is%3Aopen+label%3Aai%3A*`;
     $("#openTab").hidden = !href; if (href) $("#openTab").href = href;
-    $("#openTab").textContent = p === "agents" ? "Open on GitHub" : "Open in new tab";
+    $("#openTab").textContent = p === "agents" ? "Open on GitHub" : "Pop out";
     $("#btnAppLink").hidden = p !== "app";
+    $("#btnReload").hidden = $("#btnFlag").hidden = !["app", "proto"].includes(p);
   }
   document.querySelectorAll(".rtab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.pane)));
   $(".rtabs").addEventListener("keydown", (e) => {
-    const order = ["app", "proto", "agents", "changes"], i = Math.max(0, order.indexOf(document.activeElement?.dataset?.pane || tab));
+    const order = TABS, i = Math.max(0, order.indexOf(document.activeElement?.dataset?.pane || tab));
     if (e.key === "ArrowRight" || e.key === "ArrowLeft") { const n = order[(i + (e.key === "ArrowRight" ? 1 : order.length - 1)) % order.length]; showTab(n); $(`#tab-${n}`).focus(); }
   });
   function setApp(app) {

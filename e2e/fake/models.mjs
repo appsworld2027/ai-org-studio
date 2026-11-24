@@ -1,7 +1,7 @@
 // Stand-in AI providers for tests: an Anthropic Messages API (for Claude Code) and an OpenAI Responses API (for Codex).
 // Each answers with a scripted turn: say something, ask to change a file (needs approval), ask a question, then finish.
 import http from "node:http";
-export function startFakeModels({ anthropicPort, openaiPort, projectDir }) {
+export function startFakeModels({ anthropicPort, openaiPort, projectDir, garageDir = process.env.FAKE_GARAGE_DIR || "" }) {
   const log = { anthropic: [], openai: [] };
   const anth = http.createServer((req, res) => {
     let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
@@ -15,7 +15,14 @@ export function startFakeModels({ anthropicPort, openaiPort, projectDir }) {
       const isText = (m) => m.role === "user" && (typeof m.content === "string" || (m.content || []).some((c) => c.type === "text" && !/^<system-reminder>/.test(c.text || "")));
       const startIdx = msgs.map(isText).lastIndexOf(true);
       const scenario2 = main && startIdx >= 0 && /PLANCHECK/.test(JSON.stringify(msgs[startIdx].content));
-      if (scenario2) {
+      const appcheck = main && startIdx >= 0 && /APPCHECK/.test(JSON.stringify(msgs[startIdx].content));
+      if (appcheck) {
+        const n = (JSON.stringify(msgs.slice(startIdx)).match(/"tool_result"/g) || []).length;
+        if (n === 0) { blocks = [{ type: "tool_use", id: "toolu_a1", name: "mcp__echo__whoami", input: {} }]; stop = "tool_use"; }
+        else if (n === 1) { blocks = [{ type: "tool_use", id: "toolu_g1", name: "Write", input: { file_path: `${garageDir}/notes/2026-11-24-app-check.md`, content: "# App check\nEcho answered.\n" } }]; stop = "tool_use"; }
+        else { const got = (JSON.stringify(msgs.slice(startIdx)).match(/account for key [A-Z0-9]+/) || ["no answer"])[0]; blocks = [{ type: "text", text: `Echo says: ${got}. Saved a note in the Garage.` }]; }
+      }
+      else if (scenario2) {
         const n = (JSON.stringify(msgs.slice(startIdx)).match(/"tool_result"/g) || []).length;
         const todos = (s) => [{ content: "Read the README", status: s[0], activeForm: "Reading the README" }, { content: "Write the summary note", status: s[1], activeForm: "Writing the note" }];
         if (n === 0) { blocks = [{ type: "thinking", thinking: "The founder wants a summary. I will read the README first, then write a short note." }, { type: "tool_use", id: "toolu_t1", name: "TodoWrite", input: { todos: todos(["in_progress", "pending"]) } }]; stop = "tool_use"; }
@@ -44,8 +51,19 @@ export function startFakeModels({ anthropicPort, openaiPort, projectDir }) {
     let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
       if (!req.url.includes("/responses")) { res.writeHead(200, { "Content-Type": "application/json" }); return res.end('{"data":[{"id":"gpt-fake","object":"model"}]}'); }
       let j = {}; try { j = JSON.parse(body); } catch {}
-      log.openai.push({ model: j.model, effort: j.reasoning?.effort, input: JSON.stringify(j.input || "").slice(-6000) });
+      log.openai.push({ model: j.model, effort: j.reasoning?.effort, input: JSON.stringify(j.input || "").slice(-6000), instructionsAll: `${j.instructions || ""}${JSON.stringify(j.input || "")}`.slice(0, 400000) });
       const inStr = JSON.stringify(j.input || "");
+      if (/APPCHECK/.test(inStr)) {
+        const after = inStr.slice(inStr.lastIndexOf("APPCHECK")), outs = (after.match(/"function_call_output"|\\"function_call_output\\"|type\\?":\\?"function_call_output/g) || []).length;
+        res.writeHead(200, { "Content-Type": "text/event-stream" }); const id0 = `resp_${Date.now()}`, w = (type, d) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...d })}\n\n`);
+        w("response.created", { response: { id: id0, status: "in_progress" } });
+        const it = outs === 0 ? { type: "function_call", id: "fc_a", call_id: "call_a", namespace: "mcp__echo", name: "whoami", arguments: "{}" }
+          : { type: "message", id: "msg_a", role: "assistant", content: [{ type: "output_text", text: `Echo says: ${(after.match(/account for key [A-Z0-9]+/) || ["no answer"])[0]}.` }] };
+        if (it.type === "message") { w("response.output_item.added", { output_index: 0, item: { ...it, content: [] } }); w("response.content_part.added", { item_id: "msg_a", output_index: 0, content_index: 0, part: { type: "output_text", text: "" } }); w("response.output_text.delta", { item_id: "msg_a", output_index: 0, content_index: 0, delta: it.content[0].text }); }
+        else w("response.output_item.added", { output_index: 0, item: { ...it, arguments: "" } });
+        w("response.output_item.done", { output_index: 0, item: it }); w("response.completed", { response: { id: id0, status: "completed", output: [it], usage: { input_tokens: 24000, output_tokens: 5, total_tokens: 24005, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } } } });
+        return res.end();
+      }
       const look = /LOOKAROUND/.test(inStr), outs = (inStr.slice(inStr.lastIndexOf("LOOKAROUND")).match(/function_call_output/g) || []).length;
       const done = look ? outs >= 2 : /function_call_output|custom_tool_call_output/.test(inStr);
       res.writeHead(200, { "Content-Type": "text/event-stream" });
