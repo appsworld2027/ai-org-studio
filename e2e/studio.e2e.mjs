@@ -86,6 +86,8 @@ try {
       assert(/401/.test(up), `${p} without cookie: ${up}`);
     }
     assert(srvOut.includes(`?k=${TOKEN}`), "start-up output prints the private link");
+    const typed = await fetch(`${base}/?authuser=0?k=${TOKEN}`, { redirect: "manual" });
+    assert(typed.status === 302 && /studio_key=/.test(typed.headers.get("set-cookie") || ""), `key typed after Cloud Shell's ?authuser=0 works: ${typed.status}`);
   });
 
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 860 } });
@@ -211,6 +213,8 @@ try {
     assert(!/TodoWrite|Bash\(|tool_use/.test(await chatText()), "no raw tool names");
     assert(await page.$("#eMsgs .msg.ai .md pre .copy"), "code block has a copy button");
     assert(/memory used/.test(await page.getAttribute("#eMeta .ctx", "aria-label")), `memory meter shown: ${await page.textContent("#eMeta")}`);
+    const cut = await page.$$eval("#eComposer .pill", (els) => els.filter((e) => e.scrollWidth > e.clientWidth + 2).map((e) => e.id));
+    assert(!cut.length, `composer pills are not cut off: ${cut.join(", ")}`);
     assert(await page.$eval("#ePlan details", (d) => !d.open), "a finished plan folds to one line");
     if (process.env.STUDIO_SHOTS) { await page.$$eval("#eMsgs .steps", (d) => d.forEach((x, i, a) => (x.open = i === a.length - 1))); await page.screenshot({ path: join(process.env.STUDIO_SHOTS, "v21-claude.png") }); }
     await page.selectOption("#eMode", "ask");

@@ -331,3 +331,7 @@ svg.ico.sm{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8
 .planstrip.idle .planlist li.in_progress .pmark{animation:none;border-top-color:var(--you)}
 .planstrip.idle .planlist li.in_progress{font-weight:500}
 #eEffort{max-width:19ch}
+/* v2.1.1: composer pills size to their chosen option instead of being cut off ("Auto-ec", "Model: defaul") */
+.echat .composer-row .pill{field-sizing:content;max-width:30ch;font-weight:500;padding-right:4px}
+#eMode,#eModel,#eEffort{max-width:30ch}
+.echat .composer-row{flex-wrap:wrap}
