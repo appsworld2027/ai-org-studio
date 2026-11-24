@@ -90,10 +90,37 @@
   }
 
   // ---------- Claude Code / Codex chat (like the VS Code extension) ----------
-  const echat = window.EngineChat.create({ box: $("#eMsgs"), statusEl: $("#eActivity"), onBusy: (b) => { $("#eStop").hidden = !b; $("#eSend").disabled = b; } });
+  const echat = window.EngineChat.create({ box: $("#eMsgs"), statusEl: $("#eActivity"), planEl: $("#ePlan"), metaEl: $("#eMeta"),
+    onBusy: (b) => { $("#eStop").hidden = !b; $("#eSend").disabled = b; }, onChanges: () => loadChanges(true) });
+  // ---------- Changes (what the AI changed, not yet on GitHub) ----------
+  let changesTimer = null;
+  function loadChanges(soon) {
+    if (!product) return;
+    if (soon) { clearTimeout(changesTimer); changesTimer = setTimeout(() => loadChanges(false), 600); return; }
+    api(`/api/products/${product.id}/changes`).then((d) => {
+      const n = d.files.length; $("#changesBadge").hidden = !n; $("#changesBadge").textContent = String(n);
+      if (tab !== "changes") return;
+      $("#changesEmpty").hidden = !!n; $("#changesStatus").textContent = n ? `${n} file${n === 1 ? "" : "s"} changed${d.branch ? ` on ${d.branch}` : ""} · not yet saved to GitHub` : "";
+      const add = d.files.reduce((a, f) => a + f.added, 0), del = d.files.reduce((a, f) => a + f.removed, 0);
+      if (n) $("#changesStatus").append(el("span", { class: "chnum" }, el("span", { class: "add", text: ` +${add}` }), el("span", { class: "del", text: ` −${del}` })));
+      $("#changesList").replaceChildren(...d.files.map((f) => {
+        const b = el("button", { type: "button", class: "chfile", "data-path": f.path }, el("span", { class: `chs ${f.status}`, text: f.status === "new" ? "New" : f.status === "deleted" ? "Deleted" : "Changed" }),
+          el("span", { class: "chp", text: f.path }), el("span", { class: "chnum" }, el("span", { class: "add", text: f.added ? `+${f.added}` : "" }), el("span", { class: "del", text: f.removed ? ` −${f.removed}` : "" })));
+        b.onclick = () => showDiff(f.path); return b;
+      }));
+    }).catch(() => {});
+  }
+  async function showDiff(path) {
+    document.querySelectorAll(".chfile").forEach((x) => x.classList.toggle("sel", x.dataset.path === path));
+    const d = await api(`/api/products/${product.id}/changes?file=${encodeURIComponent(path)}`).catch(() => null); if (!d) return;
+    const pre = el("pre");
+    for (const l of String(d.diff).split("\n").filter((l) => !/^(diff --git|index |--- |\+\+\+ )/.test(l)).slice(0, 3000))
+      pre.append(el("span", { class: l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : l.startsWith("@@") ? "hunk" : "ctx", text: l + "\n" }));
+    $("#changesDiff").replaceChildren(el("div", { class: "chhead" }, el("b", { text: path })), pre); $("#changesDiff").hidden = false;
+  }
   const eAtt = attachments({ box: $("#eComposer"), chipsEl: $("#eChips"), fileInput: $("#eFile"), button: $("#eAttach") });
   let eChatId = "", pickToken = null;
-  const EFF = { default: "Thinking: default", low: "Thinking: low", medium: "Thinking: medium", high: "Thinking: high", xhigh: "Thinking: extra high", max: "Thinking: max" };
+  const EFF = { default: "Think: default", low: "Think: low", medium: "Think: medium", high: "Think: high", xhigh: "Think: extra high", max: "Think: max" };
   async function loadEngineModels() {
     const d = await api(`/api/engines/${engine}/models`).catch(() => ({ models: [{ id: "", name: "Default" }], efforts: ["default"] }));
     $("#eModel").replaceChildren(...d.models.map((m) => el("option", { value: m.id, text: m.name.replace(/ — .*$/, "") })));
@@ -102,6 +129,42 @@
     $("#eEffort").value = store.get(`studio.eeffort.${engine}`, "default"); if ($("#eEffort").selectedIndex < 0) $("#eEffort").value = "default";
   }
   $("#eModel").onchange = () => store.set(`studio.emodel.${engine}`, $("#eModel").value);
+  $("#eMode").value = store.get("studio.emode", "ask"); if ($("#eMode").selectedIndex < 0) $("#eMode").value = "ask";
+  const modeLook = () => { $("#eMode").dataset.mode = $("#eMode").value; };
+  $("#eMode").onchange = () => { store.set("studio.emode", $("#eMode").value); modeLook(); };
+  modeLook();
+  // Shift+Tab cycles the mode, like Claude Code.
+  $("#eAsk").addEventListener("keydown", (e) => { if (e.key === "Tab" && e.shiftKey && $("#eMention").hidden) { e.preventDefault(); const o = ["ask", "auto", "plan"]; $("#eMode").value = o[(o.indexOf($("#eMode").value) + 1) % 3]; $("#eMode").onchange(); } });
+  // ---------- @-mention a file ----------
+  let mItems = [], mSel = 0, mTok = null, mReq = 0;
+  const mentionAt = () => { const t = $("#eAsk"), v = t.value.slice(0, t.selectionStart); const m = v.match(/(^|\s)@([^\s@]*)$/); return m ? { q: m[2], start: t.selectionStart - m[2].length - 1 } : null; };
+  function hideMention() { $("#eMention").hidden = true; mItems = []; mTok = null; }
+  async function updateMention() {
+    const at = mentionAt(); if (!at || !product) return hideMention();
+    mTok = at; const my = ++mReq;
+    const d = await api(`/api/products/${product.id}/files?q=${encodeURIComponent(at.q)}`).catch(() => ({ files: [] }));
+    if (my !== mReq || !mentionAt()) return;
+    mItems = d.files.slice(0, 12); mSel = 0; drawMention();
+  }
+  function drawMention() {
+    const box = $("#eMention");
+    if (!mItems.length) { box.replaceChildren(el("div", { class: "mnone", text: "No matching files" })); box.hidden = false; return; }
+    box.replaceChildren(...mItems.map((f, i) => { const parts = f.split("/"); const b = el("div", { class: `mitem${i === mSel ? " sel" : ""}`, role: "option", "aria-selected": String(i === mSel) }, el("b", { text: parts.pop() }), el("span", { text: parts.join("/") }));
+      b.onmousedown = (e) => { e.preventDefault(); pickMention(i); }; return b; }));
+    box.hidden = false;
+  }
+  function pickMention(i) {
+    const f = mItems[i], t = $("#eAsk"), at = mentionAt(); if (!f || !at) return hideMention();
+    t.value = t.value.slice(0, at.start) + `@${f} ` + t.value.slice(t.selectionStart); const pos = at.start + f.length + 2; t.setSelectionRange(pos, pos); hideMention(); t.focus();
+  }
+  $("#eAsk").addEventListener("input", () => updateMention());
+  $("#eAsk").addEventListener("blur", () => setTimeout(hideMention, 150));
+  $("#eAsk").addEventListener("keydown", (e) => {
+    if ($("#eMention").hidden || !mItems.length) { if (e.key === "Escape" && !$("#eMention").hidden) hideMention(); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); e.stopImmediatePropagation(); mSel = (mSel + (e.key === "ArrowDown" ? 1 : mItems.length - 1)) % mItems.length; drawMention(); }
+    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); e.stopImmediatePropagation(); pickMention(mSel); }
+    else if (e.key === "Escape") { e.preventDefault(); hideMention(); }
+  }, true);
   $("#eEffort").onchange = () => store.set(`studio.eeffort.${engine}`, $("#eEffort").value);
   async function refreshAccount() {
     const forEngine = engine;
@@ -156,11 +219,11 @@
     if (eAtt.uploading()) return;
     const text = $("#eAsk").value.trim(); if (!text && !eAtt.count()) return;
     if (!eChatId) {
-      const c = await api(`/api/products/${product.id}/chats`, { method: "POST", body: JSON.stringify({ engine, model: $("#eModel").value, effort: $("#eEffort").value }) });
+      const c = await api(`/api/products/${product.id}/chats`, { method: "POST", body: JSON.stringify({ engine, model: $("#eModel").value, effort: $("#eEffort").value, mode: $("#eMode").value }) });
       await refreshEChats(c.id); await openEChat(c.id);
     }
     const files = eAtt.take(); $("#eAsk").value = "";
-    const ok = await echat.send(text, files, { model: $("#eModel").value, effort: $("#eEffort").value });
+    const ok = await echat.send(text, files, { model: $("#eModel").value, effort: $("#eEffort").value, mode: $("#eMode").value });
     if (!ok) { $("#eAsk").value = text; return; }
     setTimeout(() => refreshEChats(eChatId).catch(() => {}), 1500);
   };
@@ -311,7 +374,7 @@
     $("#termPane").hidden = true; $("#ePane").hidden = !isEngine; $("#chatPane").hidden = isEngine;
     if (tws) { tws.onclose = null; tws.close(); tws = null; }
     if (isEngine) {
-      $("#eAsk").placeholder = `Ask ${nameOf(id)} anything, or describe what to build. Enter to send · Shift+Enter new line · paste or drop files`;
+      $("#eAsk").placeholder = `Ask ${nameOf(id)} anything, or describe what to build. Type @ to point at a file · paste screenshots`;
       refreshAccount(); loadEngineModels();
       const last = store.get(`studio.echat.${product.id}.${id}`, ""), token = (pickToken = {});
       openEChat("");   // show the empty state at once; reopen the last conversation only if the user has not started a new one meanwhile
@@ -337,16 +400,17 @@
   let tab = store.get("studio.tab", "");
   function showTab(p) {
     tab = p; store.set("studio.tab", p);
-    for (const t of ["app", "proto", "agents"]) { $(`#tab-${t}`).setAttribute("aria-selected", String(t === p)); $(`#pane-${t}`).classList.toggle("show", t === p); }
-    const href = p === "app" ? lastAppUrl : p === "proto" ? $("#protoFrame").getAttribute("src") : `https://github.com/${product.repo}/issues?q=is%3Aopen+label%3Aai%3A*`;
+    for (const t of ["app", "proto", "agents", "changes"]) { $(`#tab-${t}`).setAttribute("aria-selected", String(t === p)); $(`#pane-${t}`).classList.toggle("show", t === p); }
+    if (p === "changes") loadChanges();
+    const href = p === "app" ? lastAppUrl : p === "proto" ? $("#protoFrame").getAttribute("src") : p === "changes" ? "" : `https://github.com/${product.repo}/issues?q=is%3Aopen+label%3Aai%3A*`;
     $("#openTab").hidden = !href; if (href) $("#openTab").href = href;
     $("#openTab").textContent = p === "agents" ? "Open on GitHub" : "Open in new tab";
     $("#btnAppLink").hidden = p !== "app";
   }
   document.querySelectorAll(".rtab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.pane)));
   $(".rtabs").addEventListener("keydown", (e) => {
-    const order = ["app", "proto", "agents"], i = order.indexOf(tab);
-    if (e.key === "ArrowRight" || e.key === "ArrowLeft") { const n = order[(i + (e.key === "ArrowRight" ? 1 : 2)) % 3]; showTab(n); $(`#tab-${n}`).focus(); }
+    const order = ["app", "proto", "agents", "changes"], i = Math.max(0, order.indexOf(document.activeElement?.dataset?.pane || tab));
+    if (e.key === "ArrowRight" || e.key === "ArrowLeft") { const n = order[(i + (e.key === "ArrowRight" ? 1 : order.length - 1)) % order.length]; showTab(n); $(`#tab-${n}`).focus(); }
   });
   function setApp(app) {
     const banner = $("#appBanner");
@@ -442,7 +506,7 @@
     showTab(tab || (product.productionUrl ? "app" : "proto"));
     pickEngine(engine);
     clearInterval(pollTimer); poll(); pollTimer = setInterval(poll, cfg.boardRefreshMs);
-    loadTeam();
+    loadTeam(); $("#changesDiff").hidden = true; loadChanges();
   }
   async function reloadConfig(selectId) {
     cfg = await api("/api/config");

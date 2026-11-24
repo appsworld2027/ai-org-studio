@@ -18,7 +18,9 @@ const assert = (c, m) => { if (!c) throw new Error(m); };
 const freePort = () => new Promise((ok) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => ok(p)); }); });
 const rawGet = (port, path, cookie) => new Promise((ok) => { const s = net.connect(port, "127.0.0.1", () => s.write(`GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\n${cookie ? `Cookie: studio_key=${cookie}\r\n` : ""}Connection: close\r\n\r\n`)); let d = ""; s.on("data", (x) => (d += x)); s.on("end", () => ok(d.split(" ")[1])); });
 
-const tmp = mkdtempSync(join(tmpdir(), "studio-e2e-"));
+// The whole test run lives next to the code, not in the temp folder: Codex's sandbox hides the temp folder from the
+// commands it runs (real products live in ~/studio-products, so real use is unaffected).
+const tmp = mkdtempSync(join(ROOT, ".e2e-run-"));
 const home = join(tmp, "studio-home"); mkdirSync(home);
 // A real git repo stands in for the product (so prototypes come from git, as in real use).
 const prod = join(tmp, "parent-plus"); mkdirSync(join(prod, "founders/prototypes"), { recursive: true });
@@ -110,11 +112,11 @@ try {
     assert(/401/.test(await upgrade(`https://${port}-cs-1.cloudshell.dev.evil.example`)), "look-alike domain refused");
     assert(/401/.test(await upgrade("https://evil.example")), "other site refused");
   });
-  await check("ST-01", "layout: product picker, three AI choices on the left, three tabs on the right", async () => {
+  await check("ST-01", "layout: product picker, three AI choices on the left, four tabs on the right", async () => {
     await page.waitForSelector(".eng[data-eng=claude]");
     assert((await page.$eval("#productPick", (s) => s.selectedOptions[0].textContent)) === "Parent Plus", "product shown");
     for (const n of ["Claude Code", "Codex", "Other models"]) assert(await page.isVisible(`.eng:has-text("${n}")`), `engine ${n}`);
-    for (const t of ["Real app", "Prototype", "Agents"]) assert(await page.isVisible(`.rtab:has-text("${t}")`), `tab ${t}`);
+    for (const t of ["Real app", "Prototype", "Agents", "Changes"]) assert(await page.isVisible(`.rtab:has-text("${t}")`), `tab ${t}`);
     assert(cookie && cookie.httpOnly && cookie.sameSite === "Strict", "HttpOnly SameSite=Strict cookie");
     assert(!page.url().includes("k="), "key removed from the address bar");
   });
@@ -189,6 +191,69 @@ try {
     await page.waitForSelector("#eMsgs .msg.ai b:has-text('made-by-codex.txt')", { timeout: 30000 });
     assert(existsSync(join(prod, "made-by-codex.txt")), "command ran after Allow");
     assert(await page.isVisible("#eMsgs .steps .step.done"), "command step marked done");
+  });
+  await check("ST-29", "Claude Code v2.1: Auto-edit mode, thinking block, plan checklist, plain step labels, steps fold into one line, copy code, memory meter", async () => {
+    await page.click(".eng[data-eng=claude]"); await page.waitForSelector("#ePane:not([hidden])");
+    await page.click("#eNew"); await page.selectOption("#eMode", "auto");
+    await page.fill("#eAsk", "PLANCHECK summarise the README into docs/summary.md"); await page.press("#eAsk", "Enter");
+    await page.waitForSelector("#ePlan:not([hidden]) .planlist li", { state: "attached", timeout: 20000 });
+    await page.waitForFunction(() => /Summary written/.test(document.querySelector("#eMsgs").innerText), null, { timeout: 30000 });
+    await page.waitForFunction(() => document.querySelector("#eActivity").hidden, null, { timeout: 10000 });
+    assert(!(await page.$("#eMsgs .approve:not(.answered)")), "Auto-edit: no Allow card for a file change inside the product");
+    assert(readFileSync(join(prod, "docs/summary.md"), "utf8").includes("Coach"), "file written in auto-edit mode");
+    assert(/2 of 2 done/.test(await page.textContent("#ePlan")), `plan checklist shows progress: ${await page.textContent("#ePlan")}`);
+    assert(await page.isVisible("#eMsgs details.thinking"), "thinking shown as a collapsible block");
+    assert(/Thought/.test(await page.textContent("#eMsgs details.thinking summary")), "thinking block says Thought…");
+    const sums = await page.$$eval("#eMsgs .steps > summary", (n) => n.map((x) => x.textContent));
+    assert(sums.some((t) => /Read 1 file/.test(t)) && sums.some((t) => /Changed 1 file/.test(t)), `group summaries in plain words: ${sums.join(" | ")}`);
+    assert(await page.$eval("#eMsgs .steps:last-of-type", (d) => !d.open), "finished steps fold into one line");
+    assert(/Read README\.md/.test(await page.$eval("#eMsgs", (m) => m.textContent)), "read step named by file");
+    assert(!/TodoWrite|Bash\(|tool_use/.test(await chatText()), "no raw tool names");
+    assert(await page.$("#eMsgs .msg.ai .md pre .copy"), "code block has a copy button");
+    assert(/memory used/.test(await page.getAttribute("#eMeta .ctx", "aria-label")), `memory meter shown: ${await page.textContent("#eMeta")}`);
+    assert(await page.$eval("#ePlan details", (d) => !d.open), "a finished plan folds to one line");
+    if (process.env.STUDIO_SHOTS) { await page.$$eval("#eMsgs .steps", (d) => d.forEach((x, i, a) => (x.open = i === a.length - 1))); await page.screenshot({ path: join(process.env.STUDIO_SHOTS, "v21-claude.png") }); }
+    await page.selectOption("#eMode", "ask");
+  });
+  await check("ST-30", "Codex v2.1: reading runs without asking, labelled by file, with its output; plan checklist; memory meter", async () => {
+    await page.click(".eng[data-eng=codex]"); await page.waitForSelector("#ePane:not([hidden])");
+    await page.click("#eNew"); await page.selectOption("#eMode", "ask");
+    await page.fill("#eAsk", "LOOKAROUND what does the README say?"); await page.press("#eAsk", "Enter");
+    await page.waitForFunction(() => /coach and parent app/i.test(document.querySelector("#eMsgs .msg.ai:last-of-type")?.innerText || ""), null, { timeout: 30000 });
+    await page.waitForFunction(() => document.querySelector("#eActivity").hidden, null, { timeout: 10000 });
+    assert(!(await page.$("#eMsgs .approve:not(.answered)")), "reading needed no Allow");
+    const all = await page.$eval("#eMsgs", (m) => m.textContent);
+    if (!/Read README\.md/.test(all)) { const list = await page.evaluate(() => fetch("/api/products/parent-plus/chats").then((r) => r.json())); const c = list.chats.find((x) => x.engine === "codex"); const full = await page.evaluate((id) => fetch(`/api/products/parent-plus/chats/${id}`).then((r) => r.json()), c.id); console.log("DEBUG codex events:", JSON.stringify(full.events).slice(0, 3000)); console.log("DEBUG openai:", JSON.stringify(fakeModels.log.openai.slice(-4).map((l) => l.input.slice(-700)))); }
+    assert(/Read README\.md/.test(all), `command shown as what it did: ${all.slice(0, 300)}`);
+    assert(!/\/bin\/bash -lc/.test(all), "no raw shell wrapper");
+    const out = await page.$eval("#eMsgs .step[data-kind=read] .res pre", (p) => p.textContent).catch(() => "");
+    assert(/Coach and parent app/.test(out), `command output kept: ${out}`);
+    // Real Codex only offers its plan tool to OpenAI's own models, so the checklist is checked with the recorded stand-in.
+    if (!realCodex) assert(/Read the README/.test(await page.textContent("#ePlan")), `plan checklist: ${await page.textContent("#ePlan")}`);
+    assert(/memory used/.test(await page.getAttribute("#eMeta .ctx", "aria-label")), "memory meter");
+    if (process.env.STUDIO_SHOTS) await page.screenshot({ path: join(process.env.STUDIO_SHOTS, "v21-codex.png") });
+  });
+  await check("ST-31", "@ mentions: typing @ lists the product's files; picking one inserts it", async () => {
+    await page.fill("#eAsk", ""); await page.type("#eAsk", "look at @READ");
+    await page.waitForSelector("#eMention:not([hidden]) .mitem", { timeout: 8000 });
+    assert(/README\.md/.test(await page.textContent("#eMention")), "README listed");
+    await page.press("#eAsk", "Enter");
+    assert((await page.inputValue("#eAsk")) === "look at @README.md ", `inserted: ${await page.inputValue("#eAsk")}`);
+    assert(await page.isHidden("#eMention"), "list closes");
+    await page.fill("#eAsk", "");
+  });
+  await check("ST-32", "Changes tab: lists the files the AI changed, with a readable diff", async () => {
+    await page.click("#tab-changes");
+    await page.waitForSelector("#changesList .chfile", { timeout: 8000 });
+    const names = await page.$$eval("#changesList .chp", (n) => n.map((x) => x.textContent));
+    assert(names.includes("docs/summary.md") && names.includes("made-by-codex.txt"), `changed files: ${names.join(", ")}`);
+    assert(!names.some((n) => n.startsWith(".studio-uploads")), "attachments are not listed as changes");
+    await page.click('#changesList .chfile[data-path="docs/summary.md"]');
+    await page.waitForSelector("#changesDiff:not([hidden]) .add", { timeout: 5000 });
+    assert(/\+# Summary/.test(await page.textContent("#changesDiff")), "diff shows the new lines");
+    assert(/\d/.test(await page.textContent("#changesBadge")), "badge counts changes");
+    if (process.env.STUDIO_SHOTS) await page.screenshot({ path: join(process.env.STUDIO_SHOTS, "v21-changes.png") });
+    await page.click("#tab-app");
   });
   await check("ST-28", "sign-in status: shows who is signed in or offers the official sign-in", async () => {
     const a = await page.evaluate(() => fetch("/api/engines/claude/account").then((r) => r.json()));
@@ -316,7 +381,7 @@ try {
     await page.selectOption("#productPick", "parent-plus"); await waitTerm(/CLAUDE heard|CLAUDE ready/);
   });
   await check("ST-14", "keyboard: tabs reachable with arrow keys, visible focus", async () => {
-    await page.focus("#tab-agents"); await page.keyboard.press("ArrowRight");
+    await page.focus("#tab-changes"); await page.keyboard.press("ArrowRight");
     assert((await page.getAttribute("#tab-app", "aria-selected")) === "true", "arrow moves to next tab");
     const outline = await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle);
     assert(outline && outline !== "none", `focus outline: ${outline}`);
@@ -327,7 +392,8 @@ try {
 } finally { await browser.close(); srv.kill("SIGTERM"); model.close(); fakeModels.close(); }
 console.log(results.join("\n"));
 console.log(`\n${results.length - failed}/${results.length} passed`);
-if (failed) { console.log("--- server log ---\n" + srvOut.slice(-2500)); process.exit(1); }
-// Clean up; a real Codex may still be writing a background cache for a moment, so never fail the run on clean-up.
+if (failed) console.log("--- server log ---\n" + srvOut.slice(-2500));
+// Clean up (always); a real Codex may still be writing a background cache for a moment, so never fail on clean-up.
 await new Promise((r) => setTimeout(r, 1500));
 try { rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch (e) { console.log(`(left temp files: ${e.code})`); }
+process.exit(failed ? 1 : 0);

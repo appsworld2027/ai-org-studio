@@ -42,6 +42,10 @@ A chat-first studio where a founder or AI PM builds professional products with A
 | ST-26 | Claude Code chat | Reload the page | Same conversation; answered cards stay answered |
 | ST-27 | Codex chat | Ask for something that runs a command | Same experience: step card, "Allow Codex to run this?", the command runs only after Allow, formatted reply |
 | ST-28 | Claude Code / Codex | Open the chat | Shows who is signed in, or offers "Sign in to Claude / ChatGPT" through their own sign-in page and code |
+| ST-29 | Claude Code chat | Pick "Auto-edit", ask for a small change | No Allow card for changes inside the product; a "Thought for…" block; a Plan checklist above the box ticks off; steps read "Read README.md / Create docs/summary.md" and fold into one line ("Read 1 file · Changed 1 file") when done; code blocks have Copy; a memory meter shows how full the conversation is |
+| ST-30 | Codex chat | "Ask first" mode, ask what a file says | Reading runs without asking, shown as "Read README.md" (never `/bin/bash -lc …`), with its output under the step; the plan checklist and memory meter work as in ST-29. GitHub, npm and web look-ups work (network on in every mode) |
+| ST-31 | Both chats | Type @ and part of a file name | A list of the product's files; Enter/Tab inserts `@path`; Esc closes |
+| ST-32 | Right panel | Open "Changes" after the AI edits | Every changed file (New / Changed / Deleted, +/− lines), click one for a readable diff; attachments are not listed; a badge counts the files |
 | ST-23 | AI Org product | Open Agents → Team | Every agent shows which AI it uses and why; builders and their reviewers get different models when possible; a backup is named; the owner can override any row |
 
 ## Out of scope (next)

@@ -48,9 +48,9 @@ export function makeStore(dir = process.env.STUDIO_HOME || join(HOME, ".ai-org-s
         .filter(Boolean).map((c) => ({ ...c, engine: c.engine || "other" })).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
     },
     get(pid, id) { if (!/^[a-z0-9-]+$/.test(id || "")) return null; try { return JSON.parse(readFileSync(join(this.dir(pid), `${id}.json`), "utf8")); } catch { return null; } },
-    create(pid, { provider, model, engine = "other", effort = "" }) {
+    create(pid, { provider, model, engine = "other", effort = "", mode = "ask" }) {
       const now = new Date().toISOString();
-      const c = { id: `c${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`, title: "New chat", engine, provider: provider || engine, model: model || "", effort, messages: [], events: [], createdAt: now, updatedAt: now };
+      const c = { id: `c${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`, title: "New chat", engine, provider: provider || engine, model: model || "", effort, mode, messages: [], events: [], createdAt: now, updatedAt: now };
       this.save(pid, c); return c;
     },
     save(pid, c) { c.updatedAt = new Date().toISOString(); const t = join(this.dir(pid), `${c.id}.json.tmp`); writeFileSync(t, JSON.stringify(c), { mode: 0o600 }); renameSync(t, join(this.dir(pid), `${c.id}.json`)); },

@@ -172,3 +172,67 @@ test("Codex app-server → chat events: command step, approval, streamed text, t
   assert.deepEqual(requestResult("item/tool/requestUserInput", ["B"], [{ id: "q1" }]), { answers: { q1: { answers: ["B"] } } });
   assert.deepEqual(userInput("look", [{ path: ".studio-uploads/s.png" }], "/p"), [{ type: "text", text: "look" }, { type: "localImage", path: "/p/.studio-uploads/s.png" }]);
 });
+test("v2.1 plain step labels: Codex command actions, MCP tools, web search", async () => {
+  const { describeCommand, describeMcp, describeTool } = await import("../server/engines/describe.mjs");
+  const { translateNotification } = await import("../server/engines/codex.mjs");
+  assert.equal(describeCommand("/bin/bash -lc 'cat .agents/skills/x/SKILL.md'", [{ type: "read", name: "SKILL.md", path: "/p/.agents/skills/x/SKILL.md" }]).title, "Read SKILL.md");
+  assert.equal(describeCommand("rg -n hello .", [{ type: "search", query: "hello", path: "." }]).title, "Searched for “hello”");
+  assert.equal(describeCommand("ls", [{ type: "listFiles", path: null }]).title, "Listed files");
+  assert.match(describeCommand("cat a && rg x && ls", [{ type: "read", name: "a" }, { type: "search", query: "x" }, { type: "listFiles" }]).title, /Explored the project/);
+  assert.equal(describeCommand("/bin/bash -lc 'gh auth status'", [{ type: "unknown" }]).title, "Checked the GitHub sign-in");
+  assert.equal(describeCommand("npm test", []).title, "Ran the tests");
+  assert.equal(describeCommand("/bin/bash -lc 'pwd'", [{ type: "unknown" }]).detail, "pwd", "the real command is kept for anyone who opens it");
+  assert.equal(describeMcp("github", "get_user_login").title, "GitHub: get user login");
+  assert.equal(describeTool("mcp__claude_ai_Slack__search_messages", {}).title, "Slack: search messages");
+  assert.equal(describeTool("github.get_user_login", {}).title, "GitHub: get user login");
+  assert.equal(describeTool("webSearch", { query: "", action: { type: "search", query: "vercel preview" } }).title, "Searched the web for “vercel preview”");
+  assert.equal(describeTool("webSearch", { action: { type: "openPage", url: "https://docs.github.com/x" } }).title, "Opened docs.github.com/x");
+  // Live output arrives in pieces and is kept when the command finishes without aggregatedOutput.
+  const st = { items: {}, pendingReq: {} }, n = (method, params) => translateNotification({ method, params }, st);
+  const start = n("item/started", { item: { type: "commandExecution", id: "c9", command: "/bin/bash -lc 'cat README.md'", commandActions: [{ type: "read", name: "README.md" }] } });
+  assert.equal(start[0].title, "Read README.md"); assert.equal(start[1].text, "Reading README.md");
+  n("item/commandExecution/outputDelta", { itemId: "c9", delta: "# Hello\n" }); n("item/commandExecution/outputDelta", { itemId: "c9", delta: "world\n" });
+  assert.equal(n("item/completed", { item: { type: "commandExecution", id: "c9", status: "completed", exitCode: 0, aggregatedOutput: null } })[0].result, "# Hello\nworld\n");
+  assert.equal(n("item/started", { item: { type: "mcpToolCall", id: "m1", server: "github", tool: "get_user_login" } })[0].title, "GitHub: get user login");
+  assert.equal(n("item/completed", { item: { type: "mcpToolCall", id: "m1", status: "completed", result: { content: [{ type: "text", text: "ankit" }] } } })[0].result, "ankit");
+  const ws = n("item/completed", { item: { type: "webSearch", id: "w1", query: "", action: { type: "search", query: "codex sandbox" } } })[0];
+  assert.equal(ws.title, "Searched the web for “codex sandbox”");
+});
+test("v2.1 Codex: plan, thinking, memory and plan-limit events; network on in every mode; Allow for this chat", async () => {
+  const { translateNotification, threadMode, turnMode, requestResult } = await import("../server/engines/codex.mjs");
+  const st = { items: {}, pendingReq: {} }, n = (method, params) => translateNotification({ method, params }, st);
+  assert.deepEqual(n("turn/plan/updated", { explanation: "x", plan: [{ step: "Read", status: "completed" }, { step: "Write", status: "inProgress" }] })[0],
+    { t: "plan", steps: [{ text: "Read", status: "completed" }, { text: "Write", status: "in_progress" }], note: "x" });
+  assert.deepEqual(n("item/started", { item: { type: "reasoning", id: "r1" } }).map((e) => e.t), ["thinking_start", "activity"]);
+  assert.equal(n("item/reasoning/summaryTextDelta", { delta: "Checking the API" })[0].d, "Checking the API");
+  assert.deepEqual(n("item/completed", { item: { type: "reasoning", id: "r1" } }).map((e) => e.t), ["thinking_end"]);
+  assert.deepEqual(n("thread/tokenUsage/updated", { tokenUsage: { last: { inputTokens: 1000 }, total: { inputTokens: 5000 }, modelContextWindow: 10000 } })[0], { t: "context", used: 1000, window: 10000 });
+  assert.equal(n("account/rateLimits/updated", { rateLimits: { primary: { usedPercent: 42, resetsAt: 1 } } })[0].usedPercent, 42);
+  for (const m of ["ask", "auto", "plan"]) {
+    assert.equal(threadMode(m).config["sandbox_workspace_write.network_access"], true, `${m}: network on`);
+    assert.equal(turnMode(m).sandboxPolicy.networkAccess, true, `${m}: network on per turn`);
+  }
+  assert.equal(turnMode("ask").sandboxPolicy.type, "readOnly"); assert.equal(turnMode("auto").sandboxPolicy.type, "workspaceWrite");
+  assert.equal(turnMode("plan").approvalPolicy, "never"); assert.equal(turnMode("ask").approvalPolicy, "on-request");
+  assert.deepEqual(requestResult("item/commandExecution/requestApproval", "session"), { decision: "acceptForSession" });
+});
+test("v2.1 Claude Code: modes, thinking, plan (TodoWrite), memory, plan approval, Allow for this chat", async () => {
+  const { translate, controlResponse, claudeArgs } = await import("../server/engines/claude.mjs");
+  assert.ok(!claudeArgs({ mode: "ask" }).includes("--permission-mode"), "ask = Claude's normal mode");
+  assert.deepEqual(claudeArgs({ mode: "auto" }).slice(1, 3), ["--permission-mode", "acceptEdits"]);
+  assert.deepEqual(claudeArgs({ mode: "plan" }).slice(1, 3), ["--permission-mode", "plan"]);
+  const st = { tools: {}, pendingReq: {}, model: "claude-opus-4-7" }, ev = (m) => translate(m, st);
+  assert.deepEqual(ev({ type: "stream_event", event: { type: "content_block_start", content_block: { type: "thinking" } } }).map((e) => e.t), ["thinking_start", "activity"]);
+  assert.equal(ev({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "hmm" } } })[0].d, "hmm");
+  assert.equal(ev({ type: "stream_event", event: { type: "content_block_stop" } })[0].t, "thinking_end");
+  const a = ev({ type: "assistant", parent_tool_use_id: null, message: { usage: { input_tokens: 10, cache_read_input_tokens: 90 }, content: [{ type: "tool_use", id: "t", name: "TodoWrite", input: { todos: [{ content: "Read", status: "completed" }, { content: "Write", status: "in_progress" }] } }] } });
+  assert.deepEqual(a.map((e) => e.t), ["context", "plan"], "TodoWrite becomes the plan checklist, not a step card");
+  assert.equal(a[0].used, 100); assert.equal(a[0].window, 200000);
+  const p = ev({ type: "control_request", request_id: "p1", request: { subtype: "can_use_tool", tool_name: "ExitPlanMode", input: { plan: "1. Do A" } } })[0];
+  assert.equal(p.kind, "plan"); assert.equal(p.plan, "1. Do A");
+  assert.equal(controlResponse("p1", { tool_name: "ExitPlanMode", input: { plan: "x" } }, true).response.response.updatedPermissions[0].mode, "default");
+  const s1 = controlResponse("r", { tool_name: "Bash", input: { command: "npm run build" } }, "session").response.response;
+  assert.equal(s1.behavior, "allow"); assert.equal(s1.updatedPermissions[0].rules[0].ruleContent, "npm:*");
+  assert.equal(controlResponse("r", { tool_name: "Edit", input: {} }, "session").response.response.updatedPermissions[0].mode, "acceptEdits");
+  assert.equal(ev({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", utilization: 0.83 } })[0].usedPercent, 83);
+});
