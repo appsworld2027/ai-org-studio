@@ -1,6 +1,6 @@
 # Feature Contract: AI Org Studio
 
-Status: v1.3 approved by the founder (2026-11-24: chat box with attachments under Claude Code and Codex)
+Status: v2.0 approved by the founder (2026-11-24, option A: real chat for Claude Code and Codex on the founder's own plans, like the VS Code extension; terminal only behind "Terminal view")
 Repo: `appsworld2027/ai-org-studio` (private). A product of its own, separate from any product built with it.
 
 ## What it is
@@ -38,7 +38,10 @@ A chat-first studio where a founder or AI PM builds professional products with A
 | ST-20 | Other models chat | The AI needs a product decision | Clickable cards: 2–4 options, one marked Recommended, plus "type your own"; the click goes back to the AI, and the card stays answered after a reload |
 | ST-21 | Other models chat | Pick a model / thinking level under the text box | The next message uses it (like Cursor); a model that refuses a thinking level continues without it and says so |
 | ST-22 | Claude Code or Codex | Pick model and thinking above the screen, Apply | The program restarts with that model and effort and keeps the last conversation |
-| ST-24 | Claude Code or Codex | Type in the chat box (Shift+Enter for new lines), attach with the button, Ctrl+V or drag-and-drop, then Enter | The official program receives one message with the text and the file paths (`@path` for Claude Code); files are saved in the product but never committed; unsupported types are refused; the program's own screen stays visible. See docs/COMPLIANCE.md |
+| ST-25 | Claude Code chat | Send a message with a pasted screenshot | The reply streams as text with formatting; each step appears as a short card ("Create docs/idea.md · 3 lines", ✓ when done); changing a file first shows "Allow Claude Code to change files?" with the change; a question shows clickable options with Recommended; no terminal text anywhere; the image reaches Claude |
+| ST-26 | Claude Code chat | Reload the page | Same conversation; answered cards stay answered |
+| ST-27 | Codex chat | Ask for something that runs a command | Same experience: step card, "Allow Codex to run this?", the command runs only after Allow, formatted reply |
+| ST-28 | Claude Code / Codex | Open the chat | Shows who is signed in, or offers "Sign in to Claude / ChatGPT" through their own sign-in page and code |
 | ST-23 | AI Org product | Open Agents → Team | Every agent shows which AI it uses and why; builders and their reviewers get different models when possible; a backup is named; the owner can override any row |
 
 ## Out of scope (next)

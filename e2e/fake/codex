@@ -1,0 +1,44 @@
+#!/usr/bin/env node
+// Recorded stand-in for `codex app-server` (Codex 0.171.0) for fast tests; same JSON-RPC shapes as the real one.
+const args = process.argv.slice(2);
+if (args[0] !== "app-server") { console.log("codex-cli 0.0.0 (test stand-in)"); process.exit(0); }
+const cfg = Object.fromEntries(args.filter((a, i) => args[i - 1] === "-c").map((c) => { const k = c.slice(0, c.indexOf("=")); return [k, c.slice(c.indexOf("=") + 1).replace(/^"|"$/g, "")]; }));
+const { createRequire } = await import("node:module"); const require = createRequire(import.meta.url);
+const base = cfg["model_providers.fake.base_url"]; const fs = require("fs"), cp = require("child_process");
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\n"); let sid = 100; const waits = new Map(); let thread = null, cwd = process.cwd();
+const ask = (method, params) => new Promise((ok) => { const id = sid++; waits.set(id, ok); send({ id, method, params }); });
+async function turn(threadId, turnId, input) {
+  const hist = [{ role: "user", content: input }];
+  for (;;) {
+    const r = await (await fetch(`${base}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: cfg.model, input: hist, stream: true }) })).text();
+    let item = null; for (const l of r.split("\n")) if (l.startsWith("data: ")) { const e = JSON.parse(l.slice(6)); if (e.type === "response.output_item.done") item = e.item; if (e.type === "response.output_text.delta") send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: e.item_id, delta: e.delta } }); }
+    if (item?.type === "function_call") {
+      const a = JSON.parse(item.arguments); const it = { type: "commandExecution", id: item.call_id, command: `/bin/bash -lc '${a.cmd}'`, cwd, status: "inProgress" };
+      send({ method: "item/started", params: { threadId, turnId, item: it } });
+      const res = await ask("item/commandExecution/requestApproval", { threadId, turnId, itemId: item.call_id, command: it.command, cwd, reason: a.justification });
+      let outp = "declined", code = null;
+      if (res.decision === "accept") { try { outp = cp.execSync(a.cmd, { cwd }).toString(); code = 0; } catch (e) { code = 1; outp = String(e); } }
+      send({ method: "item/completed", params: { threadId, turnId, item: { ...it, status: res.decision === "accept" ? "completed" : "declined", exitCode: code, aggregatedOutput: outp } } });
+      hist.push({ type: "function_call_output", call_id: item.call_id, output: outp }); continue;
+    }
+    if (item?.type === "message") { send({ method: "item/started", params: { threadId, turnId, item: { type: "agentMessage", id: item.id, text: "" } } }); send({ method: "item/completed", params: { threadId, turnId, item: { type: "agentMessage", id: item.id, text: item.content[0].text } } }); }
+    send({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } }); return;
+  }
+}
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d; let i;
+  while ((i = buf.indexOf("\n")) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue; const m = JSON.parse(line);
+    if (m.id != null && !m.method && waits.has(m.id)) { waits.get(m.id)(m.result); waits.delete(m.id); continue; }
+    const r = (result) => send({ id: m.id, result });
+    if (m.method === "initialize") r({ userAgent: "test" });
+    else if (m.method === "account/read") r({ account: { type: "chatgpt", email: "test@example.com", planType: "plus" }, requiresOpenaiAuth: true });
+    else if (m.method === "model/list") r({ data: [{ id: "gpt-fake", model: "gpt-fake", displayName: "GPT Fake", hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }] }] });
+    else if (m.method === "thread/start") { cwd = m.params.cwd || cwd; thread = "thr_1"; r({ thread: { id: thread }, model: cfg.model }); }
+    else if (m.method === "thread/resume") { thread = m.params.threadId; r({ thread: { id: thread } }); }
+    else if (m.method === "turn/start") { const tid = `turn_${Date.now()}`; r({ turn: { id: tid, status: "inProgress" } }); send({ method: "turn/started", params: { threadId: thread, turn: { id: tid } } }); turn(thread, tid, m.params.input); }
+    else if (m.method === "turn/interrupt") r({});
+    else if (m.id != null) send({ id: m.id, error: { code: -32601, message: "not in stand-in" } });
+  }
+});

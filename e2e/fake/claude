@@ -1,0 +1,48 @@
+#!/usr/bin/env node
+// Recorded stand-in for `claude` (Claude Code 2.1.330) in structured mode, for fast tests without the real program.
+// It talks to the same stand-in model server (ANTHROPIC_BASE_URL) and speaks the same stream-json protocol as the real one.
+const args = process.argv.slice(2);
+if (args[0] === "auth" && args[1] === "status") { console.log(JSON.stringify({ loggedIn: true, authMethod: "api_key", email: "test@example.com" })); process.exit(0); }
+if (!args.includes("--input-format")) { console.log("Claude Code (test stand-in)"); process.exit(0); }
+const { createRequire } = await import("node:module"); const require = createRequire(import.meta.url);
+const fs = require("fs"), path = require("path"), crypto = require("crypto");
+const base = process.env.ANTHROPIC_BASE_URL, session = crypto.randomUUID(), out = (m) => process.stdout.write(JSON.stringify(m) + "\n");
+const history = []; let pendingCtl = null;
+out({ type: "system", subtype: "init", cwd: process.cwd(), session_id: session, model: "claude-test", tools: ["Write", "AskUserQuestion"] });
+async function turn() {
+  out({ type: "system", subtype: "status", status: "requesting", session_id: session });
+  const r = await fetch(`${base}/v1/messages`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY }, body: JSON.stringify({ model: "claude-test", stream: true, tools: [{ name: "Write" }, { name: "AskUserQuestion" }], messages: history }) });
+  const text = await r.text(); const blocks = []; let cur = null;
+  for (const line of text.split("\n")) if (line.startsWith("data: ")) {
+    const e = JSON.parse(line.slice(6)); out({ type: "stream_event", event: e, session_id: session });
+    if (e.type === "content_block_start") cur = { ...e.content_block, _json: "" };
+    if (e.type === "content_block_delta" && e.delta.type === "text_delta") cur.text = (cur.text || "") + e.delta.text;
+    if (e.type === "content_block_delta" && e.delta.type === "input_json_delta") cur._json += e.delta.partial_json;
+    if (e.type === "content_block_stop") { if (cur.type === "tool_use") { cur.input = JSON.parse(cur._json || "{}"); } delete cur._json; blocks.push(cur); }
+  }
+  history.push({ role: "assistant", content: blocks });
+  for (const b of blocks) out({ type: "assistant", message: { role: "assistant", content: [b] }, session_id: session });
+  const tool = blocks.find((b) => b.type === "tool_use");
+  if (!tool) { out({ type: "result", subtype: "success", is_error: false, result: blocks.map((b) => b.text || "").join(""), session_id: session, total_cost_usd: 0, duration_ms: 1 }); return; }
+  const rid = crypto.randomUUID();
+  pendingCtl = { rid, tool };
+  out({ type: "control_request", request_id: rid, request: { subtype: "can_use_tool", tool_name: tool.name, input: tool.input, tool_use_id: tool.id } });
+}
+let buf = "";
+process.stdin.on("data", async (d) => {
+  buf += d; let i;
+  while ((i = buf.indexOf("\n")) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue; const m = JSON.parse(line);
+    if (m.type === "user") { history.push({ role: "user", content: m.message.content }); await turn(); }
+    if (m.type === "control_response" && pendingCtl && m.response.request_id === pendingCtl.rid) {
+      const { tool } = pendingCtl; pendingCtl = null; const resp = m.response.response; let content, isErr = false;
+      if (resp.behavior !== "allow") { content = resp.message; isErr = true; }
+      else if (tool.name === "Write") { fs.mkdirSync(path.dirname(tool.input.file_path), { recursive: true }); fs.writeFileSync(tool.input.file_path, tool.input.content); content = `File created successfully at: ${tool.input.file_path}`; }
+      else content = `Your questions have been answered: ${JSON.stringify(resp.updatedInput.answers)}`;
+      const res = { type: "tool_result", tool_use_id: tool.id, content, ...(isErr ? { is_error: true } : {}) };
+      history.push({ role: "user", content: [res] }); out({ type: "user", message: { role: "user", content: [res] }, session_id: session });
+      await turn();
+    }
+    if (m.type === "control_request" && m.request?.subtype === "interrupt") out({ type: "result", subtype: "error_during_execution", is_error: true, result: "Interrupted", session_id: session });
+  }
+});

@@ -23,29 +23,53 @@
   <section class="left" aria-label="AI chat">
     <div class="engines" role="tablist" aria-label="AI engine" id="engines"></div>
 
-    <!-- Claude Code / Codex: their own screens -->
-    <div class="leftpane" id="termPane">
+    <!-- Claude Code / Codex: real chat (structured mode), like the VS Code extension -->
+    <div class="leftpane echat" id="ePane">
+      <div class="chatbar">
+        <select id="eChatPick" aria-label="Conversation"></select>
+        <button class="ghost" id="eNew" title="Start a new conversation">New chat</button>
+        <span class="spacer"></span>
+        <span class="acct" id="eAcct" role="status"></span>
+        <button class="ghost small" id="eSignIn" hidden>Sign in</button>
+        <button class="linkish" id="eAdvanced" title="Show the program's own terminal screen (for engineers)">Terminal view</button>
+      </div>
+      <div class="signin" id="eSignBox" hidden></div>
+      <div class="msgs" id="eMsgs" aria-live="polite"></div>
+      <div class="activity" id="eActivity" hidden role="status"></div>
+      <form class="composer" id="eComposer" aria-label="Message">
+        <div class="chips" id="eChips" aria-live="polite"></div>
+        <textarea id="eAsk" rows="3" aria-label="Message" placeholder="Ask anything, or describe what to build. Enter to send · Shift+Enter new line · paste or drop files"></textarea>
+        <div class="composer-row">
+          <button type="button" class="ghost small iconbtn" id="eAttach" title="Attach files (images, PDFs, documents, code)" aria-label="Attach files">＋</button>
+          <input type="file" id="eFile" multiple hidden>
+          <select id="eModel" class="pill" aria-label="Model" title="Model"></select>
+          <select id="eEffort" class="pill" aria-label="Thinking" title="Thinking: how long it thinks before answering"></select>
+          <span class="spacer"></span>
+          <button type="button" class="ghost" id="eStop" hidden>Stop</button>
+          <button type="submit" class="primary" id="eSend">Send</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Advanced: the program's own terminal screen (engineers only) -->
+    <div class="leftpane" id="termPane" hidden>
       <div class="modelbar" id="termModelBar">
         <label>Model <select id="tModel" aria-label="Model for this engine"></select></label>
         <input id="tModelFree" aria-label="Model name" placeholder="model name (optional)" hidden>
         <label>Thinking <select id="tEffort" aria-label="Thinking effort"></select></label>
         <button class="ghost small" id="tApply" type="button">Apply and restart</button>
         <span class="small muted" id="tNote"></span>
+        <span class="spacer"></span>
+        <button class="linkish" id="tBack">Back to chat</button>
       </div>
-      <div class="termwrap"><div id="term" aria-label="AI chat terminal"></div>
+      <div class="termwrap"><div id="term" aria-label="Terminal"></div>
         <div class="termmsg" id="termMsg" hidden></div>
       </div>
-      <form class="tcomposer" id="tComposer" aria-label="Message to the AI">
-        <div class="chips" id="tChips" aria-live="polite"></div>
-        <textarea id="tAsk" rows="3" aria-label="Message" placeholder="Message Claude Code… Enter to send · Shift+Enter new line · Ctrl+V or drop files to attach"></textarea>
-        <div class="composer-row">
-          <button type="button" class="ghost small" id="tAttach" title="Attach files (images, PDFs, documents, code)">＋ Attach</button>
-          <input type="file" id="tFile" multiple hidden>
-          <span class="small muted" id="tHint" title="The AI's own screen above stays live: answer its questions there, or type here.">Answer the AI's questions above, or type here.</span>
-          <span class="spacer"></span>
-          <button type="button" class="ghost small" id="tEsc" title="Stop the AI (Esc)">Stop</button>
-          <button type="submit" class="primary" id="tSend">Send</button>
-        </div>
+      <form class="tcomposer" id="tComposer" aria-label="Message to the terminal" hidden>
+        <div class="chips" id="tChips"></div>
+        <textarea id="tAsk" rows="2" aria-label="Message"></textarea>
+        <div class="composer-row"><button type="button" class="ghost small" id="tAttach">＋</button><input type="file" id="tFile" multiple hidden>
+          <span class="small muted" id="tHint"></span><span class="spacer"></span><button type="button" class="ghost small" id="tEsc">Stop</button><button type="submit" class="primary" id="tSend">Send</button></div>
       </form>
       <div class="termbar">
         <span id="termState" class="muted">Connecting…</span>
@@ -188,6 +212,7 @@
 <script src="/vendor/addon-fit.js"></script>
 <script src="/vendor/addon-web-links.js"></script>
 <script src="/chat.js"></script>
+<script src="/echat.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
