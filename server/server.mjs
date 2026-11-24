@@ -5,7 +5,7 @@
 //   or "Other models" — a chat the Studio draws itself, on any OpenAI-compatible model (free or paid) with the user's key.
 // Right panel: the product's real app (Vercel) or HTML prototype, and live agent status read from GitHub.
 import http from "node:http";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { execFile, spawn, execFileSync as require_execFileSync } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve, extname } from "node:path";
@@ -16,6 +16,7 @@ import { parseBacklog, buildBoard, feedFrom, appTarget } from "./status.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
 import { runTurn } from "./agent.mjs";
+import { UPLOAD_DIR, UPLOAD_MAX, safeUploadName, readRaw, ensureIgnored, pruneUploads } from "./uploads.mjs";
 import { publicUrl, platform } from "./platform.mjs";
 import { ENGINE_MODELS, plan as teamPlanFor, parseAgent } from "./team.mjs";
 
@@ -78,7 +79,7 @@ const STATIC = {
 };
 const SECURITY_HEADERS = {
   "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store",
-  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; frame-src 'self' https:; connect-src 'self' wss: ws:; frame-ancestors 'self'",
+  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; frame-src 'self' https:; connect-src 'self' wss: ws:; frame-ancestors 'self'",
 };
 const send = (res, code, body, type = "text/plain; charset=utf-8", extra = {}) => { res.writeHead(code, { "Content-Type": type, ...SECURITY_HEADERS, ...extra }); res.end(body); };
 const json = (res, code, obj) => send(res, code, JSON.stringify(obj), "application/json");
@@ -158,7 +159,7 @@ function startSession(p, engine, mode = "new") {
   const pref = termPrefs()[`${p.id}:${engine}`] || {};
   const key = `${p.id}:${engine}`, old = sessions.get(key);
   if (old && !old.exited) { old.replaced = true; try { old.term.kill(); } catch { /* gone */ } }
-  const term = pty.spawn("bash", ["-lc", TERMINAL[engine].cmd], {
+  const term = pty.spawn("bash", ["-c", TERMINAL[engine].cmd], {
     name: "xterm-256color", cols: 100, rows: 30, cwd: existsSync(p.dir) ? p.dir : HOME,
     env: { ...process.env, STUDIO: "1", STUDIO_MODE: mode, STUDIO_PRODUCT: p.name, STUDIO_REPO: p.repo, STUDIO_RULES: RULES, COLORTERM: "truecolor",
       STUDIO_MODEL: /^[A-Za-z0-9._:\/-]{0,80}$/.test(pref.model || "") ? pref.model || "" : "", STUDIO_EFFORT: EFFORTS.includes(pref.effort) && pref.effort !== "default" ? pref.effort : "" },
@@ -325,6 +326,22 @@ const server = http.createServer(async (req, res) => {
         const all = store.readJson("team.json", {}); all[p.id] = { overrides: ov, availability: b.availability && typeof b.availability === "object" ? Object.fromEntries(Object.entries(b.availability).filter(([k]) => ENGINE_MODELS.some((x) => x.id === k)).map(([k, v]) => [k, !!v])) : all[p.id]?.availability };
         store.writeJson("team.json", all); return json(res, 200, await teamPlan(p));
       }
+    }
+    // Attachments for the Claude Code / Codex composer: saved inside the product folder (git-ignored) so the official
+    // program can read them by path, exactly as if the user had typed @path. Never executed by the Studio.
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/uploads$/)) && req.method === "POST") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      const rawName = decodeURIComponent(String(req.headers["x-file-name"] || "file"));
+      const name = safeUploadName(rawName);
+      if (!name) return json(res, 400, { error: "That file type is not supported. Images, PDFs, text, code, CSV, JSON and Office documents work." });
+      let buf; try { buf = await readRaw(req, UPLOAD_MAX); } catch { return json(res, 413, { error: `Files up to ${UPLOAD_MAX >> 20} MB.` }); }
+      if (!buf.length) return json(res, 400, { error: "Empty file" });
+      const dir = join(p.dir, UPLOAD_DIR); mkdirSync(dir, { recursive: true });
+      ensureIgnored(p.dir);
+      const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14), file = `${stamp}-${randomBytes(2).toString("hex")}-${name}`;
+      writeFileSync(join(dir, file), buf, { mode: 0o600 });
+      pruneUploads(dir);
+      return json(res, 200, { ok: true, path: `${UPLOAD_DIR}/${file}`, name: rawName.slice(0, 120), size: buf.length, image: /\.(png|jpe?g|gif|webp)$/i.test(file) });
     }
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/chats$/))) {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });

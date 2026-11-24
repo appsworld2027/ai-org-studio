@@ -25,6 +25,11 @@ need(){ # need <command> <npm package>: installs into ~/.ai-org-studio/tools (su
 case "$ENGINE" in
   claude)
     need claude @anthropic-ai/claude-code
+    # Skip only the first-run colour-theme picker (the Studio's panel is dark). Sign-in and the folder-trust
+    # question stay exactly as Claude Code shows them: those are the user's decisions.
+    node -e '
+const f=require("os").homedir()+"/.claude.json",fs=require("fs");let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}
+if(!c.theme||!c.hasCompletedOnboarding){c.theme=c.theme||"dark";c.hasCompletedOnboarding=true;fs.writeFileSync(f,JSON.stringify(c,null,2),{mode:0o600})}' 2>/dev/null
     dim "Claude Code · $(claude --version 2>/dev/null) · ${STUDIO_PRODUCT:-product} · signed in with your own Claude account"
     ARGS=(--append-system-prompt "$RULES"); [ "$MODE" = continue ] && ARGS+=(--continue)
     [ -n "${STUDIO_MODEL:-}" ] && ARGS+=(--model "$STUDIO_MODEL")

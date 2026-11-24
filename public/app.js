@@ -37,7 +37,7 @@
     term.reset();
     $("#termState").textContent = `Connecting to ${nameOf(engine)}…`;
     tws = new WebSocket(wsUrl(`/pty?product=${product.id}&engine=${engine}${mode ? `&mode=${mode}` : ""}`));
-    tws.onopen = () => { retry = 0; $("#termState").textContent = `${nameOf(engine)} · ${product.name} · type below`; $("#termMsg").hidden = true; refit(); term.focus(); };
+    tws.onopen = () => { retry = 0; $("#termState").textContent = `${nameOf(engine)} · ${product.name}`; $("#termMsg").hidden = true; refit(); $("#tAsk").focus(); };
     tws.onmessage = (e) => term.write(typeof e.data === "string" ? e.data : new Uint8Array(e.data));
     tws.onclose = () => {
       if (engine === "other") return;
@@ -48,6 +48,59 @@
   }
   $("#btnRestart").onclick = () => { if (tws?.readyState === 1) { term.reset(); tsend({ t: "restart", mode: "new" }); } else connectTerm("new"); };
   $("#btnContinue").onclick = () => { if (tws?.readyState === 1) { term.reset(); tsend({ t: "restart", mode: "continue" }); } else connectTerm("continue"); };
+
+  // ---------- chat composer under the Claude Code / Codex screen ----------
+  // The official program keeps its own screen above; this box is just a friendlier way to type into it.
+  // Attachments are uploaded into the product folder (.studio-uploads/, kept out of git) and referenced by path,
+  // exactly as a user would type @path in the terminal. The message is delivered as one "paste", then Enter.
+  const pending = []; // { id, name, path?, image, url?, el, state }
+  const fmtSize = (n) => n > 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+  function renderChip(a) {
+    const kids = [a.url ? el("img", { src: a.url, alt: "" }) : el("span", { class: "fi", text: (a.name.split(".").pop() || "file").slice(0, 4).toUpperCase() }), el("span", { text: a.name, title: a.name })];
+    const x = el("button", { type: "button", "aria-label": `Remove ${a.name}`, text: "×" }); x.onclick = () => { pending.splice(pending.indexOf(a), 1); a.el.remove(); };
+    const c = el("div", { class: `chip ${a.state === "uploading" ? "up" : a.state === "error" ? "bad" : ""}`, title: a.error || `${a.name} · ${fmtSize(a.size)}` }, ...kids, x);
+    if (a.el) a.el.replaceWith(c); else $("#tChips").append(c); a.el = c;
+  }
+  async function addFiles(files) {
+    for (const f of files) {
+      const a = { name: f.name || `pasted-${Date.now()}.png`, size: f.size, image: /^image\//.test(f.type), url: /^image\//.test(f.type) ? URL.createObjectURL(f) : "", state: "uploading" };
+      pending.push(a); renderChip(a);
+      if (f.size > 20 << 20) { Object.assign(a, { state: "error", error: "Larger than 20 MB" }); renderChip(a); continue; }
+      try {
+        const r = await fetch(`/api/products/${product.id}/uploads`, { method: "POST", headers: { "X-File-Name": encodeURIComponent(a.name) }, body: f });
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        Object.assign(a, { state: "ready", path: d.path }); renderChip(a);
+      } catch (e) { Object.assign(a, { state: "error", error: e.message }); renderChip(a); }
+    }
+  }
+  $("#tAttach").onclick = () => $("#tFile").click();
+  $("#tFile").onchange = () => { addFiles([...$("#tFile").files]); $("#tFile").value = ""; };
+  $("#tAsk").addEventListener("paste", (e) => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (files.length) { e.preventDefault(); addFiles(files.map((f, i) => (f.name && f.name !== "image.png" ? f : new File([f], `pasted-${new Date().toISOString().slice(11, 19).replace(/:/g, "")}${i ? `-${i}` : ""}.${(f.type.split("/")[1] || "png").replace("jpeg", "jpg")}`, { type: f.type })))); }
+  });
+  const tc = $("#tComposer");
+  tc.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); tc.classList.add("drag"); } });
+  tc.addEventListener("dragleave", () => tc.classList.remove("drag"));
+  tc.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) { e.preventDefault(); tc.classList.remove("drag"); addFiles([...e.dataTransfer.files]); } });
+  $("#tAsk").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); tc.requestSubmit(); } });
+  $("#tEsc").onclick = () => { tsend({ t: "in", d: "\x1b" }); term.focus(); };
+  // How a reference to an attached file is written for each program: Claude Code uses @path, Codex reads plain paths.
+  const refFor = (a) => (engine === "claude" ? `@${a.path}` : a.path);
+  tc.onsubmit = (e) => {
+    e.preventDefault();
+    if (pending.some((a) => a.state === "uploading")) { $("#tHint").textContent = "Still uploading… one moment."; return; }
+    const text = $("#tAsk").value.replace(/\r/g, "").trim(), files = pending.filter((a) => a.state === "ready");
+    if (!text && !files.length) return;
+    if (!tws || tws.readyState !== 1) { $("#tHint").textContent = "Not connected to the AI yet. Wait a moment, or press Restart."; return; }
+    const message = [text, files.length ? `${text ? "\n\n" : ""}Attached: ${files.map(refFor).join(" ")}` : ""].join("");
+    // Bracketed paste keeps line breaks inside the message instead of sending each line separately.
+    tsend({ t: "in", d: "\x1b[200~" + message.replace(/\x1b/g, "") + "\x1b[201~" });
+    setTimeout(() => tsend({ t: "in", d: "\r" }), 120);
+    $("#tAsk").value = ""; for (const a of pending.splice(0)) a.el.remove();
+    $("#tHint").textContent = "Sent. Watch the AI's screen above.";
+    $("#tAsk").focus();
+  };
 
   // ---------- Studio-drawn chat (Other models) ----------
   const chat = window.StudioChat.create({ box: $("#msgs"), onBusy: (b) => { $("#btnStop").hidden = !b; $("#btnSend").disabled = b; } });
@@ -190,7 +243,7 @@
     document.querySelectorAll(".eng").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.eng === id)));
     const isTerm = id !== "other";
     $("#termPane").hidden = !isTerm; $("#chatPane").hidden = isTerm;
-    if (isTerm) { connectTerm(); loadTermModels(); setTimeout(refit, 50); }
+    if (isTerm) { connectTerm(); loadTermModels(); setTimeout(refit, 50); $("#tAsk").placeholder = `Message ${nameOf(id)}… Enter to send · Shift+Enter new line · Ctrl+V or drop files to attach`; }
     else { if (tws) { tws.onclose = null; tws.close(); tws = null; } refreshChats().then(() => openChat(store.get(`studio.chat.${product.id}`, "") && [...$("#chatPick").options].some((o) => o.value === store.get(`studio.chat.${product.id}`)) ? store.get(`studio.chat.${product.id}`) : "")); }
   }
 
