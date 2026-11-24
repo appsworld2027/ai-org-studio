@@ -8,6 +8,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
 import net from "node:net";
+import { startFakeModels } from "./fake/models.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
@@ -55,7 +56,16 @@ const port = await freePort();
 const failFlag = join(tmp, "gh-down");
 const fakeEngine = (name) => `printf '${name} ready (mode=%s, product=%s) model=%s effort=%s\\n' "$STUDIO_MODE" "$STUDIO_PRODUCT" "$STUDIO_MODEL" "$STUDIO_EFFORT"; while IFS= read -r line; do line=$(printf '%s' "$line" | sed -e 's/\\x1b\\[200~/<paste>/g' -e 's/\\x1b\\[201~/<\\/paste>/g'); printf '${name} heard: %s\\n' "$line"; printf '%s\\n' "$line" >> "$STUDIO_HEARD_FILE"; done`;
 const TOKEN = "e2e-test-key-0123456789";
-const env = { ...process.env, STUDIO_HOME: home, STUDIO_PORT: String(port), STUDIO_HOST: "127.0.0.1", STUDIO_TOKEN: TOKEN, STUDIO_GH: join(ROOT, "e2e/fake/gh"),
+// Claude Code / Codex for the chat checks: the REAL programs when STUDIO_REAL_CLAUDE / STUDIO_REAL_CODEX point at them
+// (CI installs them), talking to stand-in model servers; otherwise small recorded stand-ins (e2e/fake/claude, codex).
+const anthropicPort = await freePort(), openaiPort = await freePort();
+const fakeModels = startFakeModels({ anthropicPort, openaiPort, projectDir: prod });
+const engineHome = join(tmp, "engine-home"); mkdirSync(join(engineHome, ".codex"), { recursive: true });
+// No pre-trust here: the Studio itself must mark the product folder trusted for Claude Code and Codex.
+const realClaude = process.env.STUDIO_REAL_CLAUDE || "", realCodex = process.env.STUDIO_REAL_CODEX || "";
+const env = { ...process.env, HOME: engineHome, ANTHROPIC_BASE_URL: `http://127.0.0.1:${anthropicPort}`, ANTHROPIC_API_KEY: "sk-ant-test", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", FAKE_OPENAI_KEY: "test",
+  STUDIO_CLAUDE_BIN: realClaude || join(ROOT, "e2e/fake/claude"), STUDIO_CODEX_BIN: realCodex || join(ROOT, "e2e/fake/codex"),
+  STUDIO_CODEX_CONFIG: ['model_provider="fake"', 'model_providers.fake.name="fake"', `model_providers.fake.base_url="http://127.0.0.1:${openaiPort}/v1"`, 'model_providers.fake.env_key="FAKE_OPENAI_KEY"', 'model_providers.fake.wire_api="responses"', 'model_providers.fake.supports_websockets=false', 'model="gpt-fake"'].join("\n"), STUDIO_HOME: home, STUDIO_PORT: String(port), STUDIO_HOST: "127.0.0.1", STUDIO_TOKEN: TOKEN, STUDIO_GH: join(ROOT, "e2e/fake/gh"),
   STUDIO_CONFIG: join(tmp, "none.json"), FAKE_GH_FAIL: failFlag, STUDIO_BOARD_TTL_MS: "500", STUDIO_POLL_MS: "1000", STUDIO_WORKSPACE: join(tmp, "ws"),
   STUDIO_HEARD_FILE: join(tmp, "heard.txt"), STUDIO_CMD_CLAUDE: fakeEngine("CLAUDE"), STUDIO_CMD_CODEX: fakeEngine("CODEX"), WEB_HOST: "", CODESPACE_NAME: "", STUDIO_PUBLIC_URL: "" };
 const srv = spawn(process.execPath, [join(ROOT, "server/server.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -114,53 +124,78 @@ try {
   const flat = async () => (await termText()).replace(/\n/g, "");
   const waitTerm = async (re, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const t = await termText(); if (re.test(t) || re.test(await flat())) return t; await page.waitForTimeout(150); } throw new Error(`terminal never showed ${re}; got: ${(await termText()).slice(-200)}`); };
 
-  await check("ST-02", "Claude Code screen starts for this product and receives typing", async () => {
+  // The terminal is now an advanced view behind "Terminal view"; the default for Claude Code / Codex is the chat.
+  const openTerm = async (eng) => { await page.click(`.eng[data-eng=${eng}]`); await page.waitForSelector("#ePane:not([hidden])"); await page.click("#eAdvanced"); await page.waitForSelector("#termPane:not([hidden])"); };
+  await check("ST-02", "Claude Code terminal view (advanced) starts for this product and receives typing", async () => {
+    assert(await page.isVisible("#ePane") && await page.isHidden("#termPane"), "Claude Code opens as a chat, not a terminal");
+    await page.click("#eAdvanced"); await page.waitForSelector("#termPane:not([hidden])");
     await waitTerm(/CLAUDE ready \(mode=new, product=Parent Plus\)/);
     await page.click("#term"); await page.keyboard.type("what is next on the backlog"); await page.keyboard.press("Enter");
     await waitTerm(/CLAUDE heard: what is next on the backlog/);
   });
   await check("ST-03", "Codex screen starts; switching back keeps Claude's chat", async () => {
-    await page.click(".eng[data-eng=codex]"); await waitTerm(/CODEX ready/);
-    await page.click(".eng[data-eng=claude]"); await waitTerm(/CLAUDE heard: what is next on the backlog/);
+    await openTerm("codex"); await waitTerm(/CODEX ready/);
+    await openTerm("claude"); await waitTerm(/CLAUDE heard: what is next on the backlog/);
   });
   await check("ST-06", "reload re-attaches; Continue last chat and Restart work", async () => {
-    await page.reload(); await waitTerm(/CLAUDE heard: what is next on the backlog/);
+    await page.reload(); await page.waitForSelector("#ePane:not([hidden])"); await page.click("#eAdvanced"); await waitTerm(/CLAUDE heard: what is next on the backlog/);
     await page.click("#btnContinue"); await waitTerm(/CLAUDE ready \(mode=continue/);
     await page.click("#btnRestart"); await waitTerm(/CLAUDE ready \(mode=new/);
   });
 
-  await check("ST-24", "chat box under Claude Code: multi-line text, Ctrl+V image paste, attach a file; delivered to the program as one message with file paths", async () => {
-    await page.click(".eng[data-eng=claude]"); await waitTerm(/CLAUDE ready/);
-    await page.fill("#tAsk", "Fix the spacing on Today\nKeep the colours");
-    // Ctrl+V of an image from the clipboard
-    await page.evaluate(() => {
-      const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
-      const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-      const dt = new DataTransfer(); dt.items.add(new File([bin], "image.png", { type: "image/png" }));
-      document.querySelector("#tAsk").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
-    });
-    await page.setInputFiles("#tFile", { name: "brief.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 test") });
-    await page.waitForFunction(() => document.querySelectorAll("#tChips .chip:not(.up)").length === 2, null, { timeout: 8000 });
-    assert(await page.isVisible("#tChips .chip img"), "image thumbnail shown");
-    await page.setInputFiles("#tFile", { name: "run.exe", mimeType: "application/octet-stream", buffer: Buffer.from("MZ") });
-    await page.waitForSelector("#tChips .chip.bad", { timeout: 8000 });
-    await page.click("#tChips .chip.bad button");
-    await page.press("#tAsk", "Enter");
-    await waitTerm(/CLAUDE heard: .*Attached: @\.studio-uploads\/\S+-pasted-\S+\.png @\.studio-uploads\/\S+-brief\.pdf/);
-    const heard = readFileSync(join(tmp, "heard.txt"), "utf8");
-    assert(/<paste>Fix the spacing on Today/.test(heard) && /Keep the colours/.test(heard), `message arrives as one paste: ${heard.slice(-300)}`);
-    const up = readdirSync(join(prod, ".studio-uploads"));
-    assert(up.some((f) => f.endsWith("-brief.pdf")) && up.some((f) => /pasted-.*\.png$/.test(f)), `files saved in the product: ${up}`);
-    assert(!up.some((f) => f.endsWith(".exe")), "unsupported type refused");
-    assert(readFileSync(join(prod, ".git/info/exclude"), "utf8").includes(".studio-uploads/"), "uploads kept out of git");
-    assert(execFileSync("git", ["-C", prod, "status", "--porcelain"]).toString().trim() === "", "git sees no new files");
-    assert((await page.$$("#tChips .chip")).length === 0 && (await page.inputValue("#tAsk")) === "", "box cleared after send");
-    await page.click(".eng[data-eng=codex]"); await waitTerm(/CODEX ready/);
-    await page.fill("#tAsk", "hello codex"); await page.setInputFiles("#tFile", { name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("# n") });
-    await page.waitForFunction(() => document.querySelectorAll("#tChips .chip:not(.up)").length === 1, null, { timeout: 8000 });
-    await page.press("#tAsk", "Enter");
-    await waitTerm(/CODEX heard: .*Attached: \.studio-uploads\/\S+-notes\.md/);
-    assert(!/@\.studio-uploads\/\S+-notes/.test(await termText()), "Codex gets plain paths (no @)");
+  const chatText = () => page.$eval("#eMsgs", (m) => m.innerText);
+  await check("ST-25", "Claude Code chat: streams the reply, shows steps, asks before changing a file, clickable question, no terminal anywhere", async () => {
+    await page.click(".eng[data-eng=claude]"); await page.waitForSelector("#ePane:not([hidden])");
+    if (await page.isVisible("#termPane")) await page.click("#tBack");
+    await page.waitForFunction(() => /Claude:|Not signed in/.test(document.querySelector("#eAcct").textContent), null, { timeout: 15000 });
+    await page.click("#eNew");
+    await page.fill("#eAsk", "Write down my dark mode idea");
+    await page.evaluate(() => { const bin = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+      const dt = new DataTransfer(); dt.items.add(new File([bin], "image.png", { type: "image/png" })); document.querySelector("#eAsk").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true })); });
+    await page.waitForFunction(() => document.querySelectorAll("#eChips .chip:not(.up)").length === 1, null, { timeout: 8000 });
+    await page.press("#eAsk", "Enter");
+    await page.waitForSelector("#eMsgs .msg.me .attchip", { timeout: 8000 });
+    await page.waitForSelector("#eMsgs .approve button:has-text('Allow')", { timeout: 20000 });
+    assert(/dark mode/i.test(await chatText()), "reply text streamed into the chat");
+    assert(await page.isVisible("#eMsgs .msg.ai b"), "markdown bold rendered");
+    assert(/Allow Claude Code to change files\?/.test(await chatText()), "plain-language permission card");
+    assert(!existsSync(join(prod, "docs/claude-idea.md")), "nothing written before Allow");
+    await page.click("#eMsgs .approve button:has-text('Allow')");
+    await page.waitForSelector("#eMsgs .ask .opt", { timeout: 20000 });
+    assert(readFileSync(join(prod, "docs/claude-idea.md"), "utf8").includes("Dark mode"), "file written after Allow");
+    assert(await page.isVisible("#eMsgs .ask .opt:has-text('Top of Fees') .rec"), "Recommended badge");
+    await page.click("#eMsgs .ask .opt:has-text('Top of Fees')");
+    await page.waitForFunction(() => /noted your choice/.test(document.querySelector("#eMsgs").innerText), null, { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelector("#eActivity").hidden, null, { timeout: 10000 });
+    assert(await page.isVisible("#eMsgs .steps .step.done"), "step card marked done");
+    assert(/Create docs\/claude-idea\.md/.test(await chatText()), "step says what changed in plain words");
+    const t = await chatText();
+    assert(!/[$❯›]\s|\x1b|for shortcuts|shift\+tab/i.test(t), `no terminal artefacts in the chat: ${t.slice(0, 200)}`);
+    assert(fakeModels.log.anthropic.some((l) => /dark mode idea/.test(l.all) && /"type":"image"/.test(l.all)), "the pasted image reached Claude as an image");
+  });
+  await check("ST-26", "Claude Code chat survives a reload: same conversation, answered cards stay answered", async () => {
+    await page.reload(); await page.waitForSelector("#ePane:not([hidden])");
+    await page.waitForSelector("#eMsgs .msg.me", { timeout: 10000 });
+    assert(/noted your choice/.test(await chatText()), "assistant reply restored");
+    assert(await page.isVisible("#eMsgs .approve.answered") && await page.isVisible("#eMsgs .ask.done .opt.chosen"), "cards restored as answered");
+  });
+  await check("ST-27", "Codex chat: same experience; model picker from Codex; asks before running a command", async () => {
+    await page.click(".eng[data-eng=codex]"); await page.waitForSelector("#ePane:not([hidden])");
+    await page.waitForFunction(() => document.querySelectorAll("#eModel option").length >= 1, null, { timeout: 15000 });
+    await page.click("#eNew"); await page.fill("#eAsk", "Create the file please"); await page.press("#eAsk", "Enter");
+    await page.waitForSelector("#eMsgs .approve button:has-text('Allow')", { timeout: 25000 });
+    assert(/Allow Codex to run this\?/.test(await chatText()), "plain-language run permission");
+    await page.click("#eMsgs .approve button:has-text('Allow')");
+    await page.waitForSelector("#eMsgs .msg.ai b:has-text('made-by-codex.txt')", { timeout: 30000 });
+    assert(existsSync(join(prod, "made-by-codex.txt")), "command ran after Allow");
+    assert(await page.isVisible("#eMsgs .steps .step.done"), "command step marked done");
+  });
+  await check("ST-28", "sign-in status: shows who is signed in or offers the official sign-in", async () => {
+    const a = await page.evaluate(() => fetch("/api/engines/claude/account").then((r) => r.json()));
+    assert(typeof a.signedIn === "boolean", `claude account: ${JSON.stringify(a)}`);
+    const x = await page.evaluate(() => fetch("/api/engines/codex/account").then((r) => r.json()));
+    assert(/Claude: test@example\.com|Not signed in/.test(await page.textContent("#eAcct")) || /ChatGPT/.test(await page.textContent("#eAcct")), "account shown in the chat bar");
+    assert(typeof x.signedIn === "boolean", `codex account: ${JSON.stringify(x)}`);
   });
   await check("ST-15", "Other models: add a custom model server and key (key never returned to the page)", async () => {
     await page.click(".eng[data-eng=other]"); await page.waitForSelector("#chatPane:not([hidden])");
@@ -236,10 +271,10 @@ try {
     assert(JSON.parse(readFileSync(join(home, "products.json"))).products[0].productionUrl === "https://example.com/", "saved");
   });
   await check("ST-22", "Claude Code: model and thinking picker above the screen restarts it with the choice", async () => {
-    await page.click(".eng[data-eng=claude]"); await page.waitForSelector("#tModel option[value=opus]", { state: "attached" });
+    await openTerm("claude"); await page.waitForSelector("#tModel option[value=opus]", { state: "attached" });
     await page.selectOption("#tModel", "opus"); await page.selectOption("#tEffort", "high"); await page.click("#tApply");
     await waitTerm(/CLAUDE ready \(mode=continue, product=Parent Plus\) model=opus effort=high/);
-    await page.click(".eng[data-eng=codex]"); await page.waitForSelector("#tModel option[value=__other]", { state: "attached" });
+    await openTerm("codex"); await page.waitForSelector("#tModel option[value=__other]", { state: "attached" });
     await page.selectOption("#tModel", "__other"); await page.fill("#tModelFree", "gpt-5.5"); await page.click("#tApply");
     await waitTerm(/CODEX ready \(mode=continue, product=Parent Plus\) model=gpt-5.5/);
     await page.click(".eng[data-eng=other]");
@@ -250,6 +285,7 @@ try {
     assert(auto["dev-coder"] && auto["rex-reviewer"] && auto["dev-coder"] !== auto["rex-reviewer"], `dev vs rex: ${auto["dev-coder"]} / ${auto["rex-reviewer"]}`);
     await page.selectOption("#team select[data-slug=maya-ai-pm]", "free:mistral");
     await page.waitForFunction(() => document.querySelector("#team select[data-slug=maya-ai-pm]").value === "free:mistral", null, { timeout: 8000 });
+    for (let i = 0; i < 40 && !JSON.parse(readFileSync(join(home, "team.json")))["parent-plus"]?.overrides?.["maya-ai-pm"]; i++) await page.waitForTimeout(150);
     const saved = JSON.parse(readFileSync(join(home, "team.json"))); assert(saved["parent-plus"].overrides["maya-ai-pm"] === "free:mistral", "override saved");
   });
   await check("ST-10", "Agents tab shows the live board from GitHub", async () => {
@@ -276,7 +312,7 @@ try {
     await page.waitForFunction(() => [...document.querySelectorAll("#productPick option")].some((o) => o.textContent === "Demo-App"), null, { timeout: 15000 });
     assert((await page.$eval("#productPick", (s) => s.selectedOptions[0].textContent)) === "Demo-App", "new product selected");
     assert(existsSync(join(tmp, "ws/demo-app/.git")), "repo copied into the Studio workspace");
-    await page.click(".eng[data-eng=claude]"); await waitTerm(/CLAUDE ready \(mode=new, product=Demo-App\)/);
+    await openTerm("claude"); await waitTerm(/CLAUDE ready \(mode=new, product=Demo-App\)/);
     await page.selectOption("#productPick", "parent-plus"); await waitTerm(/CLAUDE heard|CLAUDE ready/);
   });
   await check("ST-14", "keyboard: tabs reachable with arrow keys, visible focus", async () => {
@@ -288,8 +324,10 @@ try {
   await check("—", "no browser errors", async () => assert(!errors.length, errors.join(" | ")));
   if (process.env.SHOT) { await page.click(".eng[data-eng=other]"); await page.click("#tab-agents"); await page.waitForTimeout(600); await page.screenshot({ path: process.env.SHOT }); }
   await ctx.close();
-} finally { await browser.close(); srv.kill("SIGTERM"); model.close(); }
+} finally { await browser.close(); srv.kill("SIGTERM"); model.close(); fakeModels.close(); }
 console.log(results.join("\n"));
 console.log(`\n${results.length - failed}/${results.length} passed`);
 if (failed) { console.log("--- server log ---\n" + srvOut.slice(-2500)); process.exit(1); }
-rmSync(tmp, { recursive: true, force: true });
+// Clean up; a real Codex may still be writing a background cache for a moment, so never fail the run on clean-up.
+await new Promise((r) => setTimeout(r, 1500));
+try { rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch (e) { console.log(`(left temp files: ${e.code})`); }

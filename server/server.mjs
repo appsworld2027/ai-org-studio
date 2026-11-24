@@ -16,6 +16,8 @@ import { parseBacklog, buildBoard, feedFrom, appTarget } from "./status.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
 import { runTurn } from "./agent.mjs";
+import { makeEngineChats } from "./engine-chats.mjs";
+import { startCodex } from "./engines/codex.mjs";
 import { UPLOAD_DIR, UPLOAD_MAX, safeUploadName, readRaw, ensureIgnored, pruneUploads } from "./uploads.mjs";
 import { publicUrl, platform } from "./platform.mjs";
 import { ENGINE_MODELS, plan as teamPlanFor, parseAgent } from "./team.mjs";
@@ -73,7 +75,7 @@ function rememberPublicUrl(origin) {
 // ---------- static files (whitelist only) ----------
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const STATIC = {
-  "/": "public/index.html", "/app.js": "public/app.js", "/chat.js": "public/chat.js", "/styles.css": "public/styles.css",
+  "/": "public/index.html", "/app.js": "public/app.js", "/chat.js": "public/chat.js", "/echat.js": "public/echat.js", "/styles.css": "public/styles.css",
   "/vendor/xterm.js": "node_modules/@xterm/xterm/lib/xterm.js", "/vendor/xterm.css": "node_modules/@xterm/xterm/css/xterm.css",
   "/vendor/addon-fit.js": "node_modules/@xterm/addon-fit/lib/addon-fit.js", "/vendor/addon-web-links.js": "node_modules/@xterm/addon-web-links/lib/addon-web-links.js",
 };
@@ -176,9 +178,9 @@ function startSession(p, engine, mode = "new") {
 
 // ---------- model choices above the Claude Code / Codex screens ----------
 const TERMINAL_CHOICES = {
-  claude: { models: [{ id: "", name: "Default (Claude Code decides)" }, { id: "opus", name: "Opus — strongest" }, { id: "sonnet", name: "Sonnet — balanced" }, { id: "haiku", name: "Haiku — fastest" }],
+  claude: { models: [{ id: "", name: "Model: default" }, { id: "opus", name: "Opus — strongest" }, { id: "sonnet", name: "Sonnet — balanced" }, { id: "haiku", name: "Haiku — fastest" }],
     efforts: ["default", "low", "medium", "high", "xhigh", "max"] },
-  codex: { models: [{ id: "", name: "Default (Codex decides)" }], efforts: ["default", "low", "medium", "high", "xhigh"], freeText: true },
+  codex: { models: [{ id: "", name: "Model: default" }], efforts: ["default", "low", "medium", "high", "xhigh"], freeText: true },
 };
 
 // ---------- the AI Org team: which agent uses which model ----------
@@ -248,6 +250,66 @@ async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
       askUser: (q) => new Promise((ok) => L.pending.set(q.id, ok)) });
   } catch (e) { if (!ac.signal.aborted) emit({ t: "error", message: e.message }); }
   finally { L.abort = null; L.pending.clear(); store.chats.save(p.id, c); emit({ t: "idle" }); }
+}
+
+// ---------- Claude Code / Codex chats (official programs in structured mode, the user's own login) ----------
+const TOOLS_BIN = join(HOME, ".ai-org-studio/tools/node_modules/.bin");
+const ENGINE_ENV = { ...process.env, PATH: `${TOOLS_BIN}:${process.env.PATH}` };
+const BINS = { claude: process.env.STUDIO_CLAUDE_BIN || "claude", codex: process.env.STUDIO_CODEX_BIN || "codex" };
+const CODEX_CONFIG = (process.env.STUDIO_CODEX_CONFIG || "").split("\n").filter(Boolean);   // tests point Codex at a stand-in model server
+const engineRules = (p) => { let r = ""; try { r = readFileSync(RULES, "utf8"); } catch { /* none */ } return `You are working on the product "${p.name}" (GitHub ${p.repo}) inside AI Org Studio.\n\n${r}`; };
+// The product folders are the user's own repositories, added by them in the Studio, so mark them trusted for the
+// official programs (the same choice the user would make on their "Do you trust this folder?" screen).
+function trustFolder(dir, engine) {
+  const home = process.env.HOME || HOME;
+  try {
+    if (engine === "claude") {
+      const f = join(home, ".claude.json"); let c = {}; try { c = JSON.parse(readFileSync(f, "utf8")); } catch { /* first run */ }
+      c.hasCompletedOnboarding = true; c.theme ||= "dark"; c.projects ||= {}; c.projects[dir] = { ...(c.projects[dir] || {}), hasTrustDialogAccepted: true };
+      writeFileSync(f, JSON.stringify(c, null, 2), { mode: 0o600 });
+    } else {
+      const d = join(home, ".codex"), f = join(d, "config.toml"); mkdirSync(d, { recursive: true });
+      const t = existsSync(f) ? readFileSync(f, "utf8") : "", head = `[projects."${dir.replace(/"/g, "")}"]`;
+      if (!t.includes(head)) writeFileSync(f, `${t}${t && !t.endsWith("\n") ? "\n" : ""}\n${head}\ntrust_level = "trusted"\n`, { mode: 0o600 });
+    }
+  } catch (e) { log(`could not mark ${dir} as trusted for ${engine}: ${e.message}`); }
+}
+const engineChats = makeEngineChats({ store, env: ENGINE_ENV, rulesFor: engineRules, bins: BINS, codexConfig: CODEX_CONFIG, log, trustFolder });
+// Sign-in status: asks the official programs; never reads their credential files.
+async function engineAccount(engine) {
+  if (engine === "claude") {
+    // `claude auth status` prints JSON and exits 1 when signed out, so read its output either way.
+    const out = await new Promise((ok) => execFile(BINS.claude, ["auth", "status"], { env: ENGINE_ENV, timeout: 20000 }, (e, so) => ok({ e, so: String(so || "") })));
+    if (out.e?.code === "ENOENT") return { installed: false, signedIn: false };
+    try { const j = JSON.parse(out.so); return { installed: true, signedIn: !!j.loggedIn, who: j.email || j.account?.email || "", method: j.authMethod || "" }; }
+    catch { return { installed: true, signedIn: false }; }
+  }
+  const x = startCodex({ bin: BINS.codex, cwd: HOME, env: ENGINE_ENV, extraConfig: CODEX_CONFIG, emit: () => {} });
+  try { const a = await Promise.race([x.account(), new Promise((_, f) => setTimeout(() => f(new Error("timeout")), 15000))]); return { installed: true, signedIn: !!a.account || !a.requiresOpenaiAuth, who: a.account?.email || "", method: a.account?.type || "", plan: a.account?.planType || "" }; }
+  catch (e) { return { installed: !/ENOENT|spawn/i.test(e.message), signedIn: false, error: e.message }; }
+  finally { x.stop(); }
+}
+// Codex device-code sign-in kept alive until it completes.
+let codexLogin = null;
+async function startCodexLogin() {
+  codexLogin?.x.stop();
+  const state = { done: false, ok: false, error: "" };
+  const x = startCodex({ bin: BINS.codex, cwd: HOME, env: ENGINE_ENV, extraConfig: CODEX_CONFIG, emit: (e) => { if (e.t === "login") { Object.assign(state, { done: true, ok: e.ok, error: e.error }); setTimeout(() => x.stop(), 500); } } });
+  const r = await x.loginDeviceCode(); codexLogin = { x, state };
+  setTimeout(() => { if (!state.done) x.stop(); }, 15 * 60000);
+  return { url: r.verificationUrl, code: r.userCode };
+}
+// Claude sign-in: runs `claude auth login` (Anthropic's own flow) and hands its sign-in link to the page; the user pastes the code back.
+let claudeLogin = null;
+function startClaudeLogin() {
+  claudeLogin?.term?.kill?.();
+  return new Promise((ok, fail) => {
+    const term = pty.spawn(BINS.claude, ["auth", "login", "--claudeai"], { name: "dumb", cols: 400, rows: 40, cwd: HOME, env: { ...ENGINE_ENV, BROWSER: "/bin/false" } });
+    const st = { out: "", done: false, ok: false, url: "" }; claudeLogin = { term, st };
+    term.onData((d) => { st.out = (st.out + d).slice(-20000); const m = st.out.match(/https:\/\/claude\.ai\/[^\s\x1b\x07"]+/); if (m && !st.url) { st.url = m[0]; ok({ url: st.url }); } if (/success|logged in|signed in/i.test(st.out.slice(-400)) && !/not/i.test(st.out.slice(-60))) st.ok = true; });
+    term.onExit(({ exitCode }) => { st.done = true; st.ok = st.ok || exitCode === 0; if (!st.url) fail(new Error("Claude Code did not show a sign-in link.")); });
+    setTimeout(() => { if (!st.url) fail(new Error("Claude Code did not show a sign-in link in time.")); }, 20000);
+  });
 }
 
 // ---------- HTTP ----------
@@ -343,10 +405,31 @@ const server = http.createServer(async (req, res) => {
       pruneUploads(dir);
       return json(res, 200, { ok: true, path: `${UPLOAD_DIR}/${file}`, name: rawName.slice(0, 120), size: buf.length, image: /\.(png|jpe?g|gif|webp)$/i.test(file) });
     }
+    if ((m = path.match(/^\/api\/engines\/(claude|codex)\/account$/)) && req.method === "GET") return json(res, 200, await engineAccount(m[1]));
+    if ((m = path.match(/^\/api\/engines\/(claude|codex)\/models$/)) && req.method === "GET") {
+      if (m[1] === "claude") return json(res, 200, { models: TERMINAL_CHOICES.claude.models, efforts: TERMINAL_CHOICES.claude.efforts });
+      const x = startCodex({ bin: BINS.codex, cwd: HOME, env: ENGINE_ENV, extraConfig: CODEX_CONFIG, emit: () => {} });
+      try { const r = await x.models(); const list = (r.data || []).filter((d) => !d.hidden);
+        return json(res, 200, { models: [{ id: "", name: "Model: default" }, ...list.map((d) => ({ id: d.model || d.id, name: d.displayName || d.id, efforts: (d.supportedReasoningEfforts || []).map((e) => e.reasoningEffort || e) }))], efforts: ["default", "low", "medium", "high", "xhigh"] }); }
+      catch (e) { return json(res, 200, { models: TERMINAL_CHOICES.codex.models, efforts: TERMINAL_CHOICES.codex.efforts, warning: e.message }); } finally { x.stop(); }
+    }
+    if (path === "/api/engines/codex/login" && req.method === "POST") { try { return json(res, 200, await startCodexLogin()); } catch (e) { return json(res, 500, { error: `Codex sign-in could not start: ${e.message}` }); } }
+    if (path === "/api/engines/codex/login" && req.method === "GET") return json(res, 200, codexLogin ? codexLogin.state : { done: false });
+    if (path === "/api/engines/claude/login" && req.method === "POST") {
+      const b = await readBody(req, 4096);
+      if (b.code) { if (!claudeLogin || claudeLogin.st.done) return json(res, 400, { error: "Start the sign-in again." }); claudeLogin.term.write(String(b.code).trim().slice(0, 500) + "\r"); return json(res, 200, { ok: true }); }
+      try { return json(res, 200, await startClaudeLogin()); } catch (e) { return json(res, 500, { error: e.message }); }
+    }
+    if (path === "/api/engines/claude/login" && req.method === "GET") return json(res, 200, claudeLogin ? { done: claudeLogin.st.done, ok: claudeLogin.st.ok } : { done: false });
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/chats$/))) {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
       if (req.method === "GET") return json(res, 200, { chats: store.chats.list(p.id) });
-      if (req.method === "POST") { const b = await readBody(req); if (!PROVIDERS[b.provider] || !b.model) return json(res, 400, { error: "Pick a provider and model." }); return json(res, 200, store.chats.create(p.id, { provider: b.provider, model: String(b.model).slice(0, 200) })); }
+      if (req.method === "POST") {
+        const b = await readBody(req);
+        if (b.engine === "claude" || b.engine === "codex") return json(res, 200, store.chats.create(p.id, { engine: b.engine, model: /^[A-Za-z0-9._:\/-]{0,80}$/.test(b.model || "") ? b.model || "" : "", effort: EFFORTS.includes(b.effort) ? b.effort : "" }));
+        if (!PROVIDERS[b.provider] || !b.model) return json(res, 400, { error: "Pick a provider and model." });
+        return json(res, 200, store.chats.create(p.id, { provider: b.provider, model: String(b.model).slice(0, 200) }));
+      }
     }
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/chats\/([a-z0-9-]+)$/))) {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
@@ -385,6 +468,21 @@ server.on("upgrade", (req, socket, head) => {
       ws.on("close", () => sessions.get(key)?.clients.delete(ws));
     });
   }
+  if (url.pathname === "/echat") {
+    const chatId = url.searchParams.get("chat") || ""; const c = store.chats.get(p.id, chatId); if (!c || !["claude", "codex"].includes(c.engine)) return deny();
+    return wss.handleUpgrade(req, socket, head, (ws) => {
+      engineChats.attach(p, chatId, ws);
+      ws.on("message", (raw) => {
+        let msg; try { msg = JSON.parse(raw); } catch { return; }
+        const files = Array.isArray(msg.files) ? msg.files.filter((f) => typeof f?.path === "string" && f.path.startsWith(".studio-uploads/") && !f.path.includes("..")).slice(0, 10) : [];
+        if (msg.t === "send" && typeof msg.text === "string" && (msg.text.trim() || files.length))
+          engineChats.send(p, chatId, { text: msg.text.slice(0, 20000), files, effort: EFFORTS.includes(msg.effort) ? (msg.effort === "default" ? "" : msg.effort) : undefined, model: typeof msg.model === "string" && /^[A-Za-z0-9._:\/-]{0,80}$/.test(msg.model) ? msg.model : undefined })
+            .catch((e) => ws.send(JSON.stringify({ t: "error", message: e.message })));
+        else if (msg.t === "answer") engineChats.answer(p, chatId, String(msg.id), msg.answer);
+        else if (msg.t === "stop") engineChats.interrupt(p, chatId);
+      });
+    });
+  }
   if (url.pathname === "/chat") {
     const chatId = url.searchParams.get("chat") || ""; if (!store.chats.get(p.id, chatId)) return deny();
     return wss.handleUpgrade(req, socket, head, (ws) => {
@@ -407,5 +505,5 @@ server.listen(PORT, HOST, () => {
   log(`AI Org Studio is running (${platform().name}), ${products().length} product(s).`);
   console.log(`\n  Open this link (it carries your private key):\n  ${publicUrl(PORT)}/?k=${TOKEN}\n`);
 });
-for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { for (const s of sessions.values()) { try { s.term.kill(); } catch { /* gone */ } } process.exit(0); });
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { for (const s of sessions.values()) { try { s.term.kill(); } catch { /* gone */ } } engineChats.stopAll(); process.exit(0); });
 export { server };

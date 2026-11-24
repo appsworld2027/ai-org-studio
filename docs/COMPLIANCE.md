@@ -1,26 +1,30 @@
 # AI Org Studio — how it uses Claude Code and Codex, and why that is allowed
 
-Last reviewed: 2026-11-24. Re-check these sources before selling or hosting the Studio for other people.
+Last reviewed: 2026-11-24 (v2.0 chat). Re-check these sources before selling or hosting the Studio for other people.
 
-## The chat box under Claude Code / Codex
+## The Claude Code and Codex chat (v2.0)
 
-**What it is:** a text box, an Attach button, Ctrl+V paste and drag-and-drop under the official program's screen. It is not a replacement for Claude Code or Codex. It is a friendlier keyboard for them.
+**What it is:** a chat window like the Claude Code / Codex extensions in VS Code and Cursor. It shows messages, the steps the AI takes, changes, "Allow?" cards and question cards. No terminal is shown (a "Terminal view" stays available for engineers).
 
 **How it works:**
-1. Attached files are saved in the product folder under `.studio-uploads/`. This folder is excluded from git locally, so it is never committed, and it is pruned to the last 200 files.
-2. The message is typed into the official program's own input box as one paste (bracketed paste). File references are added as `@path` for Claude Code, or as a plain path for Codex: exactly what a person would type.
-3. The program's own screen stays visible above. Its sign-in, permission prompts, questions and diffs are shown and answered there, unchanged.
+- **Claude Code:** the official, unmodified `claude` program runs in its structured mode (`-p --input-format stream-json --output-format stream-json --permission-prompt-tool stdio`). This is the same channel Anthropic's VS Code extension, the Agent SDK and editors such as Zed use. The Studio reads its events and draws them; permission prompts come back to the Studio as "Allow?" cards.
+- **Codex:** the official `codex app-server`, OpenAI's documented interface for apps (JSON-RPC over stdio). Messages, command and file-change approvals, and questions arrive as structured events.
+- **Sign-in** happens inside the official programs, on Anthropic's and OpenAI's own pages:
+  - for Claude, `claude auth login` shows Claude's own link, and the user pastes back Claude's own code;
+  - for Codex, OpenAI's device-code page and code.
+- **Credentials:** the Studio never reads, stores or forwards credentials or tokens. Sign-in status is read by asking the programs (`claude auth status`, `account/read`).
+- **Attachments:** images go to the program as images; other files are referenced by path in `.studio-uploads/`, which is kept out of git.
 
-**Why this stays inside the rules:**
-- Anthropic allows a user to sign in to the unmodified Claude Code program with their own Claude plan, including where a platform hosts it. It does not allow apps that offer Claude.ai login themselves, route plan credentials, or collect, store or intermediate Claude.ai credentials or session tokens. (Source: Claude Code docs → Legal and compliance → Authentication and credential use.)
-- The Studio does none of those. Sign-in happens inside the official program, on Anthropic's own flow. The Studio never sees or stores tokens. The program is not modified, and no authentication method is removed.
-- The composer only sends keystrokes, the same as typing or pasting into a terminal. It does not drive Claude Code through its programmatic (headless / SDK) mode on the user's plan.
-- Codex: the same pattern. Device-code sign-in happens inside Codex itself.
+**Personal use only, for plan sign-in (founder decision 2026-11-24, option A):**
+- Using your *own* Claude or ChatGPT plan inside your *own* self-run Studio is what developers do in Zed, VS Code and similar tools. Anthropic currently allows the Agent SDK, `claude -p` and third-party apps with subscriptions. It announced a separate billing pool in June 2026, then postponed it with a promise of advance notice.
+- Anthropic's legal page does **not** allow third-party products to *offer* Claude.ai login to their users, or to route plan credentials on their behalf. So the Studio must not be sold or hosted for others with Claude plan sign-in unless Anthropic approves.
+- OpenAI allows ChatGPT plan use in open-source / self-hosted apps through Sign in with ChatGPT. Paid or hosted apps must apply.
+- **For other users later:**
+  - each person runs their own copy with their own plans (same as now), or
+  - uses their own API keys, or
+  - we get Anthropic's approval and join OpenAI's Sign in with ChatGPT programme.
 
-**What we deliberately do NOT do (and why):**
-- **No Studio-drawn chat bubbles running on a Claude plan.** That would put a third-party chat interface on top of plan credentials, which is the case the policy restricts. Bubbles exist only for API keys (Other models).
-- **No hiding of the program's own screen.** Permission prompts and safety dialogs must stay visible to the user.
-- **No sharing or reselling.** One Studio = one person's own machine, plans and keys.
+**What we deliberately do NOT do:** modify or repackage the programs, remove their sign-in methods, handle tokens, share or pool accounts, or hide permission prompts (the Studio shows every one as an "Allow?" card).
 
 ## If the Studio is offered to other people
 - Each person runs it on their own machine with their own Claude, ChatGPT or API keys. No shared accounts and no pooled usage.

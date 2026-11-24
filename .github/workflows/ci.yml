@@ -1,4 +1,5 @@
-# Studio CI: unit tests + full browser end-to-end test (real server and terminal, stand-in GitHub and engines).
+# Studio CI: unit tests + full browser test, twice: with small stand-ins, and with the REAL Claude Code and Codex programs
+# (talking to stand-in model servers, so no accounts or keys are needed).
 name: Studio checks
 on:
   pull_request:
@@ -10,7 +11,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -22,9 +23,12 @@ jobs:
         run: npm test
       - name: Shell scripts parse
         run: bash -n bin/studio.sh && bash -n bin/engine.sh && bash -n e2e/fake/gh
-      - name: Install a headless browser for the end-to-end test
+      - name: Install a headless browser and the real Claude Code and Codex
         run: |
-          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && npm install --no-audit --no-fund playwright@1 >/dev/null
+          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && node -e "const f='package.json',p=require('./'+f);p.allowScripts={'@anthropic-ai/claude-code':true,'@openai/codex':true};require('fs').writeFileSync(f,JSON.stringify(p))" && npm install --no-audit --no-fund --ignore-scripts=false playwright@1 @anthropic-ai/claude-code @openai/codex >/dev/null
           npx --prefix /tmp/pw playwright install --with-deps chromium
-      - name: End-to-end test (ST-01..ST-24)
+          /tmp/pw/node_modules/.bin/claude --version && /tmp/pw/node_modules/.bin/codex --version
+      - name: End-to-end test with stand-in engines (ST-01..ST-28)
         run: PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs node e2e/studio.e2e.mjs
+      - name: End-to-end test with the real Claude Code and Codex
+        run: PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs STUDIO_REAL_CLAUDE=/tmp/pw/node_modules/.bin/claude STUDIO_REAL_CODEX=/tmp/pw/node_modules/.bin/codex node e2e/studio.e2e.mjs

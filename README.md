@@ -11,7 +11,14 @@ A chat-first product studio for founders and AI PMs. You describe what you want;
   - **Prototype**: the HTML mockups in the repo, used until a real app exists.
   - **Agents**: which AI agent is working on which feature, at which stage, live from GitHub.
 - **Any product.** Add any GitHub repository with *Add product* and switch between them at the top.
-- **Chat box with attachments.** Under the Claude Code and Codex screens: type like in Cursor (Enter to send, Shift+Enter for a new line), and attach files with the button, Ctrl+V or drag-and-drop. The program's own screen stays live above. Why this is allowed: `docs/COMPLIANCE.md`.
+- **Real chat for Claude Code and Codex**, like their VS Code extensions:
+  - streamed replies, with a live "what it's doing" line;
+  - step cards for files read and changed and commands run, with the changes;
+  - Allow / Don't allow cards, and clickable questions;
+  - attachments with the button, Ctrl+V or drag-and-drop;
+  - a model and thinking picker.
+
+  It runs on your own Claude / ChatGPT plan (personal use; see `docs/COMPLIANCE.md`). Engineers can still open "Terminal view".
 - **Pick the brain.** Choose model and thinking level under the text box (Other models), or above the Claude Code / Codex screen. Decisions come as clickable cards with one Recommended option.
 - **Team.** Agents → Team shows which AI each AI Org agent uses and why (matched to its job; reviewers never use the builder's model when another is available). Override any row.
 
@@ -68,7 +75,10 @@ Product copies live in `~/studio-products/`.
 | `server/store.mjs` | Products, keys and chats in `~/.ai-org-studio` |
 | `server/platform.mjs` | Cloud Shell / Codespaces / other: the right link |
 | `server/team.mjs` | Agent → model matching from each agent's job |
-| `server/uploads.mjs` | Attachments for the Claude Code / Codex chat box |
+| `server/uploads.mjs` | Attachments for the chat |
+| `server/engines/` | Claude Code (stream-json) and Codex (app-server) chat engines, plain-language step labels |
+| `server/engine-chats.mjs` | One running program per conversation, saved transcripts |
+| `public/echat.js` | The Claude Code / Codex chat view |
 | `server/status.mjs` | Agents board logic |
 | `public/` | The page |
 | `bin/engine.sh` | Starts Claude Code / Codex, installing them once |
@@ -78,4 +88,4 @@ Product copies live in `~/studio-products/`.
 
 ## Checks
 
-34 unit tests and 21 browser checks (ST-01 to ST-24 in `docs/FEATURE_CONTRACT.md`) run on every pull request.
+36 unit tests and 24 browser checks (ST-01 to ST-28; run twice in CI: with stand-ins and with the real Claude Code and Codex in `docs/FEATURE_CONTRACT.md`) run on every pull request.

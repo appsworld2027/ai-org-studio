@@ -37,7 +37,7 @@
     term.reset();
     $("#termState").textContent = `Connecting to ${nameOf(engine)}…`;
     tws = new WebSocket(wsUrl(`/pty?product=${product.id}&engine=${engine}${mode ? `&mode=${mode}` : ""}`));
-    tws.onopen = () => { retry = 0; $("#termState").textContent = `${nameOf(engine)} · ${product.name}`; $("#termMsg").hidden = true; refit(); $("#tAsk").focus(); };
+    tws.onopen = () => { retry = 0; $("#termState").textContent = `${nameOf(engine)} · ${product.name}`; $("#termMsg").hidden = true; refit(); term.focus(); };
     tws.onmessage = (e) => term.write(typeof e.data === "string" ? e.data : new Uint8Array(e.data));
     tws.onclose = () => {
       if (engine === "other") return;
@@ -49,58 +49,124 @@
   $("#btnRestart").onclick = () => { if (tws?.readyState === 1) { term.reset(); tsend({ t: "restart", mode: "new" }); } else connectTerm("new"); };
   $("#btnContinue").onclick = () => { if (tws?.readyState === 1) { term.reset(); tsend({ t: "restart", mode: "continue" }); } else connectTerm("continue"); };
 
-  // ---------- chat composer under the Claude Code / Codex screen ----------
-  // The official program keeps its own screen above; this box is just a friendlier way to type into it.
-  // Attachments are uploaded into the product folder (.studio-uploads/, kept out of git) and referenced by path,
-  // exactly as a user would type @path in the terminal. The message is delivered as one "paste", then Enter.
-  const pending = []; // { id, name, path?, image, url?, el, state }
+  // ---------- attachments (button, Ctrl+V, drag-and-drop) for the chat box ----------
+  // Files are uploaded into the product folder (.studio-uploads/, kept out of git); the AI reads them from there.
   const fmtSize = (n) => n > 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
-  function renderChip(a) {
-    const kids = [a.url ? el("img", { src: a.url, alt: "" }) : el("span", { class: "fi", text: (a.name.split(".").pop() || "file").slice(0, 4).toUpperCase() }), el("span", { text: a.name, title: a.name })];
-    const x = el("button", { type: "button", "aria-label": `Remove ${a.name}`, text: "×" }); x.onclick = () => { pending.splice(pending.indexOf(a), 1); a.el.remove(); };
-    const c = el("div", { class: `chip ${a.state === "uploading" ? "up" : a.state === "error" ? "bad" : ""}`, title: a.error || `${a.name} · ${fmtSize(a.size)}` }, ...kids, x);
-    if (a.el) a.el.replaceWith(c); else $("#tChips").append(c); a.el = c;
-  }
-  async function addFiles(files) {
-    for (const f of files) {
-      const a = { name: f.name || `pasted-${Date.now()}.png`, size: f.size, image: /^image\//.test(f.type), url: /^image\//.test(f.type) ? URL.createObjectURL(f) : "", state: "uploading" };
-      pending.push(a); renderChip(a);
-      if (f.size > 20 << 20) { Object.assign(a, { state: "error", error: "Larger than 20 MB" }); renderChip(a); continue; }
-      try {
-        const r = await fetch(`/api/products/${product.id}/uploads`, { method: "POST", headers: { "X-File-Name": encodeURIComponent(a.name) }, body: f });
-        const d = await r.json(); if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-        Object.assign(a, { state: "ready", path: d.path }); renderChip(a);
-      } catch (e) { Object.assign(a, { state: "error", error: e.message }); renderChip(a); }
+  function attachments({ box, chipsEl, fileInput, button }) {
+    const pending = [];
+    function renderChip(a) {
+      const kids = [a.url ? el("img", { src: a.url, alt: "" }) : el("span", { class: "fi", text: (a.name.split(".").pop() || "file").slice(0, 4).toUpperCase() }), el("span", { text: a.name, title: a.name })];
+      const x = el("button", { type: "button", "aria-label": `Remove ${a.name}`, text: "×" }); x.onclick = () => { pending.splice(pending.indexOf(a), 1); a.el.remove(); };
+      const c = el("div", { class: `chip ${a.state === "uploading" ? "up" : a.state === "error" ? "bad" : ""}`, title: a.error || `${a.name} · ${fmtSize(a.size)}` }, ...kids, x);
+      if (a.el) a.el.replaceWith(c); else chipsEl.append(c); a.el = c;
     }
+    async function add(files) {
+      for (const f of files) {
+        const a = { name: f.name || `pasted-${Date.now()}.png`, size: f.size, image: /^image\//.test(f.type), url: /^image\//.test(f.type) ? URL.createObjectURL(f) : "", state: "uploading" };
+        pending.push(a); renderChip(a);
+        if (f.size > 20 << 20) { Object.assign(a, { state: "error", error: "Larger than 20 MB" }); renderChip(a); continue; }
+        try {
+          const r = await fetch(`/api/products/${product.id}/uploads`, { method: "POST", headers: { "X-File-Name": encodeURIComponent(a.name) }, body: f });
+          const d = await r.json(); if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+          Object.assign(a, { state: "ready", path: d.path }); renderChip(a);
+        } catch (e) { Object.assign(a, { state: "error", error: e.message }); renderChip(a); }
+      }
+    }
+    button.onclick = () => fileInput.click();
+    fileInput.onchange = () => { add([...fileInput.files]); fileInput.value = ""; };
+    const ta = box.querySelector("textarea");
+    ta.addEventListener("paste", (e) => {
+      const files = [...(e.clipboardData?.files || [])];
+      if (files.length) { e.preventDefault(); add(files.map((f, i) => (f.name && f.name !== "image.png" ? f : new File([f], `pasted-${new Date().toISOString().slice(11, 19).replace(/:/g, "")}${i ? `-${i}` : ""}.${(f.type.split("/")[1] || "png").replace("jpeg", "jpg")}`, { type: f.type })))); }
+    });
+    box.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); box.classList.add("drag"); } });
+    box.addEventListener("dragleave", () => box.classList.remove("drag"));
+    box.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) { e.preventDefault(); box.classList.remove("drag"); add([...e.dataTransfer.files]); } });
+    return {
+      uploading: () => pending.some((a) => a.state === "uploading"),
+      count: () => pending.length,
+      take() { const ready = pending.filter((a) => a.state === "ready").map(({ name, path, image }) => ({ name, path, image })); for (const a of pending.splice(0)) a.el.remove(); return ready; },
+    };
   }
-  $("#tAttach").onclick = () => $("#tFile").click();
-  $("#tFile").onchange = () => { addFiles([...$("#tFile").files]); $("#tFile").value = ""; };
-  $("#tAsk").addEventListener("paste", (e) => {
-    const files = [...(e.clipboardData?.files || [])];
-    if (files.length) { e.preventDefault(); addFiles(files.map((f, i) => (f.name && f.name !== "image.png" ? f : new File([f], `pasted-${new Date().toISOString().slice(11, 19).replace(/:/g, "")}${i ? `-${i}` : ""}.${(f.type.split("/")[1] || "png").replace("jpeg", "jpg")}`, { type: f.type })))); }
-  });
-  const tc = $("#tComposer");
-  tc.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); tc.classList.add("drag"); } });
-  tc.addEventListener("dragleave", () => tc.classList.remove("drag"));
-  tc.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) { e.preventDefault(); tc.classList.remove("drag"); addFiles([...e.dataTransfer.files]); } });
-  $("#tAsk").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); tc.requestSubmit(); } });
-  $("#tEsc").onclick = () => { tsend({ t: "in", d: "\x1b" }); term.focus(); };
-  // How a reference to an attached file is written for each program: Claude Code uses @path, Codex reads plain paths.
-  const refFor = (a) => (engine === "claude" ? `@${a.path}` : a.path);
-  tc.onsubmit = (e) => {
-    e.preventDefault();
-    if (pending.some((a) => a.state === "uploading")) { $("#tHint").textContent = "Still uploading… one moment."; return; }
-    const text = $("#tAsk").value.replace(/\r/g, "").trim(), files = pending.filter((a) => a.state === "ready");
-    if (!text && !files.length) return;
-    if (!tws || tws.readyState !== 1) { $("#tHint").textContent = "Not connected to the AI yet. Wait a moment, or press Restart."; return; }
-    const message = [text, files.length ? `${text ? "\n\n" : ""}Attached: ${files.map(refFor).join(" ")}` : ""].join("");
-    // Bracketed paste keeps line breaks inside the message instead of sending each line separately.
-    tsend({ t: "in", d: "\x1b[200~" + message.replace(/\x1b/g, "") + "\x1b[201~" });
-    setTimeout(() => tsend({ t: "in", d: "\r" }), 120);
-    $("#tAsk").value = ""; for (const a of pending.splice(0)) a.el.remove();
-    $("#tHint").textContent = "Sent. Watch the AI's screen above.";
-    $("#tAsk").focus();
+
+  // ---------- Claude Code / Codex chat (like the VS Code extension) ----------
+  const echat = window.EngineChat.create({ box: $("#eMsgs"), statusEl: $("#eActivity"), onBusy: (b) => { $("#eStop").hidden = !b; $("#eSend").disabled = b; } });
+  const eAtt = attachments({ box: $("#eComposer"), chipsEl: $("#eChips"), fileInput: $("#eFile"), button: $("#eAttach") });
+  let eChatId = "", pickToken = null;
+  const EFF = { default: "Thinking: default", low: "Thinking: low", medium: "Thinking: medium", high: "Thinking: high", xhigh: "Thinking: extra high", max: "Thinking: max" };
+  async function loadEngineModels() {
+    const d = await api(`/api/engines/${engine}/models`).catch(() => ({ models: [{ id: "", name: "Default" }], efforts: ["default"] }));
+    $("#eModel").replaceChildren(...d.models.map((m) => el("option", { value: m.id, text: m.name.replace(/ — .*$/, "") })));
+    $("#eEffort").replaceChildren(...d.efforts.map((x) => el("option", { value: x, text: EFF[x] || x })));
+    $("#eModel").value = store.get(`studio.emodel.${engine}`, ""); if ($("#eModel").selectedIndex < 0) $("#eModel").value = "";
+    $("#eEffort").value = store.get(`studio.eeffort.${engine}`, "default"); if ($("#eEffort").selectedIndex < 0) $("#eEffort").value = "default";
+  }
+  $("#eModel").onchange = () => store.set(`studio.emodel.${engine}`, $("#eModel").value);
+  $("#eEffort").onchange = () => store.set(`studio.eeffort.${engine}`, $("#eEffort").value);
+  async function refreshAccount() {
+    const forEngine = engine;
+    $("#eAcct").textContent = "Checking sign-in…"; $("#eAcct").className = "acct"; $("#eSignIn").hidden = true;
+    const a = await api(`/api/engines/${forEngine}/account`).catch((e) => ({ signedIn: false, error: e.message }));
+    if (forEngine !== engine) return;
+    const label = engine === "claude" ? "Claude" : "ChatGPT";
+    if (a.signedIn) { $("#eAcct").textContent = `${label}: ${a.who || "signed in"}${a.plan ? ` · ${a.plan}` : ""}`; $("#eAcct").className = "acct ok"; }
+    else { $("#eAcct").textContent = a.installed === false ? `${nameOf(engine)} is not installed yet` : `Not signed in to ${label}`; $("#eAcct").className = "acct warn"; $("#eSignIn").hidden = a.installed === false; $("#eSignIn").textContent = `Sign in to ${label}`; }
+  }
+  // Sign-in happens on Anthropic's / OpenAI's own page; the Studio only shows their link and code.
+  $("#eSignIn").onclick = async () => {
+    const box = $("#eSignBox"); box.hidden = false; box.replaceChildren(el("div", { class: "small muted", text: "Starting sign-in…" }));
+    const close = el("button", { class: "linkish", type: "button", text: "Close" }); close.onclick = () => (box.hidden = true);
+    try {
+      if (engine === "codex") {
+        const r = await api("/api/engines/codex/login", { method: "POST", body: "{}" });
+        box.replaceChildren(el("div", { class: "row" }, el("b", { text: "Sign in to ChatGPT" }), el("span", { class: "spacer" }), close), el("ol", {},
+          el("li", {}, "Open ", el("a", { href: r.url, target: "_blank", rel: "noopener", text: "OpenAI's sign-in page" }), " and sign in with your ChatGPT account."),
+          el("li", {}, "Enter this code: ", el("code", { class: "bigcode", text: r.code }))), el("div", { class: "small muted", text: "Waiting for you to finish… (If it says device codes are off: ChatGPT → Settings → Security → allow device code sign-in.)" }));
+        const t = setInterval(async () => { const s = await api("/api/engines/codex/login").catch(() => ({})); if (s.done) { clearInterval(t); box.replaceChildren(el("div", { class: s.ok ? "ok" : "err", text: s.ok ? "Signed in." : `Sign-in did not finish: ${s.error || "try again"}` })); setTimeout(() => (box.hidden = true), 2500); refreshAccount(); } }, 3000);
+      } else {
+        const r = await api("/api/engines/claude/login", { method: "POST", body: "{}" });
+        const code = el("input", { placeholder: "Paste the code from Claude here", "aria-label": "Code from Claude" }), go = el("button", { class: "primary small", type: "button", text: "Finish sign-in" });
+        box.replaceChildren(el("div", { class: "row" }, el("b", { text: "Sign in to Claude" }), el("span", { class: "spacer" }), close), el("ol", {},
+          el("li", {}, "Open ", el("a", { href: r.url, target: "_blank", rel: "noopener", text: "Claude's sign-in page" }), " and sign in with your Claude account."),
+          el("li", {}, "Claude shows a code. Copy it, paste it here and press Finish sign-in.")), el("div", { class: "row" }, code, go));
+        go.onclick = async () => { if (!code.value.trim()) return; go.disabled = true; await api("/api/engines/claude/login", { method: "POST", body: JSON.stringify({ code: code.value }) }).catch(() => {});
+          setTimeout(async () => { await refreshAccount(); const ok = $("#eAcct").classList.contains("ok"); box.replaceChildren(el("div", { class: ok ? "ok" : "err", text: ok ? "Signed in." : "That did not work. Press Sign in to try again." })); if (ok) setTimeout(() => (box.hidden = true), 2500); }, 3000); };
+      }
+    } catch (e) { box.replaceChildren(el("div", { class: "err", text: e.message }), close); }
   };
+  async function refreshEChats(selectId) {
+    const { chats } = await api(`/api/products/${product.id}/chats`);
+    const mine = chats.filter((c) => c.engine === engine);
+    $("#eChatPick").replaceChildren(el("option", { value: "", text: mine.length ? "Conversations" : "No conversations yet" }), ...mine.map((c) => el("option", { value: c.id, text: c.title })));
+    $("#eChatPick").value = selectId || eChatId || "";
+    return mine;
+  }
+  async function openEChat(id) {
+    if (id && id === eChatId && $("#eMsgs").childElementCount && !$("#eMsgs .hint")) return;   // already showing it
+    eChatId = id || ""; store.set(`studio.echat.${product.id}.${engine}`, eChatId); $("#eChatPick").value = eChatId;
+    if (!id) { echat.close(); $("#eMsgs").append(el("div", { class: "hint" }, el("b", { text: `Chat with ${nameOf(engine)} about ${product.name}.` }),
+      el("p", { text: "Describe a feature, report a bug, paste a screenshot, or ask how something works. It shows each step it takes and asks before it changes anything." }))); return; }
+    echat.open(wsUrl(`/echat?product=${product.id}&chat=${id}`), nameOf(engine));
+  }
+  $("#eChatPick").onchange = () => openEChat($("#eChatPick").value);
+  $("#eNew").onclick = () => { openEChat(""); $("#eAsk").focus(); };
+  $("#eAsk").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#eComposer").requestSubmit(); } });
+  $("#eComposer").onsubmit = async (e) => {
+    e.preventDefault();
+    if (eAtt.uploading()) return;
+    const text = $("#eAsk").value.trim(); if (!text && !eAtt.count()) return;
+    if (!eChatId) {
+      const c = await api(`/api/products/${product.id}/chats`, { method: "POST", body: JSON.stringify({ engine, model: $("#eModel").value, effort: $("#eEffort").value }) });
+      await refreshEChats(c.id); await openEChat(c.id);
+    }
+    const files = eAtt.take(); $("#eAsk").value = "";
+    const ok = await echat.send(text, files, { model: $("#eModel").value, effort: $("#eEffort").value });
+    if (!ok) { $("#eAsk").value = text; return; }
+    setTimeout(() => refreshEChats(eChatId).catch(() => {}), 1500);
+  };
+  $("#eStop").onclick = () => echat.stop();
+  $("#eAdvanced").onclick = () => { $("#ePane").hidden = true; $("#termPane").hidden = false; connectTerm(); loadTermModels(); setTimeout(refit, 50); };
+  $("#tBack").onclick = () => { $("#termPane").hidden = true; $("#ePane").hidden = false; if (tws) { tws.onclose = null; tws.close(); tws = null; } };
 
   // ---------- Studio-drawn chat (Other models) ----------
   const chat = window.StudioChat.create({ box: $("#msgs"), onBusy: (b) => { $("#btnStop").hidden = !b; $("#btnSend").disabled = b; } });
@@ -241,10 +307,17 @@
   function pickEngine(id) {
     engine = id; store.set("studio.engine", id);
     document.querySelectorAll(".eng").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.eng === id)));
-    const isTerm = id !== "other";
-    $("#termPane").hidden = !isTerm; $("#chatPane").hidden = isTerm;
-    if (isTerm) { connectTerm(); loadTermModels(); setTimeout(refit, 50); $("#tAsk").placeholder = `Message ${nameOf(id)}… Enter to send · Shift+Enter new line · Ctrl+V or drop files to attach`; }
-    else { if (tws) { tws.onclose = null; tws.close(); tws = null; } refreshChats().then(() => openChat(store.get(`studio.chat.${product.id}`, "") && [...$("#chatPick").options].some((o) => o.value === store.get(`studio.chat.${product.id}`)) ? store.get(`studio.chat.${product.id}`) : "")); }
+    const isEngine = id !== "other";
+    $("#termPane").hidden = true; $("#ePane").hidden = !isEngine; $("#chatPane").hidden = isEngine;
+    if (tws) { tws.onclose = null; tws.close(); tws = null; }
+    if (isEngine) {
+      $("#eAsk").placeholder = `Ask ${nameOf(id)} anything, or describe what to build. Enter to send · Shift+Enter new line · paste or drop files`;
+      refreshAccount(); loadEngineModels();
+      const last = store.get(`studio.echat.${product.id}.${id}`, ""), token = (pickToken = {});
+      openEChat("");   // show the empty state at once; reopen the last conversation only if the user has not started a new one meanwhile
+      refreshEChats().then((list) => { if (pickToken === token && !eChatId && list.some((c) => c.id === last)) openEChat(last); });
+    }
+    else { refreshChats().then(() => openChat(store.get(`studio.chat.${product.id}`, "") && [...$("#chatPick").options].some((o) => o.value === store.get(`studio.chat.${product.id}`)) ? store.get(`studio.chat.${product.id}`) : "")); }
   }
 
   // ---------- resizable split ----------

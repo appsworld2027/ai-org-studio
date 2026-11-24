@@ -44,11 +44,15 @@ export function makeStore(dir = process.env.STUDIO_HOME || join(HOME, ".ai-org-s
     dir: (pid) => { const d = join(dir, "chats", slugify(pid)); mkdirSync(d, { recursive: true, mode: 0o700 }); return d; },
     list(pid) {
       const d = this.dir(pid);
-      return readdirSync(d).filter((f) => /^[a-z0-9-]+\.json$/.test(f)).map((f) => { try { const c = JSON.parse(readFileSync(join(d, f), "utf8")); return { id: c.id, title: c.title, provider: c.provider, model: c.model, updatedAt: c.updatedAt }; } catch { return null; } })
-        .filter(Boolean).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+      return readdirSync(d).filter((f) => /^[a-z0-9-]+\.json$/.test(f)).map((f) => { try { const c = JSON.parse(readFileSync(join(d, f), "utf8")); return { id: c.id, title: c.title, engine: c.engine || "other", provider: c.provider, model: c.model, updatedAt: c.updatedAt }; } catch { return null; } })
+        .filter(Boolean).map((c) => ({ ...c, engine: c.engine || "other" })).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
     },
     get(pid, id) { if (!/^[a-z0-9-]+$/.test(id || "")) return null; try { return JSON.parse(readFileSync(join(this.dir(pid), `${id}.json`), "utf8")); } catch { return null; } },
-    create(pid, { provider, model }) { const now = new Date().toISOString(); const c = { id: `c${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`, title: "New chat", provider, model, messages: [], createdAt: now, updatedAt: now }; this.save(pid, c); return c; },
+    create(pid, { provider, model, engine = "other", effort = "" }) {
+      const now = new Date().toISOString();
+      const c = { id: `c${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`, title: "New chat", engine, provider: provider || engine, model: model || "", effort, messages: [], events: [], createdAt: now, updatedAt: now };
+      this.save(pid, c); return c;
+    },
     save(pid, c) { c.updatedAt = new Date().toISOString(); const t = join(this.dir(pid), `${c.id}.json.tmp`); writeFileSync(t, JSON.stringify(c), { mode: 0o600 }); renameSync(t, join(this.dir(pid), `${c.id}.json`)); },
     remove(pid, id) { if (/^[a-z0-9-]+$/.test(id || "")) rmSync(join(this.dir(pid), `${id}.json`), { force: true }); },
   };
