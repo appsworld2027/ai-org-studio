@@ -93,3 +93,20 @@ test("real snapshot of Parent Plus (23 Nov) renders a sensible board", () => {
   // The 23-Nov run was dispatched by the loop with a generic title; two agents were busy, so it must not guess.
   assert.equal(b.working[0].who, "An AI agent"); assert.match(b.working[0].what, /Quinn.*Dev|Dev.*Quinn/);
 });
+
+test("founder overview reports observed delivery and exact workflow evidence", () => {
+  const result = buildBoard({
+    backlog: [{ slug: "done", title: "Completed", done: true }, { slug: "next", title: "Upcoming" }],
+    issues: [
+      { number: 1, title: "Choice", labels: ["ai:founder-decision"], assignees: [{ login: "owner" }] },
+      { number: 2, title: "Blocked", labels: ["ai:founder-decision", "ai:blocked"] },
+    ],
+    runs: [
+      { name: "Quality", status: "completed", conclusion: "failure", head_sha: "abc", html_url: "https://example.test/1" },
+      { name: "Quality", status: "in_progress" },
+    ],
+  });
+  assert.deepEqual(result.overview, { completed: 1, ongoing: 1, blocked: 1, upcoming: 1 });
+  assert.deepEqual(result.decisions.map(({ number, assignees }) => [number, assignees]), [[1, ["owner"]]]);
+  assert.deepEqual(result.quality, [{ name: "Quality", conclusion: "failure", commit: "abc", url: "https://example.test/1" }]);
+});

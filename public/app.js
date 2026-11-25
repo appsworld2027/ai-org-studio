@@ -541,6 +541,14 @@
     st.className = "statusline" + (b.error ? " err" : "");
     st.textContent = b.error ? `Agent status could not refresh (${b.error}). Showing what was last loaded at ${new Date(b.updatedAt).toLocaleTimeString()}.` : `Live from GitHub · updated ${new Date(b.updatedAt).toLocaleTimeString()}`;
     $("#noAiOrg").hidden = !!b.aiOrg;
+    const { completed, ongoing, blocked, upcoming } = b.overview;
+    $("#founderOverview").textContent = `${completed} completed · ${ongoing} ongoing · ${blocked} blocked · ${upcoming} upcoming`;
+    $("#founderPreview").textContent = b.demo ? `Preview available for ${b.demo.feature}` : "No founder-test preview reported";
+    const quality = $("#founderQuality");
+    quality.replaceChildren(...b.quality.map((r) => el("li", {}, el("a", { href: r.url, target: "_blank", rel: "noopener",
+      text: `${r.name} · ${r.conclusion || "unavailable"}${r.commit ? ` · ${r.commit.slice(0, 7)}` : ""}` }))));
+    if (!quality.children.length) quality.append(el("li", { text: "No recent quality runs reported" }));
+
     const run = $("#running"); run.replaceChildren();
     if (!b.working.length) run.append(el("div", { class: "idle", text: b.next ? `No agents working. Next on the backlog: ${b.next.title}.` : "No agents working right now." }));
     for (const w of b.working) {
@@ -549,9 +557,12 @@
         el("span", {}, el("b", { text: w.who }), el("small", { text: `${w.what} · ${w.minutes} min` }))));
     }
     const badge = $("#workingBadge"); badge.hidden = !b.working.length; badge.textContent = `${b.working.length} working`;
-    $("#waitingWrap").hidden = !b.waiting.length;
-    $("#waiting").replaceChildren(...b.waiting.map((r) => el("div", { class: "wait" }, el("b", { text: r.title }),
-      el("small", { text: r.stage === "approve" ? "Its Feature Contract is ready. Ask the AI on the left for the 2-minute summary, then approve or request a change." : "Ready for your test. Try it in the Real app tab, then tell the AI: approve, or what to change." }))));
+    $("#waitingWrap").hidden = !b.decisions.length && !b.demo;
+    $("#waiting").replaceChildren(...b.decisions.map((item) => el("div", { class: "wait" },
+      el("a", { href: item.url, target: "_blank", rel: "noopener", text: item.title }),
+      el("small", { text: item.assignees.length ? `Assigned to ${item.assignees.join(", ")}` : "Decision owner unavailable" }))));
+    if (b.demo) $("#waiting").append(el("div", { class: "wait" },
+      el("a", { href: b.demo.url, target: "_blank", rel: "noopener", text: `Test preview for ${b.demo.feature}` })));
     const t = $("#tracks"); t.replaceChildren();
     t.append(el("div", { class: "trk head", role: "row" }, el("div", { role: "columnheader", text: "Feature" }), ...b.stages.map((s) => el("div", { role: "columnheader", text: s.name }))));
     for (const r of b.rows) {
@@ -564,7 +575,7 @@
       const sub = r.kind === "queued" ? "queued on the backlog" : r.kind === "done" ? "shipped" : `${r.who} · ${KIND[r.kind]}`;
       t.append(el("div", { class: "trk", role: "row" }, el("div", { class: "name", role: "rowheader" }, el("b", { text: r.title }), el("small", { text: sub })), ...cells));
     }
-    $("#feed").replaceChildren(...(b.feed.length ? b.feed.map((f) => el("a", { href: f.url, target: "_blank", rel: "noopener" }, el("time", { text: ago(f.at) }), f.text)) : [el("div", { class: "idle", text: "Nothing yet." })]));
+    $("#feed").replaceChildren(...(b.feed.length ? b.feed.map((f) => el("a", { href: f.url, target: "_blank", rel: "noopener" }, el("time", { text: ago(f.at) }), f.actor ? `${f.actor} · ${f.text}` : f.text)) : [el("div", { class: "idle", text: "Nothing yet." })]));
     const focus = b.rows.find((r) => r.kind === "founder") || b.rows.find((r) => r.kind === "agent" || r.kind === "loop" || r.kind === "blocked");
     $("#focus").hidden = !focus;
     if (focus) { $("#focusTitle").textContent = focus.title; const p = $("#focusStage"); p.className = `stagepill ${focus.kind}`; p.textContent = focus.kind === "founder" ? "Waiting for your OK" : `${b.stages.find((s) => s.id === focus.stage)?.name || ""}: ${focus.who}`; }
