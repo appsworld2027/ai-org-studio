@@ -542,7 +542,9 @@
     st.textContent = b.error ? `Agent status could not refresh (${b.error}). Showing what was last loaded at ${new Date(b.updatedAt).toLocaleTimeString()}.` : `Live from GitHub · updated ${new Date(b.updatedAt).toLocaleTimeString()}`;
     $("#noAiOrg").hidden = !!b.aiOrg;
     const { completed, ongoing, blocked, upcoming } = b.overview;
-    $("#founderOverview").textContent = `${completed} completed · ${ongoing} ongoing · ${blocked} blocked · ${upcoming} upcoming`;
+    $("#founderDecisions").textContent = `${b.decisions.length} ${b.decisions.length === 1 ? "decision" : "decisions"}`;
+    $("#founderOverview").replaceChildren(...Object.entries({ Completed: completed, Active: ongoing, Blocked: blocked, Upcoming: upcoming })
+      .map(([label, count]) => el("div", {}, el("dt", { text: label }), el("dd", { text: String(count) }))));
     $("#founderPreview").textContent = b.demo ? `Preview available for ${b.demo.feature}` : "No founder-test preview reported";
     const quality = $("#founderQuality");
     quality.replaceChildren(...b.quality.map((r) => el("li", {}, el("a", { href: r.url, target: "_blank", rel: "noopener",
