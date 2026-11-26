@@ -1,14 +1,13 @@
-#!/usr/bin/env node
-// Test transport only: the verified HTTPS fixture URL resolves to a local bare repo.
-const { spawnSync } = require("node:child_process");
-const args = process.argv.slice(2);
-const fixture = "https://github.com/example/studio-private-fixture.git";
-if (args.includes(fixture)) {
-  if (args[0] !== "-C" || args[1] !== process.env.FAKE_GARAGE_ROOT ||
-      !["push", "pull"].includes(args[2]) || !process.env.FAKE_GARAGE_REMOTE) {
-    console.error("Unexpected Git fixture transport"); process.exit(1);
-  }
-  args[args.indexOf(fixture)] = process.env.FAKE_GARAGE_REMOTE;
-}
-const result = spawnSync(process.env.REAL_GIT, args, { stdio: "inherit" });
-process.exit(result.status ?? 1);
+#!/usr/bin/env bash
+# Test-only mapping of the private fixture transport to an isolated local bare repo.
+set -euo pipefail
+fixture="https://github.com/example/studio-private-fixture.git"
+if [[ "${1:-}" == "-C" && "${2:-}" == "${FAKE_GARAGE_ROOT:-}" && ( "${3:-}" == "push" || "${3:-}" == "pull" ) ]]; then
+  root="$2"; shift 2
+  # For transport only; remote get-url still returns the original HTTPS URL.
+  GIT_ALLOW_PROTOCOL=file exec "${REAL_GIT:?}" -C "$root" -c "url.${FAKE_GARAGE_REMOTE:?}.insteadOf=$fixture" "$@"
+fi
+for arg in "$@"; do
+  if [[ "$arg" == "$fixture" ]]; then echo "Unexpected Git fixture transport" >&2; exit 1; fi
+done
+exec "${REAL_GIT:?}" "$@"
