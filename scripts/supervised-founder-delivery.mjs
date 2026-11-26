@@ -13,6 +13,7 @@ import { parseDeliveryResponse } from "./delivery-response.mjs";
 import { createDeliveryRateGuard } from "./delivery-rate-limit.mjs";
 import { uiEditSlots } from "./founder-ui-edit-slots.mjs";
 import { fixtureIssues, baselineQuality, amendObservedFixtureV2 } from "./founder-test-qualification.mjs";
+import { REPAIR_IDS, verifyRepairCheckpoint } from "./founder-repair-checkpoints.mjs";
 import { pilotModelProfile, splitRoute, fromOrgRoute, orgRoute, modelMatches, modelFamily, stageRoute, routeFamily, ENDPOINTS } from "../server/pilot-model-profile.mjs";
 
 const ID = "studio-pilot-001", REV = 2;
@@ -25,6 +26,8 @@ const groqGuard=createDeliveryRateGuard();
 const requalifyTests=process.env.STUDIO_DELIVERY_REQUALIFY_TESTS==="1";
 const requalifyFrom=process.env.STUDIO_DELIVERY_REQUALIFY_FROM||process.env.STUDIO_DELIVERY_REUSE_DIR;
 const amendFrom=process.env.STUDIO_DELIVERY_AMEND_OBSERVED_V2_FROM||"";
+const resumeRepairsFrom=process.env.STUDIO_DELIVERY_RESUME_REPAIRS_FROM||"";
+if(resumeRepairsFrom&&(!requalifyTests||!amendFrom))throw Error("Repair resume requires explicit requalification and original fixture amendment");
 if(amendFrom&&!requalifyTests)throw Error("Fixture amendment requires explicit test requalification");
 const [historyDir, orgDir, keyFile, deliveryDir, expected] = process.argv.slice(2);
 if (!historyDir || !orgDir || !keyFile || !deliveryDir || !/^[a-f0-9]{64}$/.test(expected || "")) {
@@ -237,9 +240,9 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
 function requireVerdict(artifact, wanted) {
   if (artifact.artifact.receipt.verdict !== wanted) throw Error(artifact.role+" requested changes or reported incomplete work");
 }
-function testRun(name) {
+function testRun(name, testPath=TEST) {
   const args=["--permission","--allow-fs-read="+candidate,"--allow-fs-read="+scratch,
-    "--allow-fs-write="+scratch,"--import",join(candidate,"scripts","founder-test-preload.mjs"),"--test-isolation=none","--test","--test-reporter=tap",TEST];
+    "--allow-fs-write="+scratch,"--import",join(candidate,"scripts","founder-test-preload.mjs"),"--test-isolation=none","--test","--test-reporter=tap",testPath];
   const result=spawnSync(process.execPath,args,{cwd:candidate,env:{PATH:process.env.PATH,HOME:scratch,TMPDIR:scratch,CI:"1"},
     encoding:"utf8",timeout:120000,maxBuffer:4*1024*1024});
   const report=(result.stdout||"")+"\n"+(result.stderr||"");
@@ -493,6 +496,7 @@ async function authorBuild(locked){
   }
   const artifact={contractArtifactHash:expected,lockedTestHash:locked,units:state.buildUnits,
     ...(state.testRequalification?{testRequalification:state.testRequalification}:{}),
+    ...(state.testAmendment?{testAmendment:state.testAmendment}:{}),
     files:Object.fromEntries(APP.filter(p=>pathHash(p)!==before[p]).map(p=>[p,pathHash(p)]))};
   const hash=artifactDigest(artifact),suite={stage:"ai:build",role:"studio",executionId:randomUUID(),sourceExecutionId:previousExecution};
   writeFileSync(join(runDir,"build-manifest.json"),JSON.stringify(artifact),{mode:0o600,flag:"wx"});
@@ -533,6 +537,97 @@ async function repairHistoryFacade(build,locked,report){
   return {role:"studio",executionId:completed.executionId,hash:digest,artifact};
 }
 
+// Save a fresh manifest after each new or reused functional repair. A
+// stopped delivery is recoverable without repeating successful model work.
+function recordFunctionalRepair(build,unit,locked){
+  (state.repairs||=[]).push(unit);
+  if(pathHash(TEST)!==locked)throw Error("Locked tests changed during functional repair");
+  const artifact={...build.artifact,repairs:structuredClone(state.repairs),
+    files:Object.fromEntries(APP.filter(p=>pathHash(p)!==before[p]).map(p=>[p,pathHash(p)]))};
+  const digest=artifactDigest(artifact),completed={role:"studio",stage:"ai:build",executionId:randomUUID(),sourceExecutionId:unit.executionId};
+  writeFileSync(join(runDir,"repair-"+unit.id+"-manifest.json"),JSON.stringify(artifact),{mode:0o600,flag:"wx"});
+  log("artifact.saved",completed,{artifactHash:digest,buildUnit:unit.id});
+  state.buildArtifact={executionId:completed.executionId,artifactHash:digest,artifact};
+  save();
+  return {role:"studio",executionId:completed.executionId,hash:digest,artifact};
+}
+function replayFunctionalRepairs(build,locked){
+  const prior=JSON.parse(readFileSync(join(resumeRepairsFrom,"state.json"),"utf8"));
+  const oldEvents=createExecutionJournal(resumeRepairsFrom).read(100000);
+  if(prior.status!=="stopped"||prior.contractHash!==expected||prior.buildPlanHash!==state.buildPlanHash||
+      prior.lockedSuite?.artifact?.files?.[TEST]!==locked||
+      prior.testAmendment?.amendedSuiteHash!==locked||
+      artifactDigest(prior.lockedSuite.artifact)!==prior.lockedSuite.artifactHash||
+      createHash("sha256").update(readFileSync(join(resumeRepairsFrom,"candidate",TEST))).digest("hex")!==locked||
+      !prior.repairs?.length||prior.repairs.length>REPAIR_IDS.length||
+      artifactDigest(prior.buildArtifact?.artifact)!==prior.buildArtifact?.artifactHash||
+      JSON.stringify(prior.buildArtifact.artifact.repairs)!==JSON.stringify(prior.repairs)||
+      JSON.stringify(prior.buildUnits)!==JSON.stringify(state.buildUnits)||oldEvents.invalidLines)
+    throw Error("Saved functional repair delivery failed integrity preflight");
+  for(const [index,unit] of prior.repairs.entries()){
+    const stage=prior.stages.find(s=>s.executionId===unit.executionId);
+    const bytes=readFileSync(join(resumeRepairsFrom,"build-checkpoints",unit.id+".mjs"));
+    if(!verifyRepairCheckpoint({unit,index,stage,events:oldEvents.events,bytes,currentHash:pathHash(unit.path),locked,model:state.buildModel}))
+      throw Error("Cannot verify saved functional repair "+unit.id+"; no regeneration allowed");
+    writeFileSync(join(runDir,"build-checkpoints",unit.id+".mjs"),bytes,{mode:0o600,flag:"wx"});
+    writeFileSync(join(candidate,unit.path),bytes,{mode:0o600});
+    state.stages.push({...stage,reused:true});
+    log("stage.reused",stage,{actor:"studio",artifactHash:unit.artifactHash,buildUnit:unit.id});
+    build=recordFunctionalRepair(build,unit,locked);
+    print("REUSED "+unit.id);
+  }
+  state.repairResumeSource=resumeRepairsFrom;save();
+  return build;
+}
+async function targetedRepair(build,locked,{id,startMarker,endMarker,requirement,report}){
+  const target="server/founder-pilot.mjs";
+  const file=readFileSync(join(candidate,target),"utf8"),start=file.indexOf(startMarker),
+    end=file.indexOf(endMarker,start+startMarker.length);
+  if(start<0||end<0||file.indexOf(startMarker,start+startMarker.length)>=0||end-start>5500)
+    throw Error("Targeted repair scope unavailable "+id);
+  const old=file.slice(start,end),beforeHash=pathHash(target);
+  const bundle={contractArtifactHash:expected,lockedTestHash:locked,id,path:target,beforeHash,
+    failureReport:report.slice(0,12000),sourceRange:old,requirement,
+    precedingContext:file.slice(Math.max(0,start-500),start),followingContext:file.slice(end,end+950)};
+  const upstream={role:"studio",stage:"ai:build",executionId:randomUUID(),sourceExecutionId:build.executionId},hash=artifactDigest(bundle);
+  writeFileSync(join(runDir,"build-checkpoints",id+"-input.json"),JSON.stringify(bundle),{mode:0o600,flag:"wx"});
+  log("artifact.saved",upstream,{artifactHash:hash,buildUnit:id});
+  print("FUNCTIONAL REPAIR "+id);
+  const generate=(extra="")=>runRole({stage:"ai:build",role:"dev-coder",freeModel:state.buildModel,
+    previous:{role:"studio",executionId:upstream.executionId,hash,artifact:bundle},paths:[],rounds:1,
+    directSource:{kind:"patch",id,target,old,beforeHash},
+    brief:"Correct ONLY sourceRange according to the requirement and actual failure. Keep the original function signatures and adjoining context. Return only replacement code fence. Never modify tests. "+extra});
+  let step;
+  try{step=await generate();}
+  catch(error){
+    const failed=state.stages.at(-1);
+    if(failed?.errorKind!=="invalid_artifact"||pathHash(target)!==beforeHash||existsSync(join(runDir,"build-checkpoints",id+".mjs")))throw error;
+    step=await generate("Previous patch rejected: "+failed.error+" "+(failed.syntaxDiagnostic||"")+"; correct the exact source range.");
+  }
+  requireVerdict(step,"COMPLETE");
+  return recordFunctionalRepair(build,{id,path:target,beforeHash,afterHash:pathHash(target),
+    executionId:step.executionId,artifactHash:step.hash,lockedTestHash:locked},locked);
+}
+async function repairObservedRaceAndScope(build,locked,after){
+  if(!state.repairs.some(r=>r.id==="BUILD-10")){
+    const code=readFileSync(join(candidate,"server/founder-pilot.mjs"),"utf8");
+    if(!/not ok 1 - AC-01/.test(after.report)||!/not ok 3 - AC-03/.test(after.report)||
+       !/1 !== 2/.test(after.report)||!code.includes("sharedRevisions = loaded;"))
+      throw Error("Remaining failure differs from observed active-revision race; preserve evidence");
+    build=await targetedRepair(build,locked,{id:"BUILD-10",startMarker:"  function history(id) {",
+      endMarker:"    let recovered = false;",
+      report:after.report,
+      requirement:"AC-01 and AC-03 both lose the queued revision after the agent completes. history(id) CURRENTLY re-parses the disk file into a NEW array even while active. The async execute() retains its OLD array and overwrites the new revision on completion. After checking id, if active.has(id), immediately return the EXISTING sharedRevisions array by reference (do not clone, reload or reassign it); corrections and polling must see that same live array until the run ends. When inactive keep the existing disk load and recovery path; if file absent, set sharedRevisions=[] and return sharedRevisions itself. Replacement ends before let recovered=false, which remains unchanged. No other behavior change."});
+  }
+  if(!state.repairs.some(r=>r.id==="BUILD-11")){
+    build=await targetedRepair(build,locked,{id:"BUILD-11",startMarker:"export function createFounderPilot(",
+      endMarker:"function createTaskPilot(",
+      report:"Observed BUILD-09 allows history/evidence with checkInbox=false; returns global journal totals and limits before task filtering. Supplemental security gate requires current membership (including cached/deleted tasks) and per-task metadata.",
+      requirement:"Repair only public facade. getWorker(id) must ALWAYS validate request ID and current inbox.list().some(t=>t.requestId===id) BEFORE cache lookup or worker creation, for run, history AND evidence including defaults. Unknown, stale/deleted or invalid IDs must throw. Valid existing tasks can read even before run. Keep all public API synchronous and structuredClone of records. For evidence, after validating getWorker(id), read the shared journal via createExecutionJournal(dir).read(Number.MAX_SAFE_INTEGER), filter events to this requestId FIRST, then return {events: filtered.slice(-250), total:filtered.length, invalidLines:all.invalidLines, truncated:filtered.length>250}. Do not disclose other tasks' events or counts. This API uses an existing imported createExecutionJournal. Preserve private factory and all other code. No changes to the locked suite."});
+  }
+  return build;
+}
+
 try {
   save();
   if(requalifyTests){
@@ -558,14 +653,21 @@ try {
   if(pathHash(TEST)!==locked) throw Error("Locked acceptance tests changed");
   state.changedPaths=APP.filter(p=>pathHash(p)!==before[p]);save();
   if(!state.changedPaths.length) throw Error("Dev did not change product source");
-  let after=testRun("candidate");
-  if(requalifyTests&&(after.evidence.exitCode!==0||after.evidence.fail!==0||after.evidence.pass!==4)){
+  if(resumeRepairsFrom)build=replayFunctionalRepairs(build,locked);
+  let after=testRun(resumeRepairsFrom?"candidate-after-replay":"candidate");
+  if(resumeRepairsFrom){
+    build=await repairObservedRaceAndScope(build,locked,after);
+    after=testRun("candidate-after-repair");
+    const isolated=testRun("task-isolation","scripts/founder-task-isolation-check.mjs");
+    if(isolated.evidence.exitCode!==0||isolated.evidence.pass!==1||isolated.evidence.fail!==0)
+      throw Error("Task isolation gate failed; preserve for repair");
+  }else if(requalifyTests&&(after.evidence.exitCode!==0||after.evidence.fail!==0||after.evidence.pass!==4)){
     const repaired=await repairHistoryFacade(build,locked,after.report);
     if(repaired){build=repaired;after=testRun("candidate-after-repair");}
   }
   if(after.evidence.exitCode!==0||after.evidence.fail!==0||after.evidence.pass!==4) throw Error("Candidate acceptance tests not green; preserve for repair");
   const qa=await runRole({stage:"ai:qa",role:"quinn-qa",previous:build,paths:[],rounds:5,requireIndependent:true,freeModel:REVIEW_MODEL(state.buildModel),
-    brief:"Review actual locked tests, changed paths "+JSON.stringify(state.changedPaths)+", and deterministic test report below. Independently assess coverage including race and gate failure. The permission sandbox simulates only journal fsync; do not claim physical durability. If the locked suite has a Studio testAmendment, review its changes and original Quinn fragments before approval. Do not claim browser testing or other runs. Return APPROVE only if evidence and tests are meaningful, otherwise CHANGES with specific findings. Report: "+after.report.slice(0,16000)});
+    brief:"Review actual locked tests, changed paths "+JSON.stringify(state.changedPaths)+", and deterministic test report below. Independently assess coverage including race and gate failure. The permission sandbox simulates only journal fsync; do not claim physical durability. If the locked suite has a Studio testAmendment, review its changes and original Quinn fragments before approval. Do not claim browser testing or other runs. Review the separate task-isolation report if present. Return APPROVE only if evidence and tests are meaningful, otherwise CHANGES with specific findings. Report: "+after.report.slice(0,16000)+(resumeRepairsFrom?"\nTask isolation: "+readFileSync(join(runDir,"task-isolation.log"),"utf8").slice(0,6000):"")});
   requireVerdict(qa,"APPROVE");
   const rex=await runRole({stage:"ai:review",role:"rex-reviewer",previous:qa,paths:[],rounds:6,requireIndependent:true,freeModel:REVIEW_MODEL(state.buildModel),
     brief:"Read the actual candidate files in "+JSON.stringify(state.changedPaths)+" and locked tests. Review security, per-task isolation, state races, acceptance and scope. Return APPROVE only when no must-fix remains; otherwise CHANGES with precise file/line findings. Actual test report: "+after.report.slice(0,12000)});

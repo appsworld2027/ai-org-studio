@@ -355,3 +355,27 @@ explicit Studio authorship, and all changes. Any mismatch stops without
 regeneration. Independent review is still required. A local run against the
 actual baseline yielded two passing tests and two genuine feature failures
 (multiple-task scope and save while active), not infrastructure errors.
+
+### Resume a verified functional repair without rebuilding
+
+The actual amended suite qualified baseline 2/4, then exposed a missing
+lazy worker. Model-authored BUILD-09 repaired it and made AC-02 and AC-04
+green. AC-01/03 both lost the second revision after active work finished.
+The observed history function replaced its live array on every read;
+the active asynchronous run still held the old array and overwrote the
+new queued correction. BUILD-09 also permitted history/evidence lookup
+without confirming current inbox membership and returned shared counts.
+
+Explicit `STUDIO_DELIVERY_RESUME_REPAIRS_FROM` replays original verified
+build and repair snapshots, checking exact source continuity, original
+model identity, receipt and journal hashes, and the locked suite hash.
+It allows only ordered BUILD-09, BUILD-10 (active revision reference)
+and BUILD-11 (inbox authorization and scoped evidence) checkpoints.
+Both new fixes are bounded Dev model patches; no change to accepted
+contract or locked tests is allowed. A separate deterministic isolation
+gate checks unknown, removed and malformed task IDs, task-scoped counts,
+pre-run access and no model launch on save. Actual independent QA and
+review still gate completion. The reconstruction of the observed code
+locally reproduced the two lost-revision failures; temporary validation
+of the proposed repair design passed all four tests plus isolation.
+This was not the delivered model-authored candidate.
