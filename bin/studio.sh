@@ -54,6 +54,9 @@ if ! running; then
   gh auth status >/dev/null 2>&1 || echo "Note: the GitHub CLI is not signed in, so the Agents tab and Add product cannot work yet. Run: gh auth login"
   # Pass the machine's link settings to the background server (background shells may not inherit them).
   ENVS="STUDIO_TOKEN='$(cat "$KEYF")' STUDIO_PORT='$PORT'"
+  # Always set the paid-API opt-out from THIS launch, so an older tmux server cannot keep it switched on.
+  PAID=""; [ "${STUDIO_ALLOW_PAID_APIS:-}" = "1" ] && PAID=1
+  ENVS="$ENVS STUDIO_ALLOW_PAID_APIS='$PAID'"
   for v in WEB_HOST CLOUD_SHELL DEVSHELL_PROJECT_ID CODESPACE_NAME GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN GITPOD_WORKSPACE_URL STUDIO_PUBLIC_URL STUDIO_ALLOW_HOST STUDIO_HOME STUDIO_WORKSPACE STUDIO_GARAGE STUDIO_GARAGE_REPO; do
     [ -n "${!v:-}" ] && ENVS="$ENVS $v='${!v}'"
   done

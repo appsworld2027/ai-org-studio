@@ -10,7 +10,7 @@ A chat-first studio where a founder or AI PM builds professional products with A
 1. **Any product.** Nothing is tied to Parent Plus. Products are GitHub repos the user adds.
 2. **Any AI, with the user's own login or key.**
    - Claude Code and Codex run as their own unmodified programs, with the user's own plan; the Studio never sees credentials. This is the only way their plans are allowed.
-   - "Other models" use the user's own API key (free or paid), via a Studio-drawn chat.
+   - "Other models" use the user's own free-tier API key, via a Studio-drawn chat. Pay-per-use APIs are blocked unless the owner starts the server with STUDIO_ALLOW_PAID_APIS=1.
 3. **Private.** It runs on the user's own machine (Cloud Shell, Codespaces, any Linux machine). It is reachable only through that platform's private link plus a Studio key, and never through a public address.
 4. **Same working rules for every AI:** plain language, options with one Recommended choice, build-test-show without stopping, never merge to main.
 5. **Safe by default:** the Other-models agent reads freely, but asks before changing files or running commands, and stays inside the product folder.
