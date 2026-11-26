@@ -252,3 +252,27 @@ Official references:
 - https://openrouter.ai/collections/free-models
 - https://openrouter.ai/docs/guides/routing/provider-selection
 - https://opencode.ai/docs/
+
+### Direct source protocol (supervised Dev)
+
+The 2026-11-26 Groq BUILD-01 run returned its exact input fingerprint, a
+complete model response and the copied placeholder summary. The source also
+rewrote the whole factory instead of preserving the existing worker body.
+Neither the old receipt nor that source is accepted or recovered.
+
+For Dev patch units the model now returns a single fenced JavaScript replacement,
+not an artificial JSON acknowledgement. Studio binds it to the exact input
+bundle and records a runtime-origin receipt only after checking the completed
+provider response, authorized source range, current file hash and full-file
+syntax. `handoff.received` for these patches has actor `studio` and
+`receiptOrigin: "studio-runtime"`: this is evidence of a verified runtime
+handoff, not a claim the model independently reproduced a digest or ran tests.
+Other roles retain strict model-authored receipt and hash validation.
+Adjacent context and actual interface signatures accompany the patch request;
+BUILD-01 specifies a minimal synchronous facade and leaves the private factory
+body open. Rejected format/syntax responses retain private state evidence and
+safe reason codes in the metadata-only journal. At most one same-model repair
+attempt is made per invalid patch, before modifying the candidate. No accepted
+test fragment or successful compatible checkpoint is regenerated merely to
+change the response protocol. The locked acceptance suite and independent
+review still gate delivery; no paid route, deployment or automatic merge.

@@ -9,6 +9,7 @@ import { runTurn } from "../server/agent.mjs";
 import { PROVIDERS } from "../server/providers.mjs";
 import { createExecutionJournal, artifactDigest, failureKind } from "../server/execution-journal.mjs";
 import { BUILD_UNITS, sourceRange } from "./founder-build-units.mjs";
+import { parseDeliveryResponse } from "./delivery-response.mjs";
 import { pilotModelProfile, splitRoute, fromOrgRoute, orgRoute, modelMatches, modelFamily, stageRoute, routeFamily, ENDPOINTS } from "../server/pilot-model-profile.mjs";
 
 const ID = "studio-pilot-001", REV = 2;
@@ -75,21 +76,6 @@ const contractContext = [
   "Non-negotiable decision: saving feedback NEVER starts a model; each queued revision requires explicit supervised Run. Reject any contrary scheduler suggestion in the artifacts.",
   "Stay compatible with existing Studio Node tests and /api/founder-pilot, including the old synthetic task. Use one-based revision numbers. Reuse existing modules; don't add packages or workflow changes. Every inbox requestId must be validated against existing tasks. Isolate evidence by task and preserve prior revisions and accepted contracts."
 ].join("\n\n");
-const parse = (s, inputHash, directSource = false) => {
-  try {
-    // A plain code fence after a one-line receipt avoids double-escaping source.
-    const framed = directSource && s.trim().match(/^(\{[^\r\n]*\})\s*\x60\x60\x60(?:javascript|js)?\r?\n([\s\S]+)\r?\n\x60\x60\x60$/i);
-    const p = framed ? {...JSON.parse(framed[1]),source:framed[2]} :
-      JSON.parse(s.trim().replace(/^\x60\x60\x60(?:json)?\s*/i,"").replace(/\s*\x60\x60\x60$/,""));
-    if (p?.inputArtifactHash !== inputHash || !["COMPLETE","APPROVE","CHANGES"].includes(p.verdict) ||
-        typeof p.summary !== "string" || !p.summary.trim() || /^REPLACE/i.test(p.summary)) return null;
-    if (directSource && p.verdict === "COMPLETE" &&
-        (typeof p.source !== "string" || p.source.length < 60 || p.source.length > 12000 ||
-         (directSource.kind!=="patch" && (!p.source.includes(directSource.id) || !/\btest\s*\(/.test(p.source))))) return null;
-    return { inputArtifactHash: p.inputArtifactHash, verdict:p.verdict, summary:p.summary,
-      ...(directSource && p.verdict==="COMPLETE"?{source:p.source}:{}) };
-  } catch { return null; }
-};
 async function runRole({stage: label, role, previous, paths, brief, requireIndependent = false, rounds = 10, directSource = false, freeModel = ""}) {
   const s = { stage: label, role, ...(directSource?(directSource.kind==="patch"?{buildUnit:directSource.id}:{criterionId:directSource.id}):{}), executionId: randomUUID(), sourceExecutionId: previous.executionId,
     inputArtifactHash: previous.hash, status: "running", startedAt: new Date().toISOString() };
@@ -112,11 +98,12 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
     s.requestedModel = model; s.providerId=providerId;
     send("route.selected",{engine:"free",requestedModel:model,providerId}); save();
     const profile = readFileSync(join(orgDir,"org/agents",role+".md"),"utf8");
-    const schema = JSON.stringify({inputArtifactHash:previous.hash,verdict:(paths.length||directSource)?"COMPLETE":"APPROVE",summary:"REPLACE with evidence, gaps and file names"});
-    const responseFormat = directSource ? schema +
-      "\nThen, on the next line, a single fenced javascript code block containing " +
-      (directSource.kind==="patch"?"the complete replacement for the specified source range":"the complete runnable test source") +
-      " (no JSON escaping, no placeholders, no prose outside the receipt and code)." : schema;
+    const patch = directSource?.kind==="patch";
+    const receiptFormat = 'Return a JSON object with exactly these required fields: inputArtifactHash (the exact string '+previous.hash+
+      '), verdict ("COMPLETE" for implemented source, "APPROVE" for a successful review, or "CHANGES" for incomplete work), and summary (your own brief factual explanation; no placeholder).';
+    const responseFormat = patch
+      ? "Return ONLY one fenced javascript code block containing the exact replacement for sourceRange. No JSON, receipt, hash, prose, ellipses or whole-file rewrite."
+      : receiptFormat+(directSource?" Then a single fenced javascript code block with the complete runnable test source. No other prose.":" No prose outside the JSON.");
     const initialHashes = Object.fromEntries(paths.map(p=>[p,pathHash(p)]));
     const messages = [{role:"user",content:(directSource?"Explicit execution only. Never start a model on saving feedback. Return only the requested replacement/source, not a claim.":"") + (directSource?"":contractContext) + "\n\nPrior stage artifact: "+JSON.stringify(previous.artifact) +
       (label==="ai:build"&&!directSource?"\nEngineering plan: "+JSON.stringify(arjun.artifact):"") +
@@ -134,15 +121,17 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
       maxRounds:rounds,maxTokens:directSource?.kind==="patch"?6000:directSource?3500:5000,
       directGeneration:directSource?.kind==="patch",
       ...(directSource?.kind==="patch"&&(model==="moonshotai/kimi-k3.1-pro"||providerId==="groq"&&model.startsWith("openai/gpt-oss"))?{effort:"low"}:{}),signal:AbortSignal.timeout(directSource?180000:900000),
-      finalInstruction:directSource
+      finalInstruction:patch
+        ? "Return only the fenced JavaScript replacement. No receipt, explanation, file header, or unchanged code outside the range."
+        :directSource
         ?"Return the one-line JSON receipt followed by the exact requested fenced JavaScript source, not a description. No tools."
         :"Complete your final JSON receipt now, using the exact inputArtifactHash. Report incomplete work if files did not change. No further tools.",
       validateFinal: text=> {
-        const receipt=parse(text,previous.hash,directSource);
+        const {receipt,issues}=parseDeliveryResponse(text,previous.hash,directSource);
         const valid=!!receipt && (receipt.verdict!=="COMPLETE" || directSource ||
           !paths.length || paths.some(p=>pathHash(p)!==initialHashes[p]));
         if(!valid) {
-          (s.rejectedResponses ||= []).push({at:new Date().toISOString(),output:text.slice(0,80000)});
+          (s.rejectedResponses ||= []).push({at:new Date().toISOString(),issues,output:text.slice(0,80000)});
           save();
           messages.push({role:"user", content:directSource
             ?"Your response is incomplete. Return the exact one-line JSON receipt followed by the requested JavaScript source block."
@@ -159,8 +148,14 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
     });
     s.response=response.slice(0,80000); save();
     if(s.finish==="length") throw Error("Model output limit reached (finish:length)");
-    const receipt=parse(messages.at(-1)?.content||response,previous.hash,directSource);
-    if (!done||failure||!httpOk||!modelResult||!receipt) throw Error(failure||"Invalid artifact: no valid model receipt");
+    if (!done||failure||!httpOk||!modelResult||s.finish!=="stop")
+      throw Error(failure||"Invalid artifact: model did not complete a verified response");
+    const {receipt,issues}=parseDeliveryResponse(messages.at(-1)?.content||response,previous.hash,directSource);
+    if(!receipt){
+      s.validationIssues=issues;save();
+      send("artifact.rejected",{outcome:"error",errorKind:"invalid_artifact",validationIssues:issues});
+      throw Error("Invalid artifact: "+issues.join(", "));
+    }
     if(label==="ai:build"&&modelProfile.explicit&&!modelMatches(model,s.reportedModel,providerId))
       throw Error("Provider did not confirm the requested qualified builder model");
     let fragmentFiles = {};
@@ -174,14 +169,17 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
         if(replacement.trim()===old.trim())throw Error("Invalid artifact: model returned unchanged source");
         const updated=current.replace(old,()=>replacement);
         const checkpoint=join(runDir,"build-checkpoints",id+".mjs");
-        writeFileSync(checkpoint,updated,{mode:0o600,flag:"wx"});
-        delete receipt.source;
-        const checked=spawnSync(process.execPath,["--check",checkpoint],{cwd:runDir,
+        const checked=spawnSync(process.execPath,["--input-type=module","--check"],{cwd:runDir,input:updated,
           env:{PATH:process.env.PATH,HOME:scratch,TMPDIR:scratch,CI:"1"},encoding:"utf8",timeout:10000});
         if(checked.status!==0){
-          writeFileSync(join(runDir,id+"-syntax.log"),checked.stderr||"Syntax check failed",{mode:0o600});
+          s.validationIssues=["syntax_error"];
+          s.syntaxDiagnostic=(checked.stderr||"Syntax check failed").slice(0,1600);save();
+          writeFileSync(join(runDir,id+"-"+s.executionId+"-syntax.log"),s.syntaxDiagnostic,{mode:0o600});
+          send("artifact.rejected",{outcome:"error",errorKind:"invalid_artifact",validationIssues:s.validationIssues});
           throw Error("Invalid artifact: replacement would break source syntax");
         }
+        writeFileSync(checkpoint,updated,{mode:0o600,flag:"wx"});
+        delete receipt.source;
         writeFileSync(path,updated,{mode:0o600});
         fragmentFiles[target]=pathHash(target);
       }else{
@@ -207,7 +205,8 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
     }
     s.artifact={receipt,files:{...fragmentFiles,...Object.fromEntries(paths.map(p=>[p,pathHash(p)]))}};
     s.artifactHash=artifactDigest(s.artifact);s.status="completed";s.completedAt=new Date().toISOString();save();
-    send("handoff.received",{fromRole:previous.role,toRole:role,artifactHash:previous.hash});
+    send("handoff.received",{fromRole:previous.role,toRole:role,artifactHash:previous.hash,
+      ...(receipt.receiptOrigin==="studio-runtime"?{actor:"studio",receiptOrigin:"studio-runtime"}:{})});
     send("artifact.saved",{artifactHash:s.artifactHash});
     send("stage.completed",{artifactHash:s.artifactHash});print("COMPLETE "+role+" "+receipt.verdict+(directSource?" "+directSource.id:""));
     return {role,executionId:s.executionId,hash:s.artifactHash,artifact:s.artifact};
@@ -370,18 +369,38 @@ async function authorBuild(locked){
         previousExecution=oldUnit.executionId; print("REUSED "+unit.id);continue;
       }
     }
+    const pos=input.indexOf(range);
     const bundle={contractArtifactHash:expected,lockedTestHash:locked,id:unit.id,path:unit.path,beforeHash,
       requirement:unit.requirement,sourceRange:range,
+      precedingContext:input.slice(Math.max(0,pos-350),pos),
+      followingContext:input.slice(pos+range.length,pos+range.length+750),
+      ...(unit.id==="BUILD-01"?{existingInterfaces:{
+        inbox:readFileSync(join(candidate,"server/founder-inbox.mjs"),"utf8").slice(-550),
+        workerReturn:input.slice(input.lastIndexOf("  return { history, run, evidence:")),
+        runSignature:input.match(/^  function run\([^\n]+/m)?.[0],
+        journalRead: "journal.read(limit) synchronously returns {events,total,invalidLines,truncated}; journal lives in the shared history directory."
+      }}:{}),
       relevantLockedTests:unit.ac.map(id=>readFileSync(join(runDir,"fragments",id+".mjs"),"utf8"))};
     const upstream={stage:"ai:build",role:"studio",executionId:randomUUID(),sourceExecutionId:previousExecution};
     const hash=artifactDigest(bundle);
     writeFileSync(join(runDir,"build-checkpoints",unit.id+"-input.json"),JSON.stringify(bundle),{mode:0o600,flag:"wx"});
     log("artifact.saved",upstream,{artifactHash:hash,buildUnit:unit.id});
-    const generate=()=>runRole({stage:"ai:build",role:"dev-coder",freeModel:buildModel,previous:{role:"studio",executionId:upstream.executionId,hash,artifact:bundle},
+    const generate=(repair="")=>runRole({stage:"ai:build",role:"dev-coder",freeModel:buildModel,previous:{role:"studio",executionId:upstream.executionId,hash,artifact:bundle},
       paths:[],rounds:1,directSource:{kind:"patch",id:unit.id,target:unit.path,old:range,beforeHash},
-      brief:"Implement only "+unit.id+" according to the incoming sourceRange and requirement. Return the COMPLETE REPLACEMENT for that range, not the entire file or an edit command. Preserve matching indentation and surrounding braces. The runner will apply it exactly, check complete file syntax, fingerprint and checkpoint it. Do not modify tests, claim test execution, or add unrelated features."});
+      brief:"Implement only "+unit.id+" according to the incoming sourceRange and requirement. Return the COMPLETE REPLACEMENT for that range, not the entire file or an edit command. Preserve matching indentation and surrounding braces. The runner will apply it exactly, check complete file syntax, fingerprint and checkpoint it. Do not modify tests, claim test execution, or add unrelated features. The precedingContext and followingContext are READ-ONLY adjoining text, not part of the replacement. Keep all existing public signatures and private helper behavior." +repair});
+    const generateWithRepair=async()=>{
+      try{return await generate();}
+      catch(error){
+        const failed=state.stages.at(-1);
+        if(failed?.errorKind!=="invalid_artifact"||pathHash(unit.path)!==beforeHash||existsSync(checkpoint))throw error;
+        print("REPAIR "+unit.id+" (one same-model retry; original source unchanged)");
+        return generate("\nPrevious attempt failed validation: "+failed.error+
+          (failed.syntaxDiagnostic?"\nSyntax diagnostic: "+failed.syntaxDiagnostic:"")+
+          "\nCorrect the response against the original range and existing interfaces; do not rewrite the workflow.");
+      }
+    };
     let step;
-    try { step=await generate(); }
+    try { step=await generateWithRepair(); }
     catch(error) {
       // No mixing builder models: a single alternate is allowed only before
       // the first successful patch. All subsequent work stays with that model.
@@ -392,7 +411,7 @@ async function authorBuild(locked){
       buildModel=ALTERNATE_BUILD;
       log("route.fallback",upstream,{buildUnit:unit.id,requestedModel:splitRoute(buildModel).model,providerId:splitRoute(buildModel).provider,engine:"free",errorKind:failed.errorKind});
       print("FALLBACK "+unit.id+" "+buildModel+" (free; no prior code authorship)");
-      step=await generate();
+      step=await generateWithRepair();
     }
     requireVerdict(step,"COMPLETE");
     state.buildModel=buildModel;

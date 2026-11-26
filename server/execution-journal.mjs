@@ -50,6 +50,7 @@ export function createExecutionJournal(dir) {
     if (/^BUILD-\d{2}$/.test(fields.buildUnit || "")) event.buildUnit = fields.buildUnit;
     if (["ai:discovery", "ai:plan", "ai:tests", "ai:build", "ai:qa", "ai:review"].includes(fields.stage)) event.stage = fields.stage;
     if (fields.engine === "free") event.engine = "free";
+    if (fields.receiptOrigin === "studio-runtime") event.receiptOrigin = fields.receiptOrigin;
     if (["nvidia","groq","openrouter"].includes(fields.providerId)) event.providerId=fields.providerId;
     if (["off", "default"].includes(fields.thinkingMode)) event.thinkingMode = fields.thinkingMode;
     if (["explore", "finalize"].includes(fields.phase)) event.phase = fields.phase;
@@ -59,7 +60,8 @@ export function createExecutionJournal(dir) {
     if (ERRORS.has(fields.errorKind)) event.errorKind = fields.errorKind;
     if (Array.isArray(fields.validationIssues)) {
       const allowed = new Set(["invalid_json", "input_hash_mismatch", "contract_hash_mismatch",
-        "missing_summary", "invalid_deliverables", "invalid_risks", "coverage_count", "coverage_ids", "coverage_approach"]);
+        "missing_summary", "invalid_deliverables", "invalid_risks", "coverage_count", "coverage_ids", "coverage_approach", "missing_source", "invalid_source_frame",
+        "source_bounds", "invalid_verdict", "placeholder_summary", "missing_criterion_test", "syntax_error"]);
       event.validationIssues = [...new Set(fields.validationIssues.filter(x => allowed.has(x)))];
     }
     if (SHA.test(fields.artifactHash || "")) event.artifactHash = fields.artifactHash;
