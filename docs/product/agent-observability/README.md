@@ -276,3 +276,16 @@ attempt is made per invalid patch, before modifying the candidate. No accepted
 test fragment or successful compatible checkpoint is regenerated merely to
 change the response protocol. The locked acceptance suite and independent
 review still gate delivery; no paid route, deployment or automatic merge.
+
+### Free Groq rate-limit handling
+
+The BUILD-01 repair completed successfully on GPT-OSS 120B, and the immediate
+BUILD-02 request returned HTTP 429. The supervised delivery runner now spaces
+Groq request starts by at least 21 seconds and, on HTTP 429, waits for the
+provider's Retry-After (or 60 seconds if absent) before one retry of the same
+request. Cooldowns over two minutes, repeated 429s, or exhausting the six-retry
+run budget stop safely; they may indicate a longer quota reset. Metadata-only
+`route.cooldown` and `route.retry` events report the wait and retry without
+exposing headers, keys or request bodies. No payment or model switch is enabled
+by the rate guard. The existing same-builder checkpoint and independent review
+requirements remain unchanged. Completed BUILD-01 can be reused unchanged.

@@ -6,7 +6,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { PROBE_ROUTES, splitRoute } from "./pilot-model-profile.mjs";
 
 const TYPES = new Set([
-  "revision.saved", "run.started", "route.selected", "route.fallback", "context.prepared",
+  "revision.saved", "run.started", "route.selected", "route.fallback", "route.cooldown", "route.retry", "context.prepared",
   "model.request", "model.headers", "model.result", "tool.request",
   "tool.result", "artifact.rejected", "artifact.recovered", "artifact.saved", "handoff.offered", "handoff.acknowledged",
   "run.completed", "run.failed", "run.interrupted", "coordination.requested", "coordination.started", "coordination.blocked", "coordination.completed", "coordination.failed", "stage.started", "stage.reused", "stage.completed", "stage.failed", "stage.interrupted", "handoff.received"
