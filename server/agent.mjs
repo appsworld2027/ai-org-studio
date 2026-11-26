@@ -100,7 +100,7 @@ export async function runTool(root, name, args = {}, { shell = "bash", timeoutMs
 
 // Reads an OpenAI-compatible streamed response (Server-Sent Events) into text + tool calls.
 export async function readStream(body, onText) {
-  const dec = new TextDecoder(); let buf = "", text = "", finish = null, usage = null; const calls = [];
+  const dec = new TextDecoder(); let buf = "", text = "", finish = null, usage = null, reportedModel = null; const calls = [];
   for await (const chunk of body) {
     buf += dec.decode(chunk, { stream: true });
     let i;
@@ -109,6 +109,7 @@ export async function readStream(body, onText) {
       if (!line.startsWith("data:")) continue;
       const data = line.slice(5).trim(); if (data === "[DONE]") continue;
       let j; try { j = JSON.parse(data); } catch { continue; }
+      if (typeof j.model === "string" && j.model) reportedModel = reportedModel && reportedModel !== j.model ? "multiple" : j.model;
       if (j.usage) usage = { input: j.usage.prompt_tokens, output: j.usage.completion_tokens };
       const ch = j.choices?.[0]; if (!ch) continue;
       const d = ch.delta || ch.message || {};
@@ -123,7 +124,7 @@ export async function readStream(body, onText) {
       if (ch.finish_reason) finish = ch.finish_reason;
     }
   }
-  return { text, calls: calls.filter(Boolean), finish, usage };
+  return { text, calls: calls.filter(Boolean), finish, usage, reportedModel };
 }
 
 // One user turn: call the model, run tools (asking when needed), repeat until the model answers without tools.
@@ -137,17 +138,24 @@ export function effortFields(providerId, effort) {
 }
 // apps: [{ name, app, tool, description, schema, session, readOnly }] from mcp-client.openApps — connected apps (MCP).
 // roots: extra folders the agent may read/write besides the product (e.g. the Garage).
-export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [], allowedTools = null, maxTokens }) {
+export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [], allowedTools = null, maxTokens, observe }) {
   const enabledTools = toolSchemas().filter(t => !allowedTools || allowedTools.includes(t.function.name));
   const appSchemas = apps.map((a) => ({ type: "function", function: { name: a.name, description: `[${a.app}] ${a.description}`, parameters: a.schema?.type === "object" ? a.schema : { type: "object", properties: {} } } }));
   let extra = effortFields(provider.id, effort);
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) return emit({ t: "stopped" });
-    const call = () => fetchImpl(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
+    const started = Date.now();
+    const call = async () => {
+      observe?.({ type: "model.request", round: round + 1, requestedModel: model });
+      const response = await fetchImpl(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,
       headers: { "Content-Type": "application/json", ...(provider.key ? { Authorization: `Bearer ${provider.key}` } : {}), ...(provider.extraHeaders || {}) },
       body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...messages], tools: [...enabledTools, ...appSchemas], tool_choice: "auto", ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra, ...(maxTokens ? { max_tokens: maxTokens } : {}) }),
     });
+      observe?.({ type: "model.headers", round: round + 1, httpStatus: response.status,
+        durationMs: Date.now() - started });
+      return response;
+    };
     let res = await call();
     // Some models refuse a thinking level they do not support: retry once without it and say so.
     if (!res.ok && res.status === 400 && Object.keys(extra).length) {
@@ -161,30 +169,41 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
       throw new Error(`${res.status} ${hint || body}`);
     }
     emit({ t: "assistant_start" });
-    const { text, calls, usage } = await readStream(res.body, (d) => emit({ t: "delta", d }));
+    const { text, calls, usage, finish, reportedModel } = await readStream(res.body, (d) => emit({ t: "delta", d }));
+    observe?.({ type: "model.result", round: round + 1, durationMs: Date.now() - started,
+      toolRequests: calls.length, finish, reportedModel, inputTokens: usage?.input, outputTokens: usage?.output });
     emit({ t: "usage", models: [{ model, input: usage?.input, output: usage?.output }] });
     messages.push({ role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args || "{}" } })) } : {}) });
     if (!calls.length) return emit({ t: "done" });
-    for (const c of calls) {
+    for (const [toolIndex, c] of calls.entries()) {
+      const observedTool = TOOLS.some(t => t.name === c.name) ? c.name : "other";
+      const toolStart = Date.now();
+      const toolEvent = { round: round + 1, toolIndex, tool: observedTool };
+      observe?.({ type: "tool.request", ...toolEvent });
+      let outcome = "ok";
+      const observeResult = result => observe?.({ type: "tool.result", ...toolEvent, outcome,
+        durationMs: Date.now() - toolStart, resultChars: String(result).length });
       let args; try { args = JSON.parse(c.args || "{}"); } catch { args = null; }
       let result;
-      if (!args) result = "Your tool arguments were not valid JSON. Try again.";
+      if (!args) { outcome = "error"; result = "Your tool arguments were not valid JSON. Try again."; }
       else if (apps.some((a) => a.name === c.name)) {
         // Connected apps were approved when the user connected them, so their tools run without a per-call question.
         const a = apps.find((x) => x.name === c.name);
         emit({ t: "tool", id: c.id, name: c.name, args, ask: false, app: a.app, tool: a.tool });
-        try { const r = await a.session.callTool(a.tool, args); result = (r.isError ? "The app returned an error: " : "") + r.text; } catch (e) { result = `Error: ${e.message}`; }
+        try { const r = await a.session.callTool(a.tool, args); if (r.isError) outcome = "error"; result = (r.isError ? "The app returned an error: " : "") + r.text; } catch (e) { outcome = "error"; result = `Error: ${e.message}`; }
       }
-      else if (!enabledTools.some((t) => t.function.name === c.name)) result = allowedTools ? `Tool ${c.name} is not available in this session.` : `There is no tool named ${c.name}.`;
+      else if (!enabledTools.some((t) => t.function.name === c.name)) { outcome = "blocked"; result = allowedTools ? `Tool ${c.name} is not available in this session.` : `There is no tool named ${c.name}.`; }
       else if (c.name === "ask_user") {
         const q = normalizeQuestion(args);
-        if (!q) result = "ask_user needs a question and 2-4 options. Try again.";
+        if (!q) { outcome = "error"; result = "ask_user needs a question and 2-4 options. Try again."; }
         else {
           emit({ t: "ask", id: c.id, ...q });
           const answer = askUser ? await askUser({ id: c.id, ...q }) : null;
           if (signal?.aborted) return emit({ t: "stopped" });
           result = answer ? `The product owner chose: ${answer}` : "The product owner did not answer. Wait for them; do not decide for them.";
           emit({ t: "answered", id: c.id, answer: answer || "" });
+          if (!answer) outcome = "blocked";
+          observeResult(result);
           messages.push({ role: "tool", tool_call_id: c.id, content: result });
           continue;
         }
@@ -194,9 +213,10 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
         emit({ t: "tool", id: c.id, name: c.name, args, ask });
         const ok = ask ? await approve({ id: c.id, name: c.name, args }) : true;
         if (signal?.aborted) return emit({ t: "stopped" });
-        if (!ok) result = "The user declined this action. Ask what they want instead, or continue without it.";
-        else { try { result = await runTool(root, c.name, args); } catch (e) { result = `Error: ${e.message}`; } }
+        if (!ok) { outcome = "blocked"; result = "The user declined this action. Ask what they want instead, or continue without it."; }
+        else { try { result = await runTool(root, c.name, args); } catch (e) { outcome = "error"; result = `Error: ${e.message}`; } }
       }
+      observeResult(result);
       emit({ t: "tool_result", id: c.id, result: String(result).slice(0, 4000) });
       messages.push({ role: "tool", tool_call_id: c.id, content: String(result) });
     }

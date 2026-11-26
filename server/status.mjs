@@ -172,3 +172,28 @@ export function appTarget({ productionUrl = "", demo = null }) {
   if (productionUrl) return { kind: "production", url: productionUrl, label: "Production" };
   return { kind: "none", url: "", label: "No Vercel deployment yet" };
 }
+
+// Read-only evidence from GitHub's actual runs/jobs/steps. A label, a title,
+// a successful workflow, or a successful chain step alone cannot prove that
+// the next agent received the same artifact. Keep those claims separate.
+export const isAgentEvidenceRun = r => /AI agents|Agent worker|Safe trial|QA lab/i.test(r.name || "");
+export function workflowEvidenceFrom(runs = [], jobDetails = {}) {
+  return runs.filter(isAgentEvidenceRun).slice(0, 8).map(r => {
+    const available = Array.isArray(jobDetails[r.id]);
+    const js = available ? jobDetails[r.id] : [];
+    const steps = js.flatMap(j => (j.steps || []).filter(s =>
+      /Route|Onboarding pack|Run agent with|Handover check|Save agent logs|Chain to the next agent|Acceptance-test gate|Build with the free|Review with the free|Grade on a clean/i.test(s.name || "")).
+      map(s => ({ job: j.name, name: s.name, status: s.status || "unknown", conclusion: s.conclusion || null,
+        startedAt: s.started_at || null, completedAt: s.completed_at || null,
+        url: j.html_url || r.html_url })));
+    return { runId: r.id, attempt: r.run_attempt || null, name: r.name, title: r.display_title || r.name,
+      status: r.status, conclusion: r.conclusion || null, commit: r.head_sha || null,
+      url: r.html_url, updatedAt: r.updated_at || null, jobsAvailable: available,
+      jobs: js.map(j => ({ name: j.name, status: j.status, conclusion: j.conclusion || null, url: j.html_url || r.html_url })),
+      steps,
+      engineActive: steps.some(s => /Run agent with|Build with the free|Review with the free/i.test(s.name) && s.status === "in_progress"),
+      handoverCheck: steps.find(s => /Handover check/i.test(s.name))?.conclusion || null,
+      // Even a successful chain step is not a receipt from a downstream agent.
+      downstreamReceiptVerified: false };
+  });
+}

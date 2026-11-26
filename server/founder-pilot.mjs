@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { PROVIDERS } from "./providers.mjs";
 import { runTurn } from "./agent.mjs";
+import { createExecutionJournal, artifactDigest, failureKind } from "./execution-journal.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PILOT_ID = "studio-pilot-001";
@@ -73,11 +74,17 @@ export function createFounderPilot({
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const active = new Set();
   const file = join(dir, PILOT_ID + ".json");
+  const journal = createExecutionJournal(dir);
+  const event = (type, record, fields = {}) => journal.append(type, {
+    requestId: PILOT_ID, revision: record.revision, executionId: record.executionId,
+    ...fields
+  });
 
   function history(id) {
     if (id !== PILOT_ID) throw new Error("Outside pilot scope");
     if (!existsSync(file)) return [];
     const revisions = JSON.parse(readFileSync(file, "utf8"));
+    let recovered = false;
     for (const r of revisions) {
       // Pre-upgrade responses remain available as evidence, not as valid contracts.
       if (!r.contract && r.agents?.length && !r.attempts) {
@@ -89,8 +96,13 @@ export function createFounderPilot({
       if (["running", "reviewing"].includes(r.status) && !active.has(id)) {
         r.status = "interrupted";
         r.error = "Preview restarted before this run finished";
+        if (r.journalVersion === 1) {
+          event("run.interrupted", r, { actor: "studio", errorKind: "interrupted" });
+          recovered = true;
+        }
       }
     }
+    if (recovered) save(revisions);
     return revisions;
   }
 
@@ -113,6 +125,7 @@ export function createFounderPilot({
       role = route.role;
       model = route.free_model.replace(/^nvidia_nim\//, "");
       if (!PROVIDERS.nvidia.models.includes(model)) throw new Error("Model outside pilot allowlist");
+      event("route.selected", record, { actor: role, engine: "free", requestedModel: model });
       const key = JSON.parse(readFileSync(keyFile, "utf8")).nvidia?.key;
       if (typeof key !== "string" || !key) throw new Error("NVIDIA connection unavailable");
       agent = router.agentInfo(role);
@@ -123,6 +136,9 @@ export function createFounderPilot({
       const corrections = revisions.filter(r => r.revision > (base?.revision || 0) && r.feedback)
         .map(r => "Revision " + r.revision + ": " + r.feedback).join("\n");
       if (corrections.length > 12000) throw new Error("Too much pending feedback for this pilot; consolidate it first");
+      event("context.prepared", record, { actor: role,
+        baseRevision: base?.revision, baseArtifactHash: base?.contract ? artifactDigest(base.contract) : undefined,
+        correctionCount: revisions.filter(r => r.revision > (base?.revision || 0) && r.feedback).length });
       const messages = [{ role: "user", content: [
         "Founder objective: " + task.title + "\n" + task.description,
         base ? "Base contract: " + JSON.stringify(base.contract) : "",
@@ -132,7 +148,7 @@ export function createFounderPilot({
       record.requestedModel = model;
       record.step = "Maya is preparing the contract";
       save(revisions);
-      let done = false, failure;
+      let done = false, failure, reportedModel = null;
       await runner({
         messages, provider: { ...PROVIDERS.nvidia, id: "nvidia", key }, model,
         root: source, maxRounds: 6, maxTokens: 1600, allowedTools: READ_TOOLS,
@@ -145,6 +161,15 @@ export function createFounderPilot({
           "After reading what you need, return ONLY one JSON object with summary (string), " +
           "acceptanceCriteria (array of at least two testable strings), edgeCases (array of strings), " +
           "and openQuestions (array of unresolved material product decisions, empty if none).",
+        observe(observation) {
+          const { type, ...fields } = observation;
+          if (type === "model.result" && observation.reportedModel) {
+            const reported = PROVIDERS.nvidia.models.includes(observation.reportedModel)
+              ? observation.reportedModel : "other-unverified";
+            reportedModel = reportedModel && reportedModel !== reported ? "other-unverified" : reported;
+          }
+          event(type, record, { actor: role, ...fields });
+        },
         emit(event) {
           if (event.t === "tool") {
             record.step = "Maya is reading project context";
@@ -168,11 +193,19 @@ export function createFounderPilot({
       const contract = parseContract(output);
       record.contract = contract;
       record.agents = [{ executionId: record.executionId, agent: agent.name, role, requestedModel: model,
-        reportedModel: null, inputTokens, outputTokens, cost: null, output,
+        reportedModel, inputTokens, outputTokens, cost: null, output,
         startedAt: record.startedAt, completedAt: new Date().toISOString() }];
+      record.artifactHash = artifactDigest(contract);
       record.status = "founder-review";
       record.step = "Contract ready for founder review (not a code delivery)";
       delete record.error;
+      record.completedAt = new Date().toISOString();
+      // The artifact must be durably persisted before the handoff is offered.
+      save(revisions);
+      event("artifact.saved", record, { actor: role, artifactHash: record.artifactHash });
+      event("handoff.offered", record, { actor: role, fromRole: role, toRole: "founder", artifactHash: record.artifactHash });
+      event("run.completed", record, { actor: role, artifactHash: record.artifactHash,
+        durationMs: Date.now() - Date.parse(record.startedAt), inputTokens, outputTokens });
     } catch (error) {
       record.status = "failed";
       record.step = "Agent stopped; feedback is still saved";
@@ -180,6 +213,10 @@ export function createFounderPilot({
       record.attempts ||= [];
       record.attempts.push({ executionId: record.executionId, agent: agent?.name, role,
         requestedModel: model, inputTokens, outputTokens, output, error: record.error });
+      try {
+        event("run.failed", record, { actor: role || "studio", errorKind: failureKind(error),
+          durationMs: Date.now() - Date.parse(record.startedAt), inputTokens, outputTokens });
+      } catch { record.journalError = "Could not append execution evidence"; }
     } finally {
       record.completedAt = new Date().toISOString();
       try { save(revisions); }
@@ -204,19 +241,42 @@ export function createFounderPilot({
         throw new Error("Enter a correction of 1–2000 characters");
       }
       if (record?.status === "queued" && record.feedback === feedback.trim()) return record;
-      record = { revision: (record?.revision || 0) + 1, parentRevision: record?.revision ?? null,
+      record = { journalVersion: 1, revision: (record?.revision || 0) + 1, parentRevision: record?.revision ?? null,
         feedback: feedback.trim(), status: "queued", agents: [], createdAt: new Date().toISOString() };
       revisions.push(record);
       save(revisions);
+      try { event("revision.saved", record, { actor: "founder", parentRevision: record.parentRevision }); }
+      catch {
+        record.journalError = "Correction saved, but execution journal is unavailable";
+        save(revisions);
+        throw new Error(record.journalError);
+      }
       return record;
     }
     if (action === "accept") {
       if (record?.status !== "founder-review" || !record.contract || record.contract.openQuestions.length) {
         throw new Error("Only a complete latest contract without unresolved questions can be accepted");
       }
+      if (record.journalVersion === 1) {
+        const digest = artifactDigest(record.contract);
+        const offer = journal.read(100000).events.find(e => e.type === "handoff.offered" &&
+          e.revision === record.revision && e.executionId === record.executionId && e.artifactHash === digest);
+        if (!offer) throw new Error("No matching recorded handoff; verify execution evidence before accepting");
+      }
       record.status = "contract-accepted";
       record.acceptedAt = new Date().toISOString();
       save(revisions);
+      // Legacy contracts can be accepted, but no earlier handoff is invented.
+      try {
+        event("handoff.acknowledged", record, { actor: "founder", fromRole: "maya-ai-pm",
+          toRole: "founder", artifactHash: artifactDigest(record.contract) });
+      } catch {
+        record.status = "founder-review";
+        delete record.acceptedAt;
+        record.journalError = "Acknowledgement not saved: execution journal unavailable";
+        save(revisions);
+        throw new Error(record.journalError);
+      }
       return record;
     }
     if (feedback !== "") throw new Error("Save corrections before running Maya");
@@ -228,6 +288,7 @@ export function createFounderPilot({
     if (!["queued", "failed", "interrupted"].includes(record.status)) {
       throw new Error("Save a correction to start a new revision");
     }
+    record.journalVersion = 1;
     record.status = "running";
     record.executionId = randomUUID();
     record.startedAt = new Date().toISOString();
@@ -236,10 +297,24 @@ export function createFounderPilot({
     delete record.error;
     delete record.completedAt;
     delete record.requestedModel;
+    delete record.journalError;
+    delete record.artifactHash;
+    delete record.contract;
+    record.agents = [];
     active.add(requestId);
-    try { save(revisions); } catch (error) { active.delete(requestId); throw error; }
+    try {
+      save(revisions);
+      event("run.started", record, { actor: "studio", engine: "free" });
+    } catch (error) {
+      active.delete(requestId);
+      record.status = "failed";
+      record.error = "Could not persist execution evidence; model not started";
+      record.journalError = "Execution journal unavailable";
+      save(revisions);
+      throw error;
+    }
     void execute(task, revisions, record).catch(() => console.error("[founder pilot] Could not persist execution outcome"));
     return record;
   }
-  return { history, run };
+  return { history, run, evidence: () => journal.read() };
 }

@@ -18,14 +18,14 @@ test("restricted Studio turn executes read tool and rejects an unadvertised writ
   const root = mkdtempSync(join(tmpdir(), "pilot-tools-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   writeFileSync(join(root, "README.md"), "existing context");
-  const requests = [];
+  const requests = [], observations = [];
   const messages = [{ role: "user", content: "Read files" }];
   const sse = delta => new Response("data: " + JSON.stringify({ choices: [{ delta }] }) + "\n\ndata: [DONE]\n\n");
   let count = 0;
   await runTurn({
     root, messages, systemPrompt: "Read only", provider: { id: "nvidia", base: "http://test.invalid" },
     model: "test", maxRounds: 3, maxTokens: 1200, allowedTools: ["list_files", "read_file"],
-    emit() {}, approve: () => { throw new Error("Should not request write approval"); },
+    emit() {}, observe: event => observations.push(event), approve: () => { throw new Error("Should not request write approval"); },
     fetchImpl: async (_url, opts) => {
       const body = JSON.parse(opts.body);
       requests.push(body);
@@ -42,6 +42,10 @@ test("restricted Studio turn executes read tool and rejects an unadvertised writ
   assert.match(requests[1].messages.find(m => m.tool_call_id === "write").content, /not available/);
   assert.equal(existsSync(join(root, "bad.txt")), false);
   assert.deepEqual(parseContract(messages.at(-1).content), contract);
+  assert.equal(observations.filter(e => e.type === "model.request").length, 2);
+  assert.deepEqual(observations.filter(e => e.type === "tool.result").map(e => [e.tool, e.outcome]),
+    [["read_file", "ok"], ["write_file", "blocked"]]);
+  assert.ok(observations.every(e => !("args" in e) && !("result" in e)));
 });
 
 test("legacy attempt is rejected, corrections remain durable, and only latest valid contract is accepted", async t => {
@@ -61,10 +65,13 @@ test("legacy attempt is rejected, corrections remain durable, and only latest va
   writeFileSync(file, JSON.stringify([{ revision: 1, status: "failed", feedback: "", agents: [{ agent: "Maya", output: '{"action":"list_dir"}' }], error: "timeout" }]));
   let calls = 0;
   const config = { dir, orgDir: org, keyFile, inbox: { list: () => [{ requestId: id, title: "Feedback", description: "Correction workflow" }] },
-    runner: async ({messages, emit, allowedTools}) => {
+    runner: async ({messages, emit, allowedTools, observe}) => {
       calls++;
       assert.deepEqual(allowedTools, ["list_files", "read_file"]);
       assert.match(messages[0].content, /Preserve original feedback/);
+      observe({ type: "model.request", requestedModel: "nvidia/nemotron-3-ultra-550b-a55b", round: 1 });
+      observe({ type: "model.headers", httpStatus: 200, round: 1 });
+      observe({ type: "model.result", round: 1, finish: "stop", inputTokens: 100, outputTokens: 200 });
       messages.push({ role: "assistant", content: JSON.stringify(contract) });
       emit({ t: "done" });
     }
@@ -86,4 +93,30 @@ test("legacy attempt is rejected, corrections remain durable, and only latest va
   assert.deepEqual(current.contract, contract);
   assert.equal(pilot.run({ requestId: id, action: "accept", revision: 2 }).status, "contract-accepted");
   assert.equal(JSON.parse(readFileSync(file))[1].status, "contract-accepted");
+  const events = createFounderPilot(config).evidence().events;
+  const offer = events.find(e => e.type === "handoff.offered");
+  const ack = events.find(e => e.type === "handoff.acknowledged");
+  assert.equal(offer.artifactHash, ack.artifactHash);
+  assert.equal(offer.executionId, ack.executionId);
+  assert.equal(offer.toRole, "founder");
+  assert.equal(events.filter(e => e.type === "model.request").length, 1);
+  assert.equal(events.filter(e => e.type === "run.completed").length, 1);
+  assert.ok(!readFileSync(join(dir, "execution-events.jsonl"), "utf8").includes("Preserve original feedback"));
+  assert.ok(!readFileSync(join(dir, "execution-events.jsonl"), "utf8").includes("mock-only"));
+  assert.ok(events.findIndex(e => e.type === "artifact.saved") < events.findIndex(e => e.type === "handoff.offered"));
+  // A later failed attempt must not manufacture a handoff, or erase the accepted contract.
+  pilot = createFounderPilot({ ...config, runner: async ({ observe }) => {
+    observe({ type: "model.request", round: 1 });
+    throw new DOMException("PRIVATE_PROVIDER_DETAILS", "TimeoutError");
+  } });
+  pilot.run({ requestId: id, action: "save", revision: 2, feedback: "Add another edge case" });
+  pilot.run({ requestId: id, action: "run", revision: 3 });
+  for (let i = 0; i < 100 && pilot.history(id)[2].status === "running"; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(pilot.history(id)[2].status, "failed");
+  assert.equal(pilot.history(id)[1].status, "contract-accepted");
+  const failedEvents = pilot.evidence().events.filter(e => e.revision === 3);
+  assert.equal(failedEvents.find(e => e.type === "run.failed").errorKind, "timeout");
+  assert.ok(!failedEvents.some(e => e.type === "handoff.offered"));
+  assert.ok(!readFileSync(join(dir, "execution-events.jsonl"), "utf8").includes("PRIVATE_PROVIDER_DETAILS"));
+
 });

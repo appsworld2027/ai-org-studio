@@ -548,7 +548,7 @@
   $("#btnRescan").onclick = async () => { await api(`/api/products/${product.id}`, { method: "PATCH", body: JSON.stringify({ rescan: true }) }); await reloadConfig(product.id); };
 
   // ---------- agents board ----------
-  const KIND = { agent: "an agent is working", founder: "waiting for you", loop: "automatic checks", blocked: "blocked", done: "done", queued: "not started" };
+  const KIND = { agent: "assigned (execution unverified)", founder: "waiting for you", loop: "automatic checks", blocked: "blocked", done: "done", queued: "not started" };
   const initials = (who) => /^(An?|The)\b|AI Org|loop/i.test(who) ? "AI" : /^QA/.test(who) ? "QA" : who.charAt(0).toUpperCase();
   const ago = (iso) => { const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 1 ? "now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(iso).toLocaleDateString(); };
   function renderBoard(b) {
@@ -570,21 +570,41 @@
     const ro = $("#roster"); if (ro) {
       ro.replaceChildren(el("div", { class: "trk head", role: "row" }, ...["Agent", "Status", "Feature", "Tool", "Last action"].map((h) => el("div", { role: "columnheader", text: h }))));
       for (const a of b.roster || []) ro.append(el("div", { class: "trk", role: "row" }, el("div", { role: "rowheader" }, el("b", { text: a.name }), el("br"), el("small", { text: a.role })),
-        el("div", { role: "cell", text: a.state === "working" ? `Working · ${a.minutes} min` : a.state === "assigned" ? "Assigned, starting" : "Idle" }),
+        el("div", { role: "cell", text: a.state === "working" ? `Workflow linked · ${a.minutes} min (role unverified)` : a.state === "assigned" ? "Assigned, run not verified" : "No assigned work" }),
         el("div", { role: "cell", text: a.feature || "—" }), el("div", { role: "cell", text: a.tool || (a.state === "idle" ? "—" : "Unknown") }),
         el("div", { role: "cell" }, a.last ? el("a", { href: a.last.url, target: "_blank", rel: "noopener", text: `${ago(a.last.at)} · ${a.last.via} · ${a.last.text}` }) : el("small", { text: "No recent action" }))));
     }
     const run = $("#running"); run.replaceChildren();
     if (b.idleChecks) run.append(el("div", { class: "idle", text: `Hourly check ran ${b.idleChecks} time(s) with nothing to do.` }));
-    if (!b.working.length) run.append(el("div", { class: "idle", text: b.next ? `No agents working. Next on the backlog: ${b.next.title}.` : "No agents working right now." }));
+    if (!b.working.length) run.append(el("div", { class: "idle", text: b.next ? `No active workflow matched. Next on the backlog: ${b.next.title}.` : "No active workflow matched in this snapshot." }));
     for (const w of b.working) {
       const cls = /QA lab/.test(w.who) ? "av qa" : /loop/i.test(w.who) ? "av loop" : "av";
       run.append(el("a", { class: "runner", href: w.url, target: "_blank", rel: "noopener" }, el("span", { class: cls, text: initials(w.who) }),
-        el("span", {}, el("b", { text: w.who }), el("small", { text: `${w.what} · ${w.minutes} min · on ${w.tool || "Unknown"}` }))));
+        el("span", {}, el("b", { text: w.who + " (workflow attribution)" }), el("small", { text: `${w.what} · ${w.minutes} min · on ${w.tool || "Unknown"}` }))));
     }
     for (const s of b.sessions || []) run.append(el("div", { class: "runner" }, el("span", { class: "av", text: "ST" }), el("span", {}, el("b", { text: s.busy ? "Studio chat (working)" : "Studio chat (open)" }), el("small", { text: `${s.title} · on ${s.tool} · ${s.model}` }))));
-    const rec = $("#recentRuns"); if (rec) rec.replaceChildren(...(b.recent || []).map((r) => el("li", {}, el("a", { href: r.url, target: "_blank", rel: "noopener", text: `${r.title} · ${r.conclusion || "?"} · on ${r.tool}` }))));
-    const badge = $("#workingBadge"); badge.hidden = !b.working.length; badge.textContent = `${b.working.length} working`;
+    const rec = $("#recentRuns");
+    if (rec) {
+      rec.replaceChildren();
+      rec.append(el("li", { text: "Execution evidence from GitHub workflow jobs. Stage labels and workflow titles are assignments, not proof of agent execution or completed handoffs." }));
+      if (!(b.workflowEvidence || []).length) rec.append(el("li", { text: "No relevant workflow evidence available in this snapshot." }));
+      for (const r of b.workflowEvidence || []) {
+        const detail = el("details", {}, el("summary", { text: r.title + " · " + r.status + (r.conclusion ? " · " + r.conclusion : "") }),
+          el("a", { href: r.url, target: "_blank", rel: "noopener", text: "Open run #" + r.runId + (r.attempt ? " attempt " + r.attempt : "") }),
+          el("p", { text: (r.commit ? "Commit " + r.commit.slice(0, 8) + " · " : "") + (r.engineActive ? "Agent engine step is active" : "No active engine step verified") }),
+          el("p", { text: "Handover check: " + (r.handoverCheck || "not observed") + " · Downstream artifact receipt: unverified" }));
+        if (!r.jobsAvailable) detail.append(el("p", { text: "Job details unavailable; cannot verify agent activity." }));
+        else {
+          const jobs = el("ul");
+          for (const j of r.jobs) jobs.append(el("li", { text: j.name + " · " + j.status + (j.conclusion ? " · " + j.conclusion : "") }));
+          for (const step of r.steps) jobs.append(el("li", {}, el("a", { href: step.url, target: "_blank", rel: "noopener", text: step.job + ": " + step.name + " · " + step.status + (step.conclusion ? " · " + step.conclusion : "") })));
+          if (!r.steps.length) jobs.append(el("li", { text: "No agent-related steps reported." }));
+          detail.append(jobs);
+        }
+        rec.append(el("li", {}, detail));
+      }
+    }
+    const badge = $("#workingBadge"); badge.hidden = !b.working.length; badge.textContent = `${b.working.length} active workflow links`;
     $("#waitingWrap").hidden = !b.decisions.length && !b.demo;
     $("#waiting").replaceChildren(...b.decisions.map((item) => el("div", { class: "wait" },
       el("a", { href: item.url, target: "_blank", rel: "noopener", text: item.title }),

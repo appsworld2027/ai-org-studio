@@ -87,6 +87,7 @@
         feedback.style.width = "100%";
         const controls = document.createElement("div");
         const evidence = document.createElement("div");
+        const activity = document.createElement("section");
         let latest = null, busy = false, available = false, timer;
 
         function control(label, action) {
@@ -126,12 +127,13 @@
             state.textContent = "Supervised pilot unavailable. No agent work running.";
             return;
           }
-          const { revisions } = await response.json();
+          const { revisions, executionEvidence } = await response.json();
           available = true;
           latest = revisions.at(-1) || null;
           state.textContent = latest
             ? "Revision " + latest.revision + " · " + latest.status
             : "Ready for supervised discovery";
+          renderActivity(executionEvidence);
           evidence.replaceChildren();
           for (const r of [...revisions].reverse()) {
             const card = document.createElement("section");
@@ -139,6 +141,8 @@
             if (r.feedback) textElement("p", "Founder correction: " + r.feedback, card);
             if (r.step) textElement("p", r.step, card);
             if (r.error) textElement("p", r.error, card);
+            if (r.journalError) textElement("p", r.journalError, card);
+            if (!r.journalVersion) textElement("small", "This run predates structured logging.", card);
             if (r.requestedModel) textElement("small",
               "Requested model: " + r.requestedModel + " · Read-tool requests: " + (r.toolCalls || 0), card);
             if (r.contract) {
@@ -155,7 +159,7 @@
                 card.append(list);
               }
               for (const agent of r.agents || []) textElement("small",
-                agent.agent + " · " + agent.requestedModel + " · " +
+                agent.agent + " · requested " + agent.requestedModel + " · reported " + (agent.reportedModel || "unknown") + " · " +
                 (agent.inputTokens ?? "unknown") + " input / " +
                 (agent.outputTokens ?? "unknown") + " output tokens (reported)", card);
             }
@@ -167,6 +171,57 @@
           if (latest?.status === "running" && dialog.open && panel.isConnected) {
             timer = setTimeout(() => loadEvidence().catch(showError), 2500);
           }
+        }
+        function renderActivity(journal) {
+          activity.replaceChildren();
+          textElement("h3", "Verified execution activity", activity);
+          textElement("p", "Local metadata only · Task studio-pilot-001 · No prompts, keys, or tool output in the journal.", activity);
+          if (journal?.invalidLines) textElement("p", journal.invalidLines + " malformed journal line(s); evidence incomplete.", activity);
+          if (!journal?.events?.length) {
+            textElement("p", "No instrumented activity yet. Earlier runs cannot be reconstructed as verified logs.", activity);
+            return;
+          }
+          const events = journal.events;
+          const latestEvents = events.filter(e => e.revision === latest?.revision &&
+            (e.executionId === latest?.executionId || !e.executionId));
+          const count = (type, outcome) => latestEvents.filter(e => e.type === type && (!outcome || e.outcome === outcome)).length;
+          const offered = latestEvents.find(e => e.type === "handoff.offered");
+          const ack = offered && latestEvents.some(e => e.type === "handoff.acknowledged" &&
+            e.artifactHash === offered.artifactHash && e.executionId === offered.executionId);
+          textElement("p", "Latest revision · " + count("model.request") + " model requests · " +
+            count("tool.result", "ok") + " completed tools · " + count("tool.result", "blocked") +
+            " blocked tools · " + count("tool.result", "error") + " tool errors", activity);
+          textElement("p", offered ? "Maya → Founder: " + (ack ? "acknowledged (matching artifact)" : "awaiting acknowledgement")
+            : "No logged handoff for this revision. No downstream agent receipt verified.", activity);
+          const detail = document.createElement("details");
+          detail.open = latest?.status === "running";
+          textElement("summary", "Execution timeline · " + journal.total + " events" + (journal.truncated ? " (latest 250 shown)" : ""), detail);
+          const list = document.createElement("ol");
+          list.style.cssText = "max-height:300px;overflow:auto;overflow-wrap:anywhere";
+          const roleLabel = { "maya-ai-pm": "Maya", founder: "Founder", studio: "Studio" };
+          const kind = {
+            "revision.saved": "Correction saved", "run.started": "Run started", "route.selected": "Agent and engine selected",
+            "context.prepared": "Context prepared", "model.request": "Model request initiated",
+            "model.headers": "Provider HTTP response", "model.result": "Model response parsed",
+            "tool.request": "Tool requested", "tool.result": "Tool result", "artifact.saved": "Contract saved",
+            "handoff.offered": "Handoff offered", "handoff.acknowledged": "Handoff acknowledged",
+            "run.completed": "Run completed", "run.failed": "Run failed", "run.interrupted": "Run interrupted"
+          };
+          for (const e of [...events].reverse()) {
+            const fields = [new Date(e.at).toLocaleTimeString(), "r" + e.revision, roleLabel[e.actor] || e.actor || "Studio",
+              kind[e.type] || e.type, e.requestedModel, e.reportedModel && "reported " + e.reportedModel,
+              e.round && "round " + e.round, e.httpStatus && "HTTP " + e.httpStatus, e.tool, e.outcome,
+              e.artifactHash && "artifact " + e.artifactHash.slice(0, 12),
+              e.baseArtifactHash && "base " + e.baseArtifactHash.slice(0, 12),
+              e.fromRole && e.toRole && ((roleLabel[e.fromRole] || e.fromRole) + " → " + (roleLabel[e.toRole] || e.toRole)),
+              Number.isFinite(e.durationMs) && e.durationMs + " ms",
+              Number.isFinite(e.inputTokens) && e.inputTokens + " input tokens",
+              Number.isFinite(e.outputTokens) && e.outputTokens + " output tokens", e.errorKind,
+              e.executionId && "run " + e.executionId.slice(0, 8)].filter(x => x !== false && x != null && x !== "");
+            textElement("li", fields.join(" · "), list);
+          }
+          detail.append(list);
+          activity.append(detail);
         }
         async function send(action) {
           busy = true;
@@ -195,7 +250,7 @@
           }
         }
         textElement("p", "Supervised discovery only. Corrections remain local until Run Maya sends them to the configured NVIDIA model. No code changes, reviewer verdict, or delivery is implied.", panel);
-        panel.append(feedback, controls, evidence);
+        panel.append(feedback, controls, activity, evidence);
         item.append(panel);
         save.disabled = run.disabled = accept.disabled = true;
         loadEvidence().catch(showError);
