@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { PROVIDERS } from "./providers.mjs";
+import { readStream } from "./agent.mjs";
 
 export function createFounderPilot({
   dir, inbox, orgDir, keyFile
@@ -84,14 +85,15 @@ export function createFounderPilot({
       `${PROVIDERS.nvidia.base}/chat/completions`,
       {
         method: "POST",
-        signal: AbortSignal.timeout(90000),
+        signal: AbortSignal.timeout(150000),
         headers: {
           Authorization: `Bearer ${key}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
           model,
-          max_tokens: 1800,
+          max_tokens: 1400,
+          stream: true,
           temperature: 0.2,
           messages: [
             {
@@ -114,8 +116,8 @@ export function createFounderPilot({
       );
     }
 
-    const data = await response.json();
-    const output = data.choices?.[0]?.message?.content;
+    const streamed = await readStream(response.body);
+    const output = streamed.text;
 
     if (typeof output !== "string" || !output.trim()) {
       throw new Error("Agent returned no usable artifact");
@@ -126,11 +128,11 @@ export function createFounderPilot({
       agent: agent.name,
       role: route.role,
       requestedModel: model,
-      reportedModel: data.model || null,
+      reportedModel: null,
       startedAt,
       completedAt: new Date().toISOString(),
-      inputTokens: data.usage?.prompt_tokens ?? null,
-      outputTokens: data.usage?.completion_tokens ?? null,
+      inputTokens: streamed.usage?.input ?? null,
+      outputTokens: streamed.usage?.output ?? null,
       cost: null,
       output
     };
@@ -186,12 +188,21 @@ export function createFounderPilot({
         createdAt: new Date().toISOString()
       };
 
-      revisions.push(record);
+      const failed = revisions.at(-1);
+
+      if (failed?.status === "failed" &&
+          failed.feedback === feedback.trim()) {
+        Object.assign(record, failed, { status: "running" });
+        delete record.error;
+        revisions[revisions.length - 1] = record;
+      } else {
+        revisions.push(record);
+      }
 
       try {
         save(requestId, revisions);
 
-        const discovery = await invoke(
+        const discovery = record.agents[0] || await invoke(
           "ai:discovery",
           [
             "Founder objective:",
@@ -210,7 +221,7 @@ export function createFounderPilot({
           ].join("\n")
         );
 
-        record.agents.push(discovery);
+        if (!record.agents.length) record.agents.push(discovery);
         record.status = "reviewing";
         save(requestId, revisions);
 
