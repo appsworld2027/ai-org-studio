@@ -1,4 +1,4 @@
-// The Garage: one private GitHub repo (studio-garage) where every AI keeps what it creates that is NOT product code
+// The Garage: one GitHub repo (studio-garage) where every AI keeps what it creates that is NOT product code
 // (notes, research, plans, screenshots, reports, mockups) plus the shared MEMORY, so any AI — Claude Code, Codex,
 // a free model, on any login, in any session — starts every chat knowing what happened before.
 //
@@ -35,6 +35,18 @@ export function makeGarage({ dir, repo = "", gh = "gh", log = () => {}, now = ()
   if (!repo) { try { const m = readFileSync(join(dir, ".git/config"), "utf8").match(/url\s*=\s*(?:https:\/\/github\.com\/|git@github\.com:)([^\s]+?)(?:\.git)?\s*$/m); if (m) repo = m[1]; } catch { /* not set up */ } }
   const productDir = (pid) => join(dir, pid);
   const ready = () => existsSync(join(dir, ".git"));
+  async function verifiedPushTarget() {
+    try {
+      const urls = (await run("git", ["-C", dir, "remote", "get-url", "--push", "--all", "origin"])).trim().split("\n");
+      if (urls.length !== 1) return null;
+      const url = urls[0];
+      const match = url.match(/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?$/i);
+      if (!match) return null;
+      const visibility = await run(gh, ["api", "--hostname", "github.com", `repos/${match[1]}`, "--jq", ".visibility"], { timeout: 5000 });
+      if (visibility.trim() === "private") return url;
+    } catch { /* An unavailable check also blocks publication. */ }
+    return null;
+  }
   function ensureProduct(p) {
     const d = productDir(p.id); mkdirSync(d, { recursive: true });
     for (const f of GARAGE_FOLDERS) mkdirSync(join(d, f), { recursive: true });
@@ -59,9 +71,9 @@ export function makeGarage({ dir, repo = "", gh = "gh", log = () => {}, now = ()
   }
   function rules(p) {
     return `## The Garage and shared memory (every AI in this Studio follows this)
-- The Garage is the folder ${productDir(p.id)} (private GitHub repo ${repo || "studio-garage"}, folder ${p.id}/). Save EVERY file you create that is not product code there — never in the product repo and never in /tmp: notes/ for notes and summaries, research/ for findings, plans/ for plans and specs drafts, reports/ for test and audit reports, mockups/ for HTML/image mockups, screenshots/ for screenshots. Name files YYYY-MM-DD-short-topic.ext.
+- The Garage is the folder ${productDir(p.id)} (GitHub repo ${repo || "studio-garage"}, folder ${p.id}/). Save EVERY file you create that is not product code there — never in the product repo and never in /tmp: notes/ for notes and summaries, research/ for findings, plans/ for plans and specs drafts, reports/ for test and audit reports, mockups/ for HTML/image mockups, screenshots/ for screenshots. Name files YYYY-MM-DD-short-topic.ext.
 - MEMORY.md there is shared by every AI and every login (Claude, Codex, free models). When the founder decides something, states a preference, or you learn a fact that stays true, add ONE short line to MEMORY.md under the right heading (newest first). Never put keys, passwords or tokens in the Garage.
-- The Studio saves the Garage to GitHub automatically after every reply and logs one journal line per turn; you do not need to commit it.
+- The Studio logs one journal line per turn and syncs only to a verified private GitHub repository. Keep sensitive data out of shared memory.
 - Product facts for the AI Org agents live in the product repo under docs/ai-memory/ and change only through a reviewed pull request.`;
   }
   // One line per turn, written by the Studio (not the AI) so it is always there.
@@ -86,16 +98,23 @@ export function makeGarage({ dir, repo = "", gh = "gh", log = () => {}, now = ()
     saving = saving.then(async () => {
       if (!ready()) return { ok: false, reason: "garage not set up" };
       ensureProduct(p); rebuildIndex(p);
+      const target = await verifiedPushTarget();
+      if (!target) {
+        const reason = "Garage sync blocked: origin must resolve to a single verified private GitHub repository";
+        log(reason);
+        return { ok: false, pushed: false, reason };
+      }
       const changed = (await run("git", ["-C", dir, "status", "--porcelain", "--untracked-files=all", "--", p.id]).catch(() => "")).split("\n").filter(Boolean).map((l) => l.slice(3).replace(/^"|"$/g, ""));
       let redacted = 0;
       for (const f of changed) { const abs = join(dir, f); try { if (!/\.(md|txt|html?|json|csv|ya?ml|js|ts|tsx|sql|sh|log)$/i.test(f) || statSync(abs).size > 2_000_000) continue; const r = redact(readFileSync(abs, "utf8")); if (r.count) { writeFileSync(abs, r.text); redacted += r.count; } } catch { /* gone */ } }
       if (!changed.length) return { ok: true, changed: 0 };
       await run("git", ["-C", dir, "add", "-A", "--", p.id]);
-      await run("git", ["-C", dir, "-c", "user.name=AI Org Studio", "-c", "user.email=studio@users.noreply.github.com", "commit", "-q", "-m", redact(message).text.slice(0, 200)]).catch(() => "");
-      const pushed = await run("git", ["-C", dir, "push", "-q", "origin", "HEAD"]).then(() => true).catch(async (e) => {
+      await run("git", ["-C", dir, "-c", "user.name=AI Org Studio", "-c", "user.email=studio@users.noreply.github.com", "commit", "-q", "-m", redact(message).text.slice(0, 200), "--only", "--", p.id]);
+      const pushed = await run("git", ["-C", dir, "push", "-q", target, "HEAD"]).then(() => true).catch(async (e) => {
         // Another machine pushed first: take theirs, keep ours, try once more.
-        await run("git", ["-C", dir, "pull", "-q", "--rebase", "-X", "theirs", "origin", "HEAD"]).catch(() => "");
-        return run("git", ["-C", dir, "push", "-q", "origin", "HEAD"]).then(() => true).catch(() => { log(`garage: push failed (${e.message}); will retry next save`); return false; });
+        await run("git", ["-C", dir, "pull", "-q", "--rebase", "-X", "theirs", target, "HEAD"]).catch(() => "");
+        if (await verifiedPushTarget() !== target) return false;
+        return run("git", ["-C", dir, "push", "-q", target, "HEAD"]).then(() => true).catch(() => { log(`garage: push failed (${e.message}); will retry next save`); return false; });
       });
       if (redacted) log(`garage: removed ${redacted} secret-looking value(s) before saving`);
       return { ok: true, changed: changed.length, pushed, redacted };

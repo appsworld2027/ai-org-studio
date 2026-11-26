@@ -93,7 +93,7 @@ test("secrets never reach the Garage", () => {
   assert.ok(!/ghp_a|sbp_0|abcd1234abcd/.test(r.text), r.text); assert.ok(r.count >= 3); assert.match(r.text, /normal text/);
   assert.equal(redact("A plain plan with no keys.").count, 0);
 });
-test("Garage: folders, shared memory pack for every AI (incl. AI Org memory), journal line per turn, saved to GitHub", async () => {
+test("Garage: folders, shared memory pack for every AI (incl. AI Org memory), journal line per turn, recovered in a fresh checkout", async () => {
   const base = tmp(), remote = join(base, "remote.git"), gdir = join(base, "studio-garage"), prod = join(base, "pp");
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]); execFileSync("git", ["clone", "-q", remote, gdir], { stdio: "ignore" });
   mkdirSync(join(prod, "docs/ai-memory"), { recursive: true }); writeFileSync(join(prod, "docs/ai-memory/LESSONS.md"), "# Lessons\n- Fixtures need a coach with two students.\n");
@@ -102,12 +102,14 @@ test("Garage: folders, shared memory pack for every AI (incl. AI Org memory), jo
   assert.ok(g.ready()); const d = g.ensureProduct(p);
   for (const f of ["notes", "research", "plans", "reports", "mockups", "screenshots", "journal"]) assert.ok(existsSync(join(d, f)), f);
   writeFileSync(join(d, "MEMORY.md"), readFileSync(join(d, "MEMORY.md"), "utf8").replace("## Decisions (newest first)\n", "## Decisions (newest first)\n- 2026-11-24 Founder: overdue fees go at the top of the Fees tab.\n"));
-  writeFileSync(join(d, "notes/2026-11-24-fees.md"), "# Fee screen notes\nkey sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789\n");
+  writeFileSync(join(d, "notes/2026-11-24-fees.md"), "# Fee screen notes\n");
   g.journal(p, { engine: "codex", model: "gpt-5.6", account: "ankit@example.com", ask: "Put overdue fees on top", did: "Changed FeeList.tsx and added a test" });
   const r = await g.save(p, "codex: put overdue fees on top");
-  assert.equal(r.pushed, true); assert.ok(r.redacted >= 1, "secret removed before saving");
-  const pushedNote = execFileSync("git", ["--git-dir", remote, "show", "main:parent-plus/notes/2026-11-24-fees.md"]).toString();
-  assert.ok(!pushedNote.includes("sk-ant-api03"), "the key never reached GitHub");
+  assert.equal(r.pushed, false, "an unverified remote cannot receive Studio saves");
+  g.rebuildIndex(p);
+  execFileSync("git", ["-C", gdir, "add", "--", p.id]);
+  execFileSync("git", ["-C", gdir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "Fictional test decision"]);
+  execFileSync("git", ["-C", gdir, "push", "-q", "origin", "HEAD"]);
   // A different AI, on a different login, in a new session, gets the same picture.
   const pack = g.memoryPack(p);
   assert.match(pack, /overdue fees go at the top/); assert.match(pack, /codex\/gpt-5\.6 \(ankit@…\) · asked: Put overdue fees on top/);
@@ -115,7 +117,32 @@ test("Garage: folders, shared memory pack for every AI (incl. AI Org memory), jo
   assert.match(g.rules(p), /never in the product repo and never in \/tmp/);
   // A second machine (another Cloud Shell, another laptop) sees the same Garage.
   const other = join(base, "other"); execFileSync("git", ["clone", "-q", remote, other], { stdio: "ignore" });
-  assert.match(readFileSync(join(other, "parent-plus/MEMORY.md"), "utf8"), /overdue fees go at the top/);
+  const recovered = makeGarage({ dir: other }).memoryPack(p);
+  assert.match(recovered, /overdue fees go at the top/);
+  assert.doesNotMatch(makeGarage({ dir: other }).memoryPack({ ...p, id: "unrelated", dir: base }), /overdue fees/);
+});
+test("Garage verifies the actual push destination and blocks public or unverifiable repositories", async () => {
+  const dir = tmp();
+  execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "remote", "add", "origin", "https://github.com/example/private.git"]);
+  execFileSync("git", ["-C", dir, "remote", "set-url", "--push", "origin", "https://github.com/example/public.git"]);
+  const gh = join(dir, "fake-gh");
+  const p = { id: "fictional", name: "Fictional", repo: "example/fictional", dir };
+  const garage = makeGarage({ dir, repo: "example/private", gh });
+  for (const reply of ["echo public", "exit 1"]) {
+    writeFileSync(gh, `#!/bin/sh
+[ "$4" = repos/example/public ] || exit 2
+touch "${dir}/checked"
+${reply}
+`);
+    chmodSync(gh, 0o700);
+    const result = await garage.save(p, "Fictional decision");
+    assert.equal(result.ok, false);
+    assert.equal(result.pushed, false);
+    assert.ok(existsSync(join(dir, "checked")));
+    assert.ok(existsSync(join(dir, p.id, "MEMORY.md")));
+    assert.equal(execFileSync("git", ["-C", dir, "diff", "--cached", "--name-only"]).toString(), "");
+  }
 });
 test("free/other models can write into the Garage with garage/… paths, and nowhere else outside the product", () => {
   const prod = tmp(), gar = tmp(); const root = { product: prod, garage: gar };
