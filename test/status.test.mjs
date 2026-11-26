@@ -59,7 +59,7 @@ test("buildBoard: a running agent run is attributed to the item it works on", ()
     runs: [{ name: "AI agents", status: "in_progress", display_title: "Discovery: Overdue fees [needs-you-fees-overdue]", run_started_at: "2026-11-23T10:35:00Z", html_url: "https://r/1" },
            { name: "QA lab (personas + journeys + probes)", status: "in_progress", run_started_at: "2026-11-23T10:30:00Z", html_url: "https://r/2" },
            { name: "AI agents", status: "completed", display_title: "AI agents" }] });
-  assert.deepEqual(b.working[0], { who: "Quinn, tester", what: "Overdue fees in Needs you", minutes: 5, url: "https://r/1" });
+  assert.deepEqual(b.working[0], { who: "Quinn, tester", what: "Overdue fees in Needs you", minutes: 5, url: "https://r/1", tool: "Unknown" });
   assert.equal(b.working[1].who, "QA lab"); assert.equal(b.working[1].minutes, 10);
   assert.equal(b.working.length, 2);
 });
@@ -109,4 +109,11 @@ test("founder overview reports observed delivery and exact workflow evidence", (
   assert.deepEqual(result.overview, { completed: 1, ongoing: 1, blocked: 1, upcoming: 1 });
   assert.deepEqual(result.decisions.map(({ number, assignees }) => [number, assignees]), [[1, ["owner"]]]);
   assert.deepEqual(result.quality, [{ name: "Quality", conclusion: "failure", commit: "abc", url: "https://example.test/1" }]);
+});
+
+import { toolFromSteps } from "../server/status.mjs";
+test("toolFromSteps names the engine that actually ran, else Unknown", () => {
+  assert.equal(toolFromSteps([{ name: "Run agent with Claude Code", conclusion: "skipped" }, { name: "Run agent with the free engine (Claude Code via FCC + NVIDIA NIM)", status: "completed", conclusion: "success" }, { name: "Run agent with Codex (experimental)", conclusion: "skipped" }]), "Free engine (NVIDIA NIM)");
+  assert.equal(toolFromSteps([{ name: "Run agent with Codex (experimental)", status: "in_progress" }]), "Codex");
+  assert.equal(toolFromSteps([]), "Unknown");
 });

@@ -90,6 +90,8 @@ export function makeEngineChats({ store, env, rulesFor, bins = {}, codexConfig =
       return ok;
     },
     interrupt(p, chatId) { const L = get(p, chatId); L?.engine?.interrupt(); },
+    // Live Studio sessions: which tool and model are open, and whether they are working right now.
+    sessions(pid) { return [...live.entries()].filter(([k, L]) => k.startsWith(`${pid}:`) && (L.engine || L.busy)).map(([, L]) => ({ tool: L.chat.engine === "claude" ? "Claude Code (Studio chat)" : "Codex (Studio chat)", model: L.chat.model || L.chat.modelShown || "default", title: L.chat.title, busy: !!L.busy })); },
     stopAll() { for (const L of live.values()) L.engine?.stop(); },
   };
 }

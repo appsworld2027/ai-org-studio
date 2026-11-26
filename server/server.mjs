@@ -139,7 +139,9 @@ async function loadBoard(p) {
       }
     } catch { /* no preview yet */ }
   }
-  const b = buildBoard({ backlog, issues, runs: runs?.workflow_runs || [], previews });
+  const wr = runs?.workflow_runs || [], agentRuns = wr.filter((r) => /AI agents/i.test(r.name || "")).slice(0, 8), jobs = {};
+  await Promise.all(agentRuns.map(async (r) => { try { jobs[r.id] = ((await ghJson(`${R}/actions/runs/${r.id}/jobs`))?.jobs || []).flatMap((j) => j.steps || []); } catch { /* tool stays Unknown */ } }));
+  const b = buildBoard({ backlog, issues, runs: wr, previews, jobs });
   return { ...b, aiOrg: issues.some((i) => i.labels.some((l) => String(l.name).startsWith("ai:"))) || backlog.length > 0, feed: feedFrom(comments), app: appTarget({ productionUrl: p.productionUrl, demo: b.demo }), updatedAt: new Date().toISOString() };
 }
 async function board(p) {
@@ -383,7 +385,7 @@ const server = http.createServer(async (req, res) => {
     }
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/board$/))) {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
-      const b = await board(p); if (!b.data) return json(res, 503, { error: b.error || "not loaded", updatedAt: null });
+      const b = await board(p); if (b.data) b.data.sessions = engineChats.sessions(p.id); if (!b.data) return json(res, 503, { error: b.error || "not loaded", updatedAt: null });
       return json(res, 200, { ...b.data, stale: !!b.error, error: b.error });
     }
     if ((m = path.match(/^\/proto\/([a-z0-9-]+)\/(.+)$/))) {
