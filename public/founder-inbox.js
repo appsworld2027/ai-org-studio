@@ -15,7 +15,7 @@
 
   const notice = document.createElement("p");
   notice.textContent =
-    "Tasks are saved locally. Background execution is disabled.";
+    "Tasks are saved locally. Unattended AI Org execution is disabled; the synthetic pilot is supervised.";
 
   const form = document.createElement("form");
   const title = document.createElement("input");
@@ -81,78 +81,124 @@
       if (task.requestId === "studio-pilot-001") {
         const panel = document.createElement("section");
         const feedback = document.createElement("textarea");
-        feedback.placeholder = "What should Maya correct?";
+        feedback.placeholder = "What should Maya correct? (Saved before any model call)";
         feedback.maxLength = 2000;
         feedback.rows = 3;
         feedback.style.width = "100%";
-
-        const run = document.createElement("button");
-        run.textContent = "Run discovery / request revision";
-        run.type = "button";
-
+        const controls = document.createElement("div");
         const evidence = document.createElement("div");
+        let latest = null, busy = false, available = false, timer;
 
-        async function loadEvidence() {
-          const response = await fetch("/api/founder-pilot");
-          if (!response.ok) return;
-
-          const { revisions } = await response.json();
-          evidence.replaceChildren();
-
-          for (const revision of revisions) {
-            const h = document.createElement("h4");
-            h.textContent =
-              `Revision ${revision.revision}: ${revision.status}`;
-            evidence.append(h);
-
-            for (const agent of revision.agents) {
-              const heading = document.createElement("strong");
-              heading.textContent =
-                `${agent.agent} — ${agent.requestedModel}`;
-
-              const output = document.createElement("pre");
-              output.style.whiteSpace = "pre-wrap";
-              output.textContent = agent.output;
-
-              evidence.append(heading, output);
-            }
-          }
+        function control(label, action) {
+          const button = document.createElement("button");
+          button.textContent = label;
+          button.type = "button";
+          button.onclick = action;
+          controls.append(button);
+          return button;
         }
 
-        run.onclick = async () => {
-          run.disabled = true;
-          run.textContent = "Agents working…";
-
+        const save = control("Save correction", () => send("save"));
+        const run = control("Run Maya", () => send("run"));
+        const accept = control("Accept latest contract", () => send("accept"));
+        control("Refresh status", () => loadEvidence().catch(showError));
+        feedback.oninput = () => updateButtons();
+        function showError(error) { status.textContent = error.message; }
+        function updateButtons() {
+          const running = latest?.status === "running";
+          save.disabled = !available || busy || running || !feedback.value.trim();
+          run.disabled = !available || busy || running || !!feedback.value.trim() || !!(latest && !["queued", "failed", "interrupted"].includes(latest.status));
+          accept.disabled = !available || busy || !!feedback.value.trim() || latest?.status !== "founder-review" || !!latest?.contract?.openQuestions?.length;
+          run.textContent = running ? "Maya working…" : "Run Maya";
+        }
+        function textElement(tag, text, parent = evidence) {
+          const el = document.createElement(tag);
+          el.textContent = text;
+          parent.append(el);
+          return el;
+        }
+        async function loadEvidence() {
+          clearTimeout(timer);
+          const response = await fetch("/api/founder-pilot");
+          if (!response.ok) {
+            available = false;
+            updateButtons();
+            state.textContent = "Supervised pilot unavailable. No agent work running.";
+            return;
+          }
+          const { revisions } = await response.json();
+          available = true;
+          latest = revisions.at(-1) || null;
+          state.textContent = latest
+            ? "Revision " + latest.revision + " · " + latest.status
+            : "Ready for supervised discovery";
+          evidence.replaceChildren();
+          for (const r of [...revisions].reverse()) {
+            const card = document.createElement("section");
+            textElement("h4", "Revision " + r.revision + " — " + r.status, card);
+            if (r.feedback) textElement("p", "Founder correction: " + r.feedback, card);
+            if (r.step) textElement("p", r.step, card);
+            if (r.error) textElement("p", r.error, card);
+            if (r.requestedModel) textElement("small",
+              "Requested model: " + r.requestedModel + " · Read-tool requests: " + (r.toolCalls || 0), card);
+            if (r.contract) {
+              textElement("p", r.contract.summary, card);
+              for (const [label, lines] of [
+                ["Acceptance criteria", r.contract.acceptanceCriteria],
+                ["Edge cases", r.contract.edgeCases],
+                ["Open founder questions", r.contract.openQuestions]
+              ]) {
+                textElement("strong", label, card);
+                const list = document.createElement("ul");
+                for (const line of lines) textElement("li", line, list);
+                if (!lines.length) textElement("li", "None", list);
+                card.append(list);
+              }
+              for (const agent of r.agents || []) textElement("small",
+                agent.agent + " · " + agent.requestedModel + " · " +
+                (agent.inputTokens ?? "unknown") + " input / " +
+                (agent.outputTokens ?? "unknown") + " output tokens (reported)", card);
+            }
+            if (r.attempts?.length) textElement("p",
+              r.attempts.length + " incomplete attempt(s) preserved; not counted as delivered.", card);
+            evidence.append(card);
+          }
+          updateButtons();
+          if (latest?.status === "running" && dialog.open && panel.isConnected) {
+            timer = setTimeout(() => loadEvidence().catch(showError), 2500);
+          }
+        }
+        async function send(action) {
+          busy = true;
+          updateButtons();
           try {
             const response = await fetch("/api/founder-pilot", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                requestId: task.requestId,
-                feedback: feedback.value
-              })
+              body: JSON.stringify({ requestId: task.requestId, action,
+                revision: latest?.revision ?? null,
+                ...(action === "save" ? { feedback: feedback.value } : {}) })
             });
-
             const result = await response.json();
-
-            if (!response.ok) {
-              throw new Error(result.error || "Pilot failed");
-            }
-
-            feedback.value = "";
+            if (!response.ok) throw new Error(result.error || "Pilot action failed");
+            if (action === "save") feedback.value = "";
+            status.textContent = action === "save" ? "Correction saved locally; no model called."
+              : action === "accept" ? "Contract accepted locally. No code, release or merge approved."
+              : "Maya started. This panel updates automatically.";
             await loadEvidence();
           } catch (error) {
-            status.textContent = error.message;
-            await loadEvidence();
+            showError(error);
+            await loadEvidence().catch(showError);
           } finally {
-            run.disabled = false;
-            run.textContent = "Run discovery / request revision";
+            busy = false;
+            updateButtons();
           }
-        };
-
-        panel.append(feedback, run, evidence);
+        }
+        textElement("p", "Supervised discovery only. Corrections remain local until Run Maya sends them to the configured NVIDIA model. No code changes, reviewer verdict, or delivery is implied.", panel);
+        panel.append(feedback, controls, evidence);
         item.append(panel);
-        loadEvidence().catch(() => {});
+        save.disabled = run.disabled = accept.disabled = true;
+        loadEvidence().catch(showError);
       }
 
       tasks.append(item, document.createElement("hr"));

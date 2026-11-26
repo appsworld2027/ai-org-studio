@@ -137,7 +137,8 @@ export function effortFields(providerId, effort) {
 }
 // apps: [{ name, app, tool, description, schema, session, readOnly }] from mcp-client.openApps — connected apps (MCP).
 // roots: extra folders the agent may read/write besides the product (e.g. the Garage).
-export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [] }) {
+export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [], allowedTools = null, maxTokens }) {
+  const enabledTools = toolSchemas().filter(t => !allowedTools || allowedTools.includes(t.function.name));
   const appSchemas = apps.map((a) => ({ type: "function", function: { name: a.name, description: `[${a.app}] ${a.description}`, parameters: a.schema?.type === "object" ? a.schema : { type: "object", properties: {} } } }));
   let extra = effortFields(provider.id, effort);
   for (let round = 0; round < maxRounds; round++) {
@@ -145,7 +146,7 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
     const call = () => fetchImpl(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,
       headers: { "Content-Type": "application/json", ...(provider.key ? { Authorization: `Bearer ${provider.key}` } : {}), ...(provider.extraHeaders || {}) },
-      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...messages], tools: [...toolSchemas(), ...appSchemas], tool_choice: "auto", ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra }),
+      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...messages], tools: [...enabledTools, ...appSchemas], tool_choice: "auto", ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra, ...(maxTokens ? { max_tokens: maxTokens } : {}) }),
     });
     let res = await call();
     // Some models refuse a thinking level they do not support: retry once without it and say so.
@@ -174,7 +175,7 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
         emit({ t: "tool", id: c.id, name: c.name, args, ask: false, app: a.app, tool: a.tool });
         try { const r = await a.session.callTool(a.tool, args); result = (r.isError ? "The app returned an error: " : "") + r.text; } catch (e) { result = `Error: ${e.message}`; }
       }
-      else if (!TOOLS.some((t) => t.name === c.name)) result = `There is no tool named ${c.name}.`;
+      else if (!enabledTools.some((t) => t.function.name === c.name)) result = allowedTools ? `Tool ${c.name} is not available in this session.` : `There is no tool named ${c.name}.`;
       else if (c.name === "ask_user") {
         const q = normalizeQuestion(args);
         if (!q) result = "ask_user needs a question and 2-4 options. Try again.";
