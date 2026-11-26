@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { runTurn } from "../server/agent.mjs";
 import { PROVIDERS } from "../server/providers.mjs";
 import { createExecutionJournal, artifactDigest, failureKind } from "../server/execution-journal.mjs";
+import { BUILD_UNITS, sourceRange } from "./founder-build-units.mjs";
 
 const ID = "studio-pilot-001", REV = 2;
 const [historyDir, orgDir, keyFile, deliveryDir, expected] = process.argv.slice(2);
@@ -79,16 +80,16 @@ const parse = (s, inputHash, directSource = false) => {
         typeof p.summary !== "string" || !p.summary.trim() || /^REPLACE/i.test(p.summary)) return null;
     if (directSource && p.verdict === "COMPLETE" &&
         (typeof p.source !== "string" || p.source.length < 60 || p.source.length > 12000 ||
-         !p.source.includes(directSource.id) || !/\btest\s*\(/.test(p.source))) return null;
+         (directSource.kind!=="patch" && (!p.source.includes(directSource.id) || !/\btest\s*\(/.test(p.source))))) return null;
     return { inputArtifactHash: p.inputArtifactHash, verdict:p.verdict, summary:p.summary,
       ...(directSource && p.verdict==="COMPLETE"?{source:p.source}:{}) };
   } catch { return null; }
 };
 async function runRole({stage: label, role, previous, paths, brief, requireIndependent = false, rounds = 10, directSource = false}) {
-  const s = { stage: label, role, ...(directSource?{criterionId:directSource.id}:{}), executionId: randomUUID(), sourceExecutionId: previous.executionId,
+  const s = { stage: label, role, ...(directSource?(directSource.kind==="patch"?{buildUnit:directSource.id}:{criterionId:directSource.id}):{}), executionId: randomUUID(), sourceExecutionId: previous.executionId,
     inputArtifactHash: previous.hash, status: "running", startedAt: new Date().toISOString() };
   state.stages.push(s); save(); print("START " + role + " " + label + (directSource?" "+directSource.id:""));
-  const send = (type, fields) => log(type, s, {...(directSource?{criterionId:directSource.id}:{}),...fields});
+  const send = (type, fields) => log(type, s, {...(directSource?(directSource.kind==="patch"?{buildUnit:directSource.id}:{criterionId:directSource.id}):{}),...fields});
   let response="";
   try {
     send("stage.started");
@@ -97,17 +98,19 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
     if (chosen.action !== "run" || chosen.role !== role || chosen.engine !== "free") throw Error("Expected free role unavailable");
     const model = chosen.free_model.replace(/^nvidia_nim\//,"");
     if (!PROVIDERS.nvidia.models.includes(model)) throw Error("Model outside approved local allowlist");
-    if (requireIndependent && state.stages.find(a=>a.stage==="ai:build")?.requestedModel === model)
+    if (requireIndependent && state.stages.some(a=>a.stage==="ai:build" && a.status==="completed" && a.requestedModel===model))
       throw Error("Independent review model unavailable; stop for review");
     s.requestedModel = model;
     send("route.selected",{engine:"free",requestedModel:model}); save();
     const profile = readFileSync(join(orgDir,"org/agents",role+".md"),"utf8");
     const schema = JSON.stringify({inputArtifactHash:previous.hash,verdict:(paths.length||directSource)?"COMPLETE":"APPROVE",summary:"REPLACE with evidence, gaps and file names"});
     const responseFormat = directSource ? schema +
-      "\nThen, on the next line, a single fenced javascript code block containing the complete runnable test source (no JSON escaping, no placeholders, no prose outside the receipt and code)." : schema;
+      "\nThen, on the next line, a single fenced javascript code block containing " +
+      (directSource.kind==="patch"?"the complete replacement for the specified source range":"the complete runnable test source") +
+      " (no JSON escaping, no placeholders, no prose outside the receipt and code)." : schema;
     const initialHashes = Object.fromEntries(paths.map(p=>[p,pathHash(p)]));
-    const messages = [{role:"user",content:(directSource?"Explicit execution only. Never start a model on saving feedback. Use the supplied test helpers.":"") + (directSource?"":contractContext) + "\n\nPrior stage artifact: "+JSON.stringify(previous.artifact) +
-      (label==="ai:build"?"\nEngineering plan: "+JSON.stringify(arjun.artifact):"") +
+    const messages = [{role:"user",content:(directSource?"Explicit execution only. Never start a model on saving feedback. Return only the requested replacement/source, not a claim.":"") + (directSource?"":contractContext) + "\n\nPrior stage artifact: "+JSON.stringify(previous.artifact) +
+      (label==="ai:build"&&!directSource?"\nEngineering plan: "+JSON.stringify(arjun.artifact):"") +
       "\n\n" + brief + "\nExact final response shape: " + responseFormat}];
     send("context.prepared",{baseArtifactHash:previous.hash,contextChars:messages[0].content.length});
     let done=false, failure, httpOk=false, modelResult=false;
@@ -121,7 +124,7 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
       },
       maxRounds:rounds,maxTokens:directSource?3500:5000,signal:AbortSignal.timeout(directSource?180000:900000),
       finalInstruction:directSource
-        ?"Return the one-line JSON receipt followed by a fenced javascript block containing the actual executable source, not a description or claim of file creation. No tools."
+        ?"Return the one-line JSON receipt followed by the exact requested fenced JavaScript source, not a description. No tools."
         :"Complete your final JSON receipt now, using the exact inputArtifactHash. Report incomplete work if files did not change. No further tools.",
       validateFinal: text=> {
         const receipt=parse(text,previous.hash,directSource);
@@ -131,7 +134,7 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
           (s.rejectedResponses ||= []).push({at:new Date().toISOString(),output:text.slice(0,80000)});
           save();
           messages.push({role:"user", content:directSource
-            ?"Your response is incomplete. Return the exact one-line JSON receipt followed by the criterion test block."
+            ?"Your response is incomplete. Return the exact one-line JSON receipt followed by the requested JavaScript source block."
             :"Your output lacks the exact receipt or actual file changes. Report incomplete work truthfully; never claim writes that did not occur."});
         }
         return valid;
@@ -148,23 +151,45 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
     if (!done||failure||!httpOk||!modelResult||!receipt) throw Error(failure||"Invalid artifact: no valid model receipt");
     let fragmentFiles = {};
     if (receipt.verdict==="COMPLETE" && directSource) {
-      const rel="fragments/"+directSource.id+".mjs", dest=join(runDir,rel);
-      writeFileSync(dest,receipt.source,{mode:0o600,flag:"wx"});
-      delete receipt.source;
-      const checked=spawnSync(process.execPath,["--check",dest],{cwd:runDir,
-        env:{PATH:process.env.PATH,HOME:scratch,TMPDIR:scratch,CI:"1"},encoding:"utf8",timeout:10000});
-      if(checked.status!==0) {
-        writeFileSync(join(runDir,directSource.id+"-syntax.log"),checked.stderr||"Syntax check failed",{mode:0o600});
-        throw Error("Invalid artifact: generated criterion test did not pass syntax check");
+      if(directSource.kind==="patch"){
+        const {target,old,beforeHash,id}=directSource;
+        if(!APP.includes(target)||pathHash(target)!==beforeHash)throw Error("Source changed before patch application");
+        const path=join(candidate,target), current=readFileSync(path,"utf8");
+        if(!current.includes(old)||current.indexOf(old)!==current.lastIndexOf(old))throw Error("Patch source range missing or ambiguous");
+        const replacement=receipt.source.endsWith("\n")?receipt.source:receipt.source+"\n";
+        if(replacement.trim()===old.trim())throw Error("Invalid artifact: model returned unchanged source");
+        const updated=current.replace(old,()=>replacement);
+        const checkpoint=join(runDir,"build-checkpoints",id+".mjs");
+        writeFileSync(checkpoint,updated,{mode:0o600,flag:"wx"});
+        delete receipt.source;
+        const checked=spawnSync(process.execPath,["--check",checkpoint],{cwd:runDir,
+          env:{PATH:process.env.PATH,HOME:scratch,TMPDIR:scratch,CI:"1"},encoding:"utf8",timeout:10000});
+        if(checked.status!==0){
+          writeFileSync(join(runDir,id+"-syntax.log"),checked.stderr||"Syntax check failed",{mode:0o600});
+          throw Error("Invalid artifact: replacement would break source syntax");
+        }
+        writeFileSync(path,updated,{mode:0o600});
+        fragmentFiles[target]=pathHash(target);
+      }else{
+        const rel="fragments/"+directSource.id+".mjs",dest=join(runDir,rel);
+        writeFileSync(dest,receipt.source,{mode:0o600,flag:"wx"});
+        delete receipt.source;
+        const checked=spawnSync(process.execPath,["--check",dest],{cwd:runDir,
+          env:{PATH:process.env.PATH,HOME:scratch,TMPDIR:scratch,CI:"1"},encoding:"utf8",timeout:10000});
+        if(checked.status!==0){
+          writeFileSync(join(runDir,directSource.id+"-syntax.log"),checked.stderr||"Syntax check failed",{mode:0o600});
+          throw Error("Invalid artifact: generated criterion test did not pass syntax check");
+        }
+        fragmentFiles[rel]=createHash("sha256").update(readFileSync(dest)).digest("hex");
       }
-      fragmentFiles[rel]=createHash("sha256").update(readFileSync(dest)).digest("hex");
     }
     if(receipt.verdict==="COMPLETE" && paths.length &&
        !paths.some(p=>pathHash(p)!==initialHashes[p])) throw Error("Invalid artifact: agent claimed completion without changing an authorized file");
     if (requireIndependent) {
-      const builder = state.stages.find(a=>a.stage==="ai:build");
-      if (!builder?.reportedModel || !s.reportedModel ||
-          !PROVIDERS.nvidia.models.includes(s.reportedModel) || builder.reportedModel === s.reportedModel)
+      const builders = state.stages.filter(a=>a.stage==="ai:build" && a.status==="completed");
+      if (!builders.length || !s.reportedModel ||
+          !PROVIDERS.nvidia.models.includes(s.reportedModel) ||
+          builders.some(b=>!b.reportedModel||b.reportedModel===s.reportedModel))
         throw Error("Provider model independence not confirmed");
     }
     s.artifact={receipt,files:{...fragmentFiles,...Object.fromEntries(paths.map(p=>[p,pathHash(p)]))}};
@@ -287,11 +312,65 @@ async function authorTests(){
   print("LOCKED TEST SUITE "+state.fragments.length+" criteria");
   return {role:"studio",executionId:suite.executionId,hash,artifact};
 }
+async function authorBuild(locked){
+  state.buildUnits=[];
+  state.buildPlanHash=artifactDigest(BUILD_UNITS);
+  mkdirSync(join(runDir,"build-checkpoints"),{mode:0o700});
+  let old, oldEvents;
+  const oldDir=process.env.STUDIO_DELIVERY_REUSE_DIR;
+  if(oldDir&&existsSync(join(oldDir,"state.json"))){
+    const p=JSON.parse(readFileSync(join(oldDir,"state.json"),"utf8"));
+    if(p.status==="stopped"&&p.contractHash===expected&&p.buildPlanHash===state.buildPlanHash&&
+       p.lockedSuite?.artifact?.files?.[TEST]===locked&&JSON.stringify(p.baselineHashes)===JSON.stringify(before)){
+      old=p;oldEvents=createExecutionJournal(oldDir).read(100000);if(oldEvents.invalidLines){old=null;oldEvents=null;}
+    }
+  }
+  let previousExecution=state.lockedSuite.executionId;
+  for(const unit of BUILD_UNITS){
+    const input=readFileSync(join(candidate,unit.path),"utf8"),range=sourceRange(input,unit),beforeHash=pathHash(unit.path);
+    const oldUnit=old?.buildUnits?.find(u=>u.id===unit.id&&u.path===unit.path&&u.beforeHash===beforeHash);
+    const checkpoint=join(runDir,"build-checkpoints",unit.id+".mjs");
+    if(oldUnit&&existsSync(join(oldDir,"build-checkpoints",unit.id+".mjs"))){
+      const oldStage=old.stages.find(s=>s.executionId===oldUnit.executionId&&s.status==="completed");
+      const digest=createHash("sha256").update(readFileSync(join(oldDir,"build-checkpoints",unit.id+".mjs"))).digest("hex");
+      const events=oldEvents.events.filter(e=>e.executionId===oldUnit.executionId);
+      const completed=events.some(e=>e.type==="stage.completed"&&e.artifactHash===oldUnit.artifactHash)&&
+        events.some(e=>e.type==="handoff.received"&&e.artifactHash===oldStage?.inputArtifactHash);
+      const reused=oldStage?.reused&&events.some(e=>e.type==="stage.reused"&&e.artifactHash===oldUnit.artifactHash);
+      if((completed||reused)&&oldStage?.artifact?.files?.[unit.path]===digest&&digest===oldUnit.afterHash&&artifactDigest(oldStage.artifact)===oldUnit.artifactHash){
+        const bytes=readFileSync(join(oldDir,"build-checkpoints",unit.id+".mjs"));
+        writeFileSync(checkpoint,bytes,{mode:0o600,flag:"wx"});writeFileSync(join(candidate,unit.path),bytes,{mode:0o600});
+        state.buildUnits.push(oldUnit);state.stages.push({...oldStage,reused:true});save();
+        log("stage.reused",oldStage,{actor:"studio",artifactHash:oldUnit.artifactHash,buildUnit:unit.id});
+        previousExecution=oldUnit.executionId; print("REUSED "+unit.id);continue;
+      }
+    }
+    const bundle={contractArtifactHash:expected,lockedTestHash:locked,id:unit.id,path:unit.path,beforeHash,
+      requirement:unit.requirement,sourceRange:range,
+      relevantLockedTests:unit.ac.map(id=>readFileSync(join(runDir,"fragments",id+".mjs"),"utf8"))};
+    const upstream={stage:"ai:build",role:"studio",executionId:randomUUID(),sourceExecutionId:previousExecution};
+    const hash=artifactDigest(bundle);
+    writeFileSync(join(runDir,"build-checkpoints",unit.id+"-input.json"),JSON.stringify(bundle),{mode:0o600,flag:"wx"});
+    log("artifact.saved",upstream,{artifactHash:hash,buildUnit:unit.id});
+    const step=await runRole({stage:"ai:build",role:"dev-coder",previous:{role:"studio",executionId:upstream.executionId,hash,artifact:bundle},
+      paths:[],rounds:1,directSource:{kind:"patch",id:unit.id,target:unit.path,old:range,beforeHash},
+      brief:"Implement only "+unit.id+" according to the incoming sourceRange and requirement. Return the COMPLETE REPLACEMENT for that range, not the entire file or an edit command. Preserve matching indentation and surrounding braces. The runner will apply it exactly, check complete file syntax, fingerprint and checkpoint it. Do not modify tests, claim test execution, or add unrelated features."});
+    requireVerdict(step,"COMPLETE");
+    if(pathHash(TEST)!==locked)throw Error("Locked tests changed");
+    const afterHash=pathHash(unit.path);
+    state.buildUnits.push({id:unit.id,path:unit.path,beforeHash,afterHash,executionId:step.executionId,artifactHash:step.hash,originRun:runDir});
+    previousExecution=step.executionId;save();
+  }
+  const artifact={contractArtifactHash:expected,lockedTestHash:locked,units:state.buildUnits,
+    files:Object.fromEntries(APP.filter(p=>pathHash(p)!==before[p]).map(p=>[p,pathHash(p)]))};
+  const hash=artifactDigest(artifact),suite={stage:"ai:build",role:"studio",executionId:randomUUID(),sourceExecutionId:previousExecution};
+  writeFileSync(join(runDir,"build-manifest.json"),JSON.stringify(artifact),{mode:0o600,flag:"wx"});
+  log("artifact.saved",suite,{artifactHash:hash});state.buildArtifact={executionId:suite.executionId,artifactHash:hash,artifact};save();
+  print("BUILD CHECKPOINTS "+state.buildUnits.length+" units");
+  return {role:"studio",executionId:suite.executionId,hash,artifact};
+}
 try {
   save();
-  const source=readFileSync(join(candidate,"server/founder-pilot.mjs"),"utf8");
-  const runStart=source.indexOf("  function run(");
-  const stateStart=source.indexOf("export function createFounderPilot(");
   const tests=await authorTests();
   const locked=pathHash(TEST);
   if (!locked) throw Error("Quinn did not write executable tests");
@@ -302,9 +381,7 @@ try {
     !/ERR_ASSERTION|Outside pilot scope|Only the synthetic pilot is enabled|A supervised agent is already working/i.test(baseline.report)||
     /ERR_MODULE_NOT_FOUND|SyntaxError|ERR_ACCESS_DENIED/.test(baseline.report))
     throw Error("Baseline did not demonstrate a feature-related failure; tests need review");
-  const build=await runRole({stage:"ai:build",role:"dev-coder",previous:tests,paths:APP,rounds:13,
-    brief:"Implement the approved contract in existing Studio code. The actual locked test source and public API excerpts are supplied below; do not spend turns re-reading those. Start targeted edit_file changes early. Do not edit tests. Prioritize per-task shared revision state while async work runs (avoid stale writes), requestId isolation at API and UI, explicit run authorization, and immutable accepted history. Preserve existing tests. Use targeted edit_file rather than rewriting large files. Baseline evidence: "+baseline.report.slice(0,12000)+"\nLocked test source:\n"+testSource+"\nExisting public API excerpts:\n"+source.slice(stateStart,stateStart+3400)+"\n"+source.slice(runStart,runStart+11000)});
-  requireVerdict(build,"COMPLETE");
+  const build=await authorBuild(locked);
   if(pathHash(TEST)!==locked) throw Error("Locked acceptance tests changed");
   state.changedPaths=APP.filter(p=>pathHash(p)!==before[p]);save();
   if(!state.changedPaths.length) throw Error("Dev did not change product source");

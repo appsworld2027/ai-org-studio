@@ -148,3 +148,25 @@ An explicit retry can reuse verified fragments from a stopped run via
 `STUDIO_DELIVERY_REUSE_DIR` if contract, QA artifact, fixture and source
 fingerprints match. The suite exercises backend behavior; full browser
 acceptance and regression gates are still required before founder testing.
+
+### Build output-limit recovery
+
+The next live attempt completed all four Quinn fragments and demonstrated
+four failing acceptance tests on the unchanged baseline. Dev read seven
+files but wrote none, then reached the model output limit. Keep the locked
+tests and the same free role route. Do not repeat the monolithic build.
+
+The supervised runner now supplies eight bounded source ranges (task
+isolation, state, commands, feedback, model context, HTTP and UI), one
+request per range. Each Dev receipt references the incoming bundle digest;
+the model must supply actual replacement source. Studio verifies the
+expected file digest and unambiguous range, checks whole-file syntax, and
+persists a private checkpoint and metadata event. A replacement is not
+proof the feature works. Only the unchanged acceptance suite passing
+followed by the independent review gates can produce a reviewed candidate.
+
+An explicit retry may reuse completed build units from a stopped trial
+only when the build-plan digest, contract, locked suite, baseline file
+digests, input source digest, checkpoint digest and journal receipts match.
+The run still starts from a fresh candidate. No changes go into the active
+Studio, and no paid fallback, unattended execution or merge is enabled.
