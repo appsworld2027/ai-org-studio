@@ -571,8 +571,10 @@
     for (const w of b.working) {
       const cls = /QA lab/.test(w.who) ? "av qa" : /loop/i.test(w.who) ? "av loop" : "av";
       run.append(el("a", { class: "runner", href: w.url, target: "_blank", rel: "noopener" }, el("span", { class: cls, text: initials(w.who) }),
-        el("span", {}, el("b", { text: w.who }), el("small", { text: `${w.what} · ${w.minutes} min` }))));
+        el("span", {}, el("b", { text: w.who }), el("small", { text: `${w.what} · ${w.minutes} min · on ${w.tool || "Unknown"}` }))));
     }
+    for (const s of b.sessions || []) run.append(el("div", { class: "runner" }, el("span", { class: "av", text: "ST" }), el("span", {}, el("b", { text: s.busy ? "Studio chat (working)" : "Studio chat (open)" }), el("small", { text: `${s.title} · on ${s.tool} · ${s.model}` }))));
+    const rec = $("#recentRuns"); if (rec) rec.replaceChildren(...(b.recent || []).map((r) => el("li", {}, el("a", { href: r.url, target: "_blank", rel: "noopener", text: `${r.title} · ${r.conclusion || "?"} · on ${r.tool}` }))));
     const badge = $("#workingBadge"); badge.hidden = !b.working.length; badge.textContent = `${b.working.length} working`;
     $("#waitingWrap").hidden = !b.decisions.length && !b.demo;
     $("#waiting").replaceChildren(...b.decisions.map((item) => el("div", { class: "wait" },

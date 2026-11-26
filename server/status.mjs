@@ -31,6 +31,16 @@ const LABEL_STAGE = {
 // When several labels are present, the later stage wins; blocked always wins.
 const ORDER = ["ai:discovery", "ai:founder-decision", "ai:tests", "ai:contract", "ai:build", "ai:fix", "ai:qa", "ai:review", "ai:delivery", "ai:release", "ai:founder-test", "ai:blocked"];
 
+// Which AI engine ran (or is running) an agents-workflow job, read from its step names. Never guessed: no match means "Unknown".
+export function toolFromSteps(steps = []) {
+  const s = steps.find((x) => /^Run agent with/i.test(x.name || "") && x.conclusion !== "skipped" && x.status !== "pending");
+  if (!s) return "Unknown";
+  if (/free engine/i.test(s.name)) return "Free engine (NVIDIA NIM)";
+  if (/codex/i.test(s.name)) return "Codex";
+  if (/claude code/i.test(s.name)) return "Claude Code (GitHub Actions)";
+  return "Unknown";
+}
+
 export const slugOf = (s = "") => (s.match(/\[([a-z0-9-]+)\]\s*$/) || s.match(/^ai\/(?:contract|build|fix)-([a-z0-9-]+?)(?:-\d+)?$/) || [])[1] || null;
 
 export function parseBacklog(md = "") {
@@ -52,7 +62,7 @@ export function stageOf(labels = []) {
 
 // Builds the board: one row per backlog feature plus any loop item not on the backlog.
 // issues: GitHub issues+PRs (REST shape); runs: workflow runs; previews: { [branch]: url }.
-export function buildBoard({ backlog = [], issues = [], runs = [], previews = {}, now = Date.now() }) {
+export function buildBoard({ backlog = [], issues = [], runs = [], previews = {}, jobs = {}, now = Date.now() }) {
   const rows = new Map();
   for (const b of backlog) rows.set(b.slug, { slug: b.slug, title: b.title, ref: b.ref, stage: b.done ? "shipped" : "idea", who: b.done ? "Shipped" : "Queued", kind: b.done ? "done" : "queued", items: [] });
   const loopItems = issues.filter((i) => (i.labels || []).some((l) => String(l.name || l).startsWith("ai:")));
@@ -75,13 +85,14 @@ export function buildBoard({ backlog = [], issues = [], runs = [], previews = {}
   for (const r of active) {
     const mins = Math.max(0, Math.round((now - Date.parse(r.run_started_at || r.created_at)) / 60000));
     const row = [...rows.values()].find((x) => x.items.some((i) => r.display_title && (r.display_title === i.title || r.display_title.includes(`#${i.number}`))));
-    if (row && row.kind === "agent") working.push({ who: row.who, what: row.title, minutes: mins, url: r.html_url });
-    else if (r.event === "schedule") working.push({ who: "AI Org loop", what: "hourly check of every open item", minutes: mins, url: r.html_url });
+    const tool = toolFromSteps(jobs[r.id]);
+    if (row && row.kind === "agent") working.push({ who: row.who, what: row.title, minutes: mins, url: r.html_url, tool });
+    else if (r.event === "schedule") working.push({ who: "AI Org loop", what: "hourly check of every open item", minutes: mins, url: r.html_url, tool: toolFromSteps(jobs[r.id]) });
     else {
       // Started by the loop or by hand: the run title does not say which item. Name the candidates honestly.
       const busy = [...rows.values()].filter((x) => x.kind === "agent");
       const what = busy.length === 1 ? busy[0].title : busy.length ? `one of: ${busy.map((x) => x.who.split(",")[0]).join(", ")}` : (r.display_title && r.display_title !== r.name ? r.display_title : "an AI Org step");
-      working.push({ who: busy.length === 1 ? busy[0].who : "An AI agent", what, minutes: mins, url: r.html_url });
+      working.push({ who: busy.length === 1 ? busy[0].who : "An AI agent", what, minutes: mins, url: r.html_url, tool: toolFromSteps(jobs[r.id]) });
     }
   }
   const qa = runs.find((r) => r.status !== "completed" && /QA lab/i.test(r.name || ""));
@@ -104,7 +115,10 @@ export function buildBoard({ backlog = [], issues = [], runs = [], previews = {}
     upcoming: list.filter((row) => row.kind === "queued").length,
     ongoing: list.filter((row) => ["agent", "loop", "founder"].includes(row.kind)).length,
   };
-  return { overview, decisions, quality, stages: STAGES, rows: list, working, waiting, demo, next: next ? { slug: next.slug, title: next.title } : null };
+  // Recently finished agent runs: who ran on which tool and how it ended.
+  const recent = runs.filter((r) => r.status === "completed" && /AI agents/i.test(r.name || "")).slice(0, 8).map((r) => ({
+    title: r.display_title || r.name, event: r.event, conclusion: r.conclusion, tool: toolFromSteps(jobs[r.id]), at: r.updated_at || r.created_at, url: r.html_url }));
+  return { overview, decisions, quality, recent, stages: STAGES, rows: list, working, waiting, demo, next: next ? { slug: next.slug, title: next.title } : null };
 }
 
 // Feed lines from recent comments, newest first, in plain language.
