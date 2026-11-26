@@ -7,8 +7,10 @@ import { parseDeliveryResponse } from "../scripts/delivery-response.mjs";
 import { spawnSync } from "node:child_process";
 
 // Protocol fixtures only: not product code or a claim of real model execution.
-test("UI slots are unique in the exact current source ranges and preserve all unedited code",()=>{
-  let current=readFileSync(new URL("../public/founder-inbox.js",import.meta.url),"utf8");
+// BUILD-07/08 operate on the pre-delivery source at fc19355; the delivered UI
+// intentionally no longer contains those old anchors.
+test("UI slots are unique in the pinned original pre-build source ranges and preserve all unedited code",()=>{
+  let current=readFileSync(new URL("./fixtures/founder-inbox-prebuild-fc19355.js.txt",import.meta.url),"utf8");
   for(const id of ["BUILD-07","BUILD-08"]){
     const unit=BUILD_UNITS.find(u=>u.id===id);
     const old=sourceRange(current,unit),slots=uiEditSlots(id,old);
