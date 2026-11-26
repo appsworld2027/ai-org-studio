@@ -122,7 +122,7 @@
     <div class="rtabs" role="tablist" aria-label="Right panel">
       <button class="rtab" role="tab" id="tab-app" aria-controls="pane-app" data-pane="app">Real app</button>
       <button class="rtab" role="tab" id="tab-proto" aria-controls="pane-proto" data-pane="proto">Prototype</button>
-      <button class="rtab" role="tab" id="tab-agents" aria-controls="pane-agents" data-pane="agents">Agents <span class="badge" id="workingBadge" hidden></span></button>
+      <button class="rtab" role="tab" id="tab-agents" aria-controls="pane-agents" data-pane="agents">Founder dashboard <span class="badge" id="workingBadge" hidden></span></button>
       <button class="rtab" role="tab" id="tab-changes" aria-controls="pane-changes" data-pane="changes">Changes <span class="badge" id="changesBadge" hidden></span></button>
       <button class="rtab" role="tab" id="tab-garage" aria-controls="pane-garage" data-pane="garage">Garage</button>
       <span class="spacer"></span>
@@ -178,12 +178,31 @@
         <h3>No AI Org agents on this product yet</h3>
         <p>The board fills in once the product uses the AI Org loop (a backlog file and <code>ai:</code> labels). Ask the AI on the left: “Set this product up with the AI Org.”</p>
       </div>
+      <section class="founder-brief" aria-labelledby="hOverview">
+        <h3 id="hOverview">Daily Founder Brief</h3>
+        <div class="founder-attention">
+          <span>Founder attention required</span>
+          <strong id="founderDecisions">Unavailable</strong>
+        </div>
+        <dl id="founderOverview" class="founder-overview"></dl>
+        <p id="founderPreview"></p>
+        <details>
+          <summary>Quality and release evidence</summary>
+          <ul id="founderQuality"></ul>
+          <p>Run results are scoped to their listed commits. Pilot clearance requires a separate readiness decision.</p>
+        </details>
+        <details>
+          <summary>Resource and session evidence</summary>
+          <p>Actual model, reasoning effort, token usage, quota, spend and session health are unavailable from the GitHub board.</p>
+          <p>Open Garage for shared memory and Team for proposed model assignments.</p>
+        </details>
+      </section>
       <section aria-labelledby="hWorking">
         <h3 id="hWorking">Working now</h3>
         <div class="running" id="running"></div>
       </section>
       <section aria-labelledby="hWaiting" id="waitingWrap" hidden>
-        <h3 id="hWaiting">Waiting for you</h3>
+        <h3 id="hWaiting">Founder inbox</h3>
         <div id="waiting"></div>
       </section>
       <section aria-labelledby="hTracks">
@@ -192,7 +211,7 @@
         <div class="legend"><span><i class="k-done"></i>done</span><span><i class="k-agent"></i>an agent is working</span><span><i class="k-founder"></i>waiting for you</span><span><i class="k-loop"></i>automatic checks</span><span><i class="k-blocked"></i>blocked</span><span><i class="k-none"></i>not started</span></div>
       </section>
       <section aria-labelledby="hTeam">
-        <h3 id="hTeam">Team: which AI each agent uses</h3>
+        <h3 id="hTeam">Team model recommendations</h3>
         <p class="small muted" id="teamNote"></p>
         <div class="avail" id="teamAvail" role="group" aria-label="AI you have"></div>
         <div class="tracks team" id="team" role="table" aria-label="Agent to model"></div>

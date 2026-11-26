@@ -62,7 +62,7 @@ export function buildBoard({ backlog = [], issues = [], runs = [], previews = {}
     const st = stageOf(labels);
     if (!st) continue;
     const row = rows.get(slug) || { slug, title: it.title.replace(/\s*\[[a-z0-9-]+\]\s*$/, ""), ref: "", stage: "idea", who: "", kind: "queued", items: [] };
-    row.items.push({ number: it.number, title: it.title, isPR: !!it.pull_request, url: it.html_url, branch: it.branch || it.head?.ref || "", labels, ...st });
+    row.items.push({ number: it.number, title: it.title, isPR: !!it.pull_request, url: it.html_url, branch: it.branch || it.head?.ref || "", commit: it.head?.sha || null, assignees: (it.assignees || []).map((a) => a.login), labels, ...st });
     // The row shows the furthest-along item; blocked overrides.
     const rank = (s) => STAGES.findIndex((x) => x.id === s);
     if (st.kind === "blocked") Object.assign(row, { stage: row.stage, who: st.who, kind: "blocked" });
@@ -95,7 +95,16 @@ export function buildBoard({ backlog = [], issues = [], runs = [], previews = {}
   const list = [...rows.values()];
   const waiting = list.filter((r) => r.kind === "founder");
   const next = backlog.find((b) => !b.done && !list.some((r) => r.slug === b.slug && r.kind !== "queued"));
-  return { stages: STAGES, rows: list, working, waiting, demo, next: next ? { slug: next.slug, title: next.title } : null };
+  const decisions = list.flatMap((row) => row.items.filter((item) => item.labels.includes("ai:founder-decision") && !item.labels.includes("ai:blocked")));
+  const quality = runs.filter((run) => run.status === "completed" && /quality|checks|qa|acceptance|verif/i.test(run.name || "")).slice(0, 6)
+    .map((run) => ({ name: run.name, conclusion: run.conclusion, commit: run.head_sha, url: run.html_url }));
+  const overview = {
+    completed: list.filter((row) => row.kind === "done").length,
+    blocked: list.filter((row) => row.kind === "blocked").length,
+    upcoming: list.filter((row) => row.kind === "queued").length,
+    ongoing: list.filter((row) => ["agent", "loop", "founder"].includes(row.kind)).length,
+  };
+  return { overview, decisions, quality, stages: STAGES, rows: list, working, waiting, demo, next: next ? { slug: next.slug, title: next.title } : null };
 }
 
 // Feed lines from recent comments, newest first, in plain language.
@@ -114,7 +123,7 @@ export function feedFrom(comments = [], limit = 8) {
       const cmd = body.match(/^\/(\w+)/)[1].toLowerCase();
       text = { approve: "You approved", changes: "You asked for changes", next: "You asked for the next feature", stop: "You stopped the item" }[cmd];
     } else continue;
-    out.push({ at: c.created_at, number: Number(n) || null, text, url: c.html_url });
+    out.push({ actor: c.user?.login || null, at: c.created_at, number: Number(n) || null, text, url: c.html_url });
     if (out.length >= limit) break;
   }
   return out;
