@@ -1,0 +1,28 @@
+{
+  "role": "quinn-qa",
+  "requestedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+  "reportedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+  "files": [
+    {
+      "path": "server/founder-pilot.mjs",
+      "sha256": "b12e6240c2c7f26866a953bd3f1743ec4b4bc06e3e016ecd332ca7395df0d74a"
+    },
+    {
+      "path": "server/server.mjs",
+      "sha256": "f6c4bcb48bb986b64dc26bae831cf0e5c16c565a3ce63d44128d67f6afe65f7d"
+    },
+    {
+      "path": "public/founder-inbox.js",
+      "sha256": "43b39ade6d980179ddf5265b54a129b1c04512649d495feb794c8a329856f24a"
+    },
+    {
+      "path": "test/founder-inbox-revisions-v2.test.mjs",
+      "sha256": "2aee85e60872aebf41350ce885b2899b7ac174b6008f9e8820587cfdc6b78ad6"
+    }
+  ],
+  "receipt": {
+    "inputArtifactHash": "2aee85e60872aebf41350ce885b2899b7ac174b6008f9e8820587cfdc6b78ad6",
+    "verdict": "APPROVE",
+    "summary": "All must-fix criteria satisfied. Task isolation: FounderPilot now caches workers per requestId and validates requestId against inbox before any operation; history/evidence filtered by requestId. Explicit-save/no-auto-run: save action validates feedback (1-2000 chars), is idempotent, never triggers runner; run/coordinate blocked while active.has(requestId) except save; save during work queues next revision without launch. Journal evidence: events include requestId, revision, executionId, baseRevision, baseArtifactHash, correctionCount; handoff.acknowledged emits artifactHash matching accepted contract. Restart history: history() loads persisted JSON, marks interrupted coordination stages, preserves sharedRevisions reference across save/load; restart pilot reproduces identical revision array and statuses. Queued revisions during active run: AC-03 demonstrates save during running creates queued revision with parentRevision linkage, run throws while active, queued revision persists after completion and can be run next. Authorization: requestId format regex enforced, inbox membership checked, cross-task access throws. UI: inbox.js fetches per-task evidence via requestId query param; buttons disable correctly using anyRunning flag covering running/reviewing/coordination states; revision cards show createdAt/startedAt/completedAt/acceptedAt timestamps. Test quality: AC-01 through AC-04 cover isolation, validation, idempotency, explicit run/accept, save-during-work queuing, chronology metadata, restart survival, evidence filtering; all pass with zero model calls on save operations and proper async waiting."
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "status": "candidate-reviewed",
+  "contractHash": "a27d7a4498313f13acdcc0b9bb3daee71891da37338906eb5c78581d94e089a1",
+  "originalRun": "/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-164028",
+  "originalSuiteHash": "1bf1c227fb3336f323ca997ee50c98666efa04e8729e83af902ace611fb8d8b5",
+  "fixtureOnlyRevisionHash": "a917f903a5730ad4be71234bf31af3fe1931f7d79f534565b11c5c9aa7ff457e",
+  "interfaceCorrectedSuiteHash": "2aee85e60872aebf41350ce885b2899b7ac174b6008f9e8820587cfdc6b78ad6",
+  "originalBuilder": "groq:openai/gpt-oss-120b",
+  "completedBuildUnits": 8,
+  "repairSourceHash": "b12e6240c2c7f26866a953bd3f1743ec4b4bc06e3e016ecd332ca7395df0d74a",
+  "repairPatchHash": "a34d2a4867c6d03b26254c1f3a15e1e9f67fa14eecd846a59b650e7727f632c7",
+  "baseline": {"pass": 1, "fail": 3, "reportHash": "9599611404e3e0631167e703d8bfd02f57ba95349c686269177587cd8698a429"},
+  "candidate": {"pass": 4, "fail": 0, "reportHash": "3f7dab4287dfeec4d9b55575de3b955accd29e4b4198580b859928aaa083e645"},
+  "candidateRegression": {"pass": 120, "fail": 0, "excluded": ["superseded original acceptance suite", "baseline-only UI edit-slot protocol test"]},
+  "qa": {"verdict": "APPROVE", "model": "nvidia/nemotron-3-ultra-550b-a55b", "receiptFileHash": "4e9464e83ba39c4afa64350043e678e691d0a2be20270de8e6a36ed4d1670397"},
+  "codeReview": {"verdict": "APPROVE", "model": "nvidia/nemotron-3-ultra-550b-a55b", "receiptFileHash": "007afd44aabca36412c763bc45a796a92294275cc2fcfca4a092703dc79c91d9"},
+  "newReportedUsage": {"builderRepairInputTokens": 1904, "builderRepairOutputTokens": 2297, "reviewInputTokens": null, "reviewOutputTokens": null},
+  "notExecuted": ["browser UI verification", "deployment", "merge", "push"]
+}

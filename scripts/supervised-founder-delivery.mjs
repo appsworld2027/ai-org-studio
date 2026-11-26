@@ -10,6 +10,7 @@ import { PROVIDERS } from "../server/providers.mjs";
 import { createExecutionJournal, artifactDigest, failureKind } from "../server/execution-journal.mjs";
 import { BUILD_UNITS, sourceRange } from "./founder-build-units.mjs";
 import { parseDeliveryResponse } from "./delivery-response.mjs";
+import { validateLockedSuite } from "./locked-suite-readiness.mjs";
 import { createDeliveryRateGuard } from "./delivery-rate-limit.mjs";
 import { uiEditSlots } from "./founder-ui-edit-slots.mjs";
 import { pilotModelProfile, splitRoute, fromOrgRoute, orgRoute, modelMatches, modelFamily, stageRoute, routeFamily, ENDPOINTS } from "../server/pilot-model-profile.mjs";
@@ -324,6 +325,8 @@ async function authorTests(){
     state.fragments.push({id,executionId:piece.executionId,artifactHash:piece.hash,fileHash:piece.artifact.files[rel],originRun:runDir});save();
   }
   const code=scaffold+"\n"+state.fragments.map(f=>readFileSync(join(runDir,"fragments",f.id+".mjs"),"utf8")).join("\n\n")+"\n";
+  const suiteIssues=validateLockedSuite(code);
+  if(suiteIssues.length)throw Error("Locked suite fixture mismatch: "+suiteIssues.join(", "));
   writeFileSync(join(candidate,TEST),code,{mode:0o600,flag:"wx"});
   const suite={stage:"ai:tests",role:"studio",executionId:randomUUID(),sourceExecutionId:quinn.executionId};
   const artifact={contractArtifactHash:expected,qaArtifactHash:quinn.artifactHash,fragments:state.fragments,files:{[TEST]:pathHash(TEST)}};
