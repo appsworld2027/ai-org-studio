@@ -34,10 +34,10 @@ export function makeEngineChats({ store, env, rulesFor, bins = {}, codexConfig =
     const c = L.chat;
     trustFolder?.(p.dir, c.engine);
     const emit = (e) => {
-      if (e.t === "session") { c.sessionId = e.id; if (e.model && !c.modelShown) c.modelShown = e.model; save(p, L); }
+      if (e.t === "session") { c.sessionId = e.id; if (e.model && !c.modelShown) c.modelShown = e.model; L.reportedModel = e.reportedModel || ""; save(p, L); }
       if (e.t === "done" || e.t === "idle") { const was = L.busy; L.busy = false;
         if (was && L.turn) { const t = L.turn; L.turn = null; const said = [...c.events].reverse().find((x) => x.t === "assistant")?.text || ""; try { afterTurn(p, c, { engine: c.engine, model: c.modelShown || c.model, account: L.account || "", ask: t.text, did: said }); } catch (er) { log(`afterTurn: ${er.message}`); } } }
-      if (e.t === "usage") { for (const u of e.models?.length ? e.models : [{ cost: e.cost }]) { try { onUsage({ product: p.id, engine: c.engine, model: u.model || c.modelShown || c.model || "default", input: u.input, output: u.output, cache: u.cache, cost: u.cost, ms: e.ms, role: "Studio chat" }); } catch (er) { log(`usage: ${er.message}`); } } }
+      if (e.t === "usage") { for (const u of e.models?.length ? e.models : [{ cost: e.cost }]) { try { onUsage({ product: p.id, engine: c.engine, model: u.model || L.reportedModel, requestedModel: c.model, modelSource: u.model || L.reportedModel ? "runtime" : "unknown", input: u.input, output: u.output, cache: u.cache, reasoning: u.reasoning, cost: u.cost, ms: e.ms, role: "Studio chat" }); } catch (er) { log(`usage: ${er.message}`); } } }
       record(p, L, e); broadcast(L, e);
       if (["done", "tool_done", "error", "approve", "ask"].includes(e.t)) save(p, L);
     };

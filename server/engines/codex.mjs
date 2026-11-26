@@ -34,7 +34,7 @@ export function translateNotification(m, state) {
     case "item/agentMessage/delta": out.push({ t: "delta", d: p.delta || "" }); break;
     case "item/commandExecution/outputDelta": if (state.items[p.itemId]) state.items[p.itemId].out = (state.items[p.itemId].out + (p.delta || "")).slice(-20000); break;
     case "turn/plan/updated": out.push({ t: "plan", steps: (p.plan || []).map((s) => ({ text: s.step, status: s.status === "inProgress" ? "in_progress" : s.status })), note: p.explanation || "" }); break;
-    case "thread/tokenUsage/updated": { const u = p.tokenUsage || {}; state.tokTotal = u.total || state.tokTotal; out.push({ t: "context", used: u.last?.inputTokens ?? u.total?.inputTokens, window: u.modelContextWindow || null }); break; }
+    case "thread/tokenUsage/updated": { const u = p.tokenUsage || {}; state.tokTotal = u.total || state.tokTotal; if (u.total) state.usageTurnId = p.turnId ?? state.turnId; out.push({ t: "context", used: u.last?.inputTokens ?? u.total?.inputTokens, window: u.modelContextWindow || null }); break; }
     case "account/rateLimits/updated": { const r = p.rateLimits?.primary; if (r && r.usedPercent != null) out.push({ t: "limits", usedPercent: r.usedPercent, resetsAt: r.resetsAt || null }); break; }
     case "item/reasoning/summaryTextDelta": out.push({ t: "thinking", d: p.delta || "" }); break;
     case "item/reasoning/summaryPartAdded": out.push({ t: "thinking", d: "\n\n" }); break;
@@ -53,7 +53,15 @@ export function translateNotification(m, state) {
     case "turn/completed": {
       const st = p.turn?.status;
       if (st === "failed") out.push({ t: "error", message: explainError(p.turn?.error?.message || "the turn failed") });
-      { const t = state.tokTotal, b = state.tokBase || {}; if (t) { out.push({ t: "usage", models: [{ model: "", input: (t.inputTokens || 0) - (b.inputTokens || 0), output: (t.outputTokens || 0) - (b.outputTokens || 0), cache: (t.cachedInputTokens || 0) - (b.cachedInputTokens || 0) }] }); state.tokBase = { ...t }; } }
+      {
+        const t = state.tokTotal, b = state.tokBase;
+        const delta = (key) => t?.[key] == null || (b && b[key] == null) || (!b && state.resumed) ? null : t[key] - (b?.[key] ?? 0);
+        if (t && state.usageTurnId === (p.turn?.id ?? state.turnId)) {
+          out.push({ t: "usage", models: [{ input: delta("inputTokens"), output: delta("outputTokens"),
+            cache: delta("cachedInputTokens"), reasoning: delta("reasoningOutputTokens") }] });
+          state.tokBase = { ...t };
+        }
+      }
       out.push({ t: "done" }); out.push({ t: "idle" }); break;
     }
     case "error": out.push({ t: "error", message: explainError(p.error?.message || p.message || "") }); break;
@@ -148,9 +156,9 @@ export function startCodex({ bin = "codex", cwd, env, model, effort, rules, thre
     if (state.threadId) return state.threadId;
     const params = { cwd, ...threadMode(mode), developerInstructions: [rules, mode === "plan" ? PLAN_ONLY : mode === "auto" ? "" : ASK_FIRST].filter(Boolean).join("\n\n") || null, ...(model ? { model } : {}) };
     let r;
-    if (threadId) { try { r = await call("thread/resume", { threadId, ...params }); } catch { r = null; } }
+    if (threadId) { try { r = await call("thread/resume", { threadId, ...params }); state.resumed = Boolean(r); } catch { r = null; } }
     if (!r) r = await call("thread/start", params);
-    state.threadId = r.thread.id; emit({ t: "session", id: state.threadId, model: r.model || model || "" }); return state.threadId;
+    state.threadId = r.thread.id; emit({ t: "session", id: state.threadId, model: r.model || model || "", reportedModel: r.model || "" }); return state.threadId;
   };
   return {
     state, ready,

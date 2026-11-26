@@ -342,16 +342,40 @@
   // ---------- consumption: measured tokens by model (unknown stays "Unknown") ----------
   const fmt = (n) => (n == null ? "Unknown" : n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
   async function loadUsage() {
-    const t = $("#usage"); if (!t) return;
+    const t = $("#usage");
+    const id = product?.id;
+    if (!t || !id) return;
     try {
-      const d = await api(`/api/products/${product.id}/usage?days=7`);
-      $("#usageNote").textContent = `Last ${d.days} days · ${d.total.turns} turns · input ${fmt(d.total.input)} · output ${fmt(d.total.output)} · cost ${d.total.cost == null ? "Unknown" : "$" + d.total.cost.toFixed(2)}. ${d.note}`;
-      t.replaceChildren(el("div", { class: "trk head", role: "row" }, ...["Model", "Used by", "Turns", "Input / Output", "Cost"].map((h) => el("div", { role: "columnheader", text: h }))));
-      for (const r of d.rows) t.append(el("div", { class: "trk", role: "row" }, el("div", { role: "rowheader" }, el("b", { text: r.model }), el("br"), el("small", { text: r.engine })), el("div", { role: "cell", text: r.role }),
-        el("div", { role: "cell", text: String(r.turns) }), el("div", { role: "cell", text: `${fmt(r.input)} / ${fmt(r.output)}` }), el("div", { role: "cell", text: r.cost == null ? "Unknown" : "$" + r.cost.toFixed(2) })));
-      if (!d.rows.length) t.append(el("div", { class: "trk", role: "row" }, el("div", { role: "cell", text: "No usage recorded yet. It appears after your next chat turn." })));
+      const d = await api(`/api/products/${id}/usage?days=7`);
+      if (id !== product?.id) return;
+      const { total } = d;
+      const usd = (n) => n == null ? "Unknown" : new Intl.NumberFormat(undefined, {
+        style: "currency", currency: "USD", maximumFractionDigits: 6,
+      }).format(n);
+      const coverage = `${total.measuredTokenRecords} of ${total.turns} records have both token counts`;
+      const headline = total.turns
+        ? `Input ${fmt(total.input)} · output ${fmt(total.output)} · ${coverage}`
+        : "No Studio usage records in this period";
+      $("#founderUsage").textContent = headline;
+      $("#usageNote").textContent = `Last ${d.days} days · ${headline} · reported cost ${usd(total.cost)} (${total.measuredCostRecords}/${total.turns} records). ${d.note}`;
+      const tokens = (r) => (r.input ?? 0) + (r.output ?? 0);
+      const max = Math.max(1, ...d.rows.map(tokens));
+      t.replaceChildren(...d.rows.map((r) => {
+        const source = { provider: "Provider reported", runtime: "Runtime reported", unverified: "Historical model, unverified", unknown: "Model identity unavailable" }[r.modelSource];
+        const counter = (name, value) => el("div", {}, el("dt", { text: name }), el("dd", { text: value }));
+        return el("article", { class: "usage-card" },
+          el("strong", { text: r.model === "unknown" ? "Unknown model" : r.model }),
+          el("small", { text: `${r.role} · ${r.engine} · ${source}${r.requestedModel && r.requestedModel !== r.model ? ` · Requested ${r.requestedModel}` : ""}` }),
+          ...(r.input != null || r.output != null ? [el("meter", { min: "0", max: String(max), value: String(tokens(r)), "aria-label": "Reported input and output tokens relative to the highest row" })] : []),
+          el("dl", {}, counter("Input", fmt(r.input)), counter("Output", fmt(r.output)), counter("Cache", fmt(r.cache)),
+            counter("Reasoning", fmt(r.reasoning)), counter("Reported cost", usd(r.cost)), counter("Token coverage", `${r.measuredTokenRecords}/${r.turns} records`)));
+      }));
       $("#usageErr").textContent = "";
-    } catch (e) { $("#usageErr").textContent = `Consumption could not load: ${e.message}`; }
+    } catch (e) {
+      if (id !== product?.id) return;
+      $("#founderUsage").textContent = "Studio consumption could not load.";
+      $("#usageErr").textContent = `Consumption could not load: ${e.message}`;
+    }
   }
 
   // ---------- team: which AI each agent uses ----------
@@ -611,6 +635,7 @@
     setApp(b.app);
   }
   async function poll() {
+    if (tab === "agents") void loadUsage();
     const pid = product?.id; if (!pid) return;
     try {
       const r = await fetch(`/api/products/${pid}/board`, { cache: "no-store" }); const d = await r.json();
@@ -632,6 +657,8 @@
     showTab(tab || (product.productionUrl ? "app" : "proto"));
     pickEngine(engine);
     clearInterval(pollTimer); poll(); pollTimer = setInterval(poll, cfg.boardRefreshMs);
+    $("#usage").replaceChildren(); $("#usageNote").textContent = ""; $("#usageErr").textContent = "";
+    $("#founderUsage").textContent = "Studio consumption is loading.";
     loadTeam(); loadUsage(); $("#changesDiff").hidden = true; loadChanges();
   }
   async function reloadConfig(selectId) {

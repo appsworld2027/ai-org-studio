@@ -49,7 +49,8 @@ const model = http.createServer((req, res) => {
       : toolsSeen === 1 ? [{ tool_calls: [{ index: 0, id: "t2", function: { name: "write_file", arguments: '{"path":"docs/idea.md","content":"# Idea\\nDark mode"}' } }] }]
       : [{ content: "I read the README" }, { content: " and saved **docs/idea.md**. <img src=x onerror=alert(1)>" }];
     res.writeHead(200, { "Content-Type": "text/event-stream" });
-    for (const d of chunks) res.write(`data: ${JSON.stringify({ choices: [{ delta: d }] })}\n\n`);
+    for (const d of chunks) res.write(`data: ${JSON.stringify({ model: "test/served-model", choices: [{ delta: d }] })}\n\n`);
+    res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 23, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 5 } } })}\n\n`);
     res.end("data: [DONE]\n\n");
   });
 }).listen(modelPort, "127.0.0.1");
@@ -449,6 +450,10 @@ try {
     assert((await page.$$("#tracks .st.agent")).length >= 1, "animated 'agent working' cell");
     assert((await page.$$("#feed a")).length >= 3, "feed");
     assert(await page.isHidden("#noAiOrg"), "AI Org detected");
+    await page.waitForSelector('.usage-card:has-text("test/served-model")');
+    const usage = await page.locator('.usage-card:has-text("test/served-model")').innerText();
+    assert(/Provider reported/.test(usage) && /Requested test\/model-a/.test(usage), "reported and requested models are distinguishable");
+    assert(/Cache\s+\d+/.test(usage) && /Reasoning\s+Unknown/.test(usage), "measured cache and absent reasoning are distinguishable");
   });
   await check("ST-12", "GitHub down → clear message, rest keeps working; recovers", async () => {
     writeFileSync(failFlag, "1");

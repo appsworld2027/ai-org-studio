@@ -140,7 +140,7 @@ test("Claude Code stream → chat events: text, steps, approval, question, resul
   const { translate, controlResponse, userContent } = await import("../server/engines/claude.mjs");
   const st = { tools: {}, pendingReq: {} };
   const ev = (m) => translate(m, st);
-  assert.deepEqual(ev({ type: "system", subtype: "init", session_id: "s1", model: "opus" })[0], { t: "session", id: "s1", model: "opus" });
+  assert.deepEqual(ev({ type: "system", subtype: "init", session_id: "s1", model: "opus" })[0], { t: "session", id: "s1", model: "opus", reportedModel: "opus" });
   assert.equal(ev({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Hi" } } })[0].d, "Hi");
   const tool = ev({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/p/src/a.ts", old_string: "a\nb", new_string: "c" } }] } })[0];
   assert.equal(tool.title, "Edit src/a.ts"); assert.equal(tool.detail, "+1 −2"); assert.equal(tool.kind, "edit");

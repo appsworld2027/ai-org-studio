@@ -99,7 +99,7 @@ export async function runTool(root, name, args = {}, { shell = "bash", timeoutMs
 
 // Reads an OpenAI-compatible streamed response (Server-Sent Events) into text + tool calls.
 export async function readStream(body, onText) {
-  const dec = new TextDecoder(); let buf = "", text = "", finish = null, usage = null; const calls = [];
+  const dec = new TextDecoder(); let buf = "", text = "", finish = null, usage = null, model = ""; const calls = [];
   for await (const chunk of body) {
     buf += dec.decode(chunk, { stream: true });
     let i;
@@ -108,7 +108,12 @@ export async function readStream(body, onText) {
       if (!line.startsWith("data:")) continue;
       const data = line.slice(5).trim(); if (data === "[DONE]") continue;
       let j; try { j = JSON.parse(data); } catch { continue; }
-      if (j.usage) usage = { input: j.usage.prompt_tokens, output: j.usage.completion_tokens };
+      if (typeof j.model === "string" && j.model) model = j.model;
+      if (j.usage) usage = {
+        input: j.usage.prompt_tokens, output: j.usage.completion_tokens,
+        cache: j.usage.prompt_tokens_details?.cached_tokens,
+        reasoning: j.usage.completion_tokens_details?.reasoning_tokens,
+      };
       const ch = j.choices?.[0]; if (!ch) continue;
       const d = ch.delta || ch.message || {};
       if (d.content) { text += d.content; onText?.(d.content); }
@@ -122,7 +127,7 @@ export async function readStream(body, onText) {
       if (ch.finish_reason) finish = ch.finish_reason;
     }
   }
-  return { text, calls: calls.filter(Boolean), finish, usage };
+  return { text, calls: calls.filter(Boolean), finish, usage, model };
 }
 
 // One user turn: call the model, run tools (asking when needed), repeat until the model answers without tools.
@@ -159,8 +164,8 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
       throw new Error(`${res.status} ${hint || body}`);
     }
     emit({ t: "assistant_start" });
-    const { text, calls, usage } = await readStream(res.body, (d) => emit({ t: "delta", d }));
-    emit({ t: "usage", models: [{ model, input: usage?.input, output: usage?.output }] });
+    const { text, calls, usage, model: reportedModel } = await readStream(res.body, (d) => emit({ t: "delta", d }));
+    emit({ t: "usage", models: [{ model: reportedModel, requestedModel: model, ...usage }] });
     messages.push({ role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args || "{}" } })) } : {}) });
     if (!calls.length) return emit({ t: "done" });
     for (const c of calls) {

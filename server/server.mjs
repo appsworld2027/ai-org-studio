@@ -257,7 +257,7 @@ async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
   const key = `${p.id}:${chatId}`; if (live.get(key)?.abort) throw new Error("Still working on the last message.");
   const L = live.get(key) || { pending: new Map(), clients: new Set() }; live.set(key, L);
   const ac = new AbortController(); L.abort = ac;
-  const emit = (e) => { if (e.t === "usage") { for (const u of e.models || []) { try { ledger.record({ product: p.id, engine: `free:${c.provider}`, model: u.model || c.model, input: u.input, output: u.output, role: "Studio chat" }); } catch { /* ledger is best effort */ } } return; } for (const ws of L.clients) if (ws.readyState === 1) ws.send(JSON.stringify(e)); wsEmit?.(e); };
+  const emit = (e) => { if (e.t === "usage") { for (const u of e.models || []) { try { ledger.record({ product: p.id, engine: `free:${c.provider}`, model: u.model, requestedModel: u.requestedModel, modelSource: u.model ? "provider" : "unknown", input: u.input, output: u.output, cache: u.cache, reasoning: u.reasoning, role: "Studio chat" }); } catch { /* ledger is best effort */ } } return; } for (const ws of L.clients) if (ws.readyState === 1) ws.send(JSON.stringify(e)); wsEmit?.(e); };
   c.messages.push({ role: "user", content: text });
   if (c.title === "New chat") c.title = text.replace(/\s+/g, " ").slice(0, 60);
   store.chats.save(p.id, c);
