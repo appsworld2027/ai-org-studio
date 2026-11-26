@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTool } from "../server/agent.mjs";
-import { providerAllowed, modelAllowed, planEnv, PAID_ENV, paidAllowed, GROQ_FREE_MODELS } from "../server/billing.mjs";
+import { providerAllowed, modelAllowed, planEnv, PAID_ENV, paidAllowed, GROQ_FREE_MODELS, isLocalModelBase } from "../server/billing.mjs";
 
 test("by default only free providers are allowed", () => {
   for (const id of ["nvidia", "openrouter", "groq", "gemini", "ollama"]) assert.equal(providerAllowed(id, {}), true, id);
@@ -25,6 +25,24 @@ test("paid API providers remain blocked even when the legacy opt-in is present",
   assert.equal(providerAllowed("openai", { STUDIO_ALLOW_PAID_APIS: "1" }), false);
   assert.equal(modelAllowed("anthropic", "claude-latest", { STUDIO_ALLOW_PAID_APIS: "1" }), false);
   assert.equal(planEnv({ STUDIO_ALLOW_PAID_APIS: "1", OPENAI_API_KEY: "x" }).OPENAI_API_KEY, undefined);
+});
+test("custom model servers are free only on localhost or private-network endpoints", () => {
+  const local = "http://127.0.0.1:11434/v1";
+  assert.equal(isLocalModelBase(local), true);
+  assert.equal(isLocalModelBase("http://192.168.1.8:1234/v1"), true);
+  assert.equal(isLocalModelBase("https://api.example.com/v1"), false);
+  assert.equal(providerAllowed("custom", {}, local), true);
+  assert.equal(modelAllowed("custom", "local-model", {}, local), true);
+  assert.equal(providerAllowed("custom", {}, "https://api.example.com/v1"), false);
+  assert.equal(modelAllowed("custom", "remote-model", {}, "https://api.example.com/v1"), false);
+});
+test("E2E harness may use a fake Anthropic key only against a loopback test server", () => {
+  const env = { STUDIO_TEST_MODE: "1", ANTHROPIC_BASE_URL: "http://127.0.0.1:1234", ANTHROPIC_API_KEY: "fake", OPENAI_API_KEY: "paid" };
+  const clean = planEnv(env);
+  assert.equal(clean.ANTHROPIC_API_KEY, "fake");
+  assert.equal(clean.ANTHROPIC_BASE_URL, env.ANTHROPIC_BASE_URL);
+  assert.equal(clean.OPENAI_API_KEY, undefined);
+  assert.equal(planEnv({ ANTHROPIC_BASE_URL: "https://api.anthropic.com", ANTHROPIC_API_KEY: "real" }).ANTHROPIC_API_KEY, undefined);
 });
 test("Groq is restricted to the explicit free-tier allowlist", () => {
   assert.equal(modelAllowed("groq", "openai/gpt-oss-120b", {}), true);
