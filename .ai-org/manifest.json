@@ -1,0 +1,43 @@
+{
+  "organization": "appsworld",
+  "adapterVersion": "2",
+  "source": "appsworld2027/parent-plus-ai-org",
+  "protectedActions": [
+    "production",
+    "destructive",
+    "paid",
+    "credentials",
+    "legal-privacy"
+  ],
+  "handbook": {
+    "repo": "appsworld2027/parent-plus-ai-org",
+    "ref": "main",
+    "entry": "AGENTS.md"
+  },
+  "product": {
+    "name": "AI Org Studio",
+    "docsFolder": "docs/product"
+  },
+  "commands": {
+    "check": "npm test"
+  },
+  "governance": {
+    "autoMerge": false,
+    "founders": [
+      "appsworld2027"
+    ],
+    "approvalRule": "Founder approval required before merge or deployment."
+  },
+  "executionPolicy": {
+    "enabled": false,
+    "allowedEngines": [
+      "free"
+    ],
+    "allowPaidFallback": false,
+    "allowProductionDeployment": false
+  },
+  "memory": {
+    "folder": "docs/ai-memory",
+    "rule": "Preserve validated handovers and reviewed memory."
+  }
+}
