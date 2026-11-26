@@ -566,7 +566,15 @@
       text: `${r.name} · ${r.conclusion || "unavailable"}${r.commit ? ` · ${r.commit.slice(0, 7)}` : ""}` }))));
     if (!quality.children.length) quality.append(el("li", { text: "No recent quality runs reported" }));
 
+    const ro = $("#roster"); if (ro) {
+      ro.replaceChildren(el("div", { class: "trk head", role: "row" }, ...["Agent", "Status", "Feature", "Tool", "Last action"].map((h) => el("div", { role: "columnheader", text: h }))));
+      for (const a of b.roster || []) ro.append(el("div", { class: "trk", role: "row" }, el("div", { role: "rowheader" }, el("b", { text: a.name }), el("br"), el("small", { text: a.role })),
+        el("div", { role: "cell", text: a.state === "working" ? `Working · ${a.minutes} min` : a.state === "assigned" ? "Assigned, starting" : "Idle" }),
+        el("div", { role: "cell", text: a.feature || "—" }), el("div", { role: "cell", text: a.tool || (a.state === "idle" ? "—" : "Unknown") }),
+        el("div", { role: "cell" }, a.last ? el("a", { href: a.last.url, target: "_blank", rel: "noopener", text: `${ago(a.last.at)} · ${a.last.via} · ${a.last.text}` }) : el("small", { text: "No recent action" }))));
+    }
     const run = $("#running"); run.replaceChildren();
+    if (b.idleChecks) run.append(el("div", { class: "idle", text: `Hourly check ran ${b.idleChecks} time(s) with nothing to do.` }));
     if (!b.working.length) run.append(el("div", { class: "idle", text: b.next ? `No agents working. Next on the backlog: ${b.next.title}.` : "No agents working right now." }));
     for (const w of b.working) {
       const cls = /QA lab/.test(w.who) ? "av qa" : /loop/i.test(w.who) ? "av loop" : "av";
@@ -592,7 +600,9 @@
         return el("div", { role: "cell", "aria-label": `${s.name}: ${KIND[k] || "not started"}` }, el("div", { class: `st ${k}` }));
       });
       const sub = r.kind === "queued" ? "queued on the backlog" : r.kind === "done" ? "shipped" : `${r.who} · ${KIND[r.kind]}`;
-      t.append(el("div", { class: "trk", role: "row" }, el("div", { class: "name", role: "rowheader" }, el("b", { text: r.title }), el("small", { text: sub })), ...cells));
+      const tests = r.tests ? `Tests ${r.tests.passed}/${r.tests.total} passed${r.tests.failed ? `, ${r.tests.failed} failed` : ""}${r.tests.running ? `, ${r.tests.running} running` : ""}` : "Tests: none yet";
+      const dep = r.deploy ? "Preview deployed" : "Not deployed";
+      t.append(el("div", { class: "trk", role: "row" }, el("div", { class: "name", role: "rowheader" }, el("b", { text: r.title }), el("small", { text: sub }), el("small", {}, `${tests} · `, r.deploy ? el("a", { href: r.deploy, target: "_blank", rel: "noopener", text: dep }) : dep)), ...cells));
     }
     $("#feed").replaceChildren(...(b.feed.length ? b.feed.map((f) => el("a", { href: f.url, target: "_blank", rel: "noopener" }, el("time", { text: ago(f.at) }), f.actor ? `${f.actor} · ${f.text}` : f.text)) : [el("div", { class: "idle", text: "Nothing yet." })]));
     const focus = b.rows.find((r) => r.kind === "founder") || b.rows.find((r) => r.kind === "agent" || r.kind === "loop" || r.kind === "blocked");
