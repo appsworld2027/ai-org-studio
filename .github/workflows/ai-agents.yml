@@ -1,0 +1,95 @@
+name: AI agents
+
+on:
+  workflow_dispatch:
+    inputs:
+      number:
+        description: Approved discovery issue number
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.policy.outputs.allowed }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Enforce execution policy
+        id: policy
+        env:
+          FREE_AVAILABLE: ${{ secrets.NVIDIA_NIM_API_KEY != '' }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from "node:fs";
+          import { authorizeExecution } from "./server/execution-policy.mjs";
+
+          const manifest = JSON.parse(
+            fs.readFileSync(".ai-org/manifest.json", "utf8")
+          );
+
+          const result = authorizeExecution({
+            manifest,
+            requestedEngine: "free",
+            availableEngines: {
+              free: process.env.FREE_AVAILABLE === "true"
+            }
+          });
+
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `allowed=${result.allowed}\n`
+          );
+
+          console.log(result);
+
+          if (!result.allowed) process.exit(1);
+          JS
+
+      - name: Verify approved discovery task
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ inputs.number }}
+        run: |
+          set -euo pipefail
+
+          [[ "$NUMBER" =~ ^[0-9]+$ ]]
+
+          gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER" |
+            jq -e '
+              .state == "open" and
+              (has("pull_request") | not) and
+              ([.labels[].name] | index("ai:discovery") != null) and
+              ([.labels[].name] | index("engine:free") != null) and
+              ([.labels[].name |
+                select(startswith("engine:"))] | length == 1) and
+              ([.labels[].name |
+                select(startswith("ai:"))] | length == 1)
+            ' >/dev/null
+
+  discovery:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+
+    permissions:
+      contents: read
+      issues: write
+
+    uses: appsworld2027/parent-plus-ai-org/.github/workflows/agent-worker.yml@cd77a3b55449e83db6010a643eb938a3c4af578b
+
+    with:
+      number: ${{ inputs.number }}
+      handbook_ref: cd77a3b55449e83db6010a643eb938a3c4af578b
+
+    secrets:
+      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
