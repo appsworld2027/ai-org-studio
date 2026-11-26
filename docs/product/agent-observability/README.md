@@ -122,3 +122,13 @@ Each candidate directory contains `state.json`, a metadata-only
 The Node acceptance subprocess gets a minimal environment and scoped file
 permissions, no shell/child process authorization; this is not a network
 sandbox. Do not import unreviewed candidate changes into a live preview.
+
+### Delivery artifact validation
+
+A test author's receipt must contain the complete executable test source.
+Studio preloads the relevant existing API and test fixture excerpts, saves
+that exact source to the single allowlisted test path, checks its syntax and
+hashes it before recording stage completion. A verbal COMPLETE receipt is
+insufficient. The builder similarly cannot complete without at least one
+actual authorized file change. The baseline and green test gates still apply.
+The failed first live attempt is retained; no product code was modified.
