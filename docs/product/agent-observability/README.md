@@ -330,3 +330,28 @@ explicit requalification, a failed test exposing the separately observed
 repair of the public facade, then reruns the unchanged tests. Other failing
 behavior remains a blocked delivery with evidence, not a pass. Independent
 review remains mandatory and the historical failed run is preserved.
+
+### Observed fixture-v2 correction and permission-mode journal test
+
+The second real Quinn suite failed in both baseline and built candidate before
+the feature could be exercised. Node's permission model rejects
+`fsyncSync` even on an allowed scratch file. The product's durable journal
+must retain its actual fsync. Only the isolated acceptance-test subprocess
+loads `scripts/founder-test-preload.mjs`, which tolerates this exact permission
+restriction exclusively for open scratch execution-journal descriptors;
+all real writes and the filesystem permission boundaries remain in place.
+The acceptance suite does not certify crash/power-loss durability.
+
+An explicit `STUDIO_DELIVERY_AMEND_OBSERVED_V2_FROM` path (together with
+requalification from the original eight-unit delivery) recovers the four
+existing Quinn fragments only after verifying their saved model receipts,
+file hashes and original lock. It applies a deterministic, exact-match
+correction to the observed suite: valid revision parent arguments and save
+before run, valid feedback errors, correct fixture on recovery, actual
+offered/acknowledged artifact hashes instead of invented properties, and a
+stronger assertion of no automatic model launch. No criteria are removed.
+It writes `test-amendment.json` with the original and amended hashes,
+explicit Studio authorship, and all changes. Any mismatch stops without
+regeneration. Independent review is still required. A local run against the
+actual baseline yielded two passing tests and two genuine feature failures
+(multiple-task scope and save while active), not infrastructure errors.

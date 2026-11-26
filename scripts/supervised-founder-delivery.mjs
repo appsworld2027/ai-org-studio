@@ -12,7 +12,7 @@ import { BUILD_UNITS, sourceRange } from "./founder-build-units.mjs";
 import { parseDeliveryResponse } from "./delivery-response.mjs";
 import { createDeliveryRateGuard } from "./delivery-rate-limit.mjs";
 import { uiEditSlots } from "./founder-ui-edit-slots.mjs";
-import { fixtureIssues, baselineQuality } from "./founder-test-qualification.mjs";
+import { fixtureIssues, baselineQuality, amendObservedFixtureV2 } from "./founder-test-qualification.mjs";
 import { pilotModelProfile, splitRoute, fromOrgRoute, orgRoute, modelMatches, modelFamily, stageRoute, routeFamily, ENDPOINTS } from "../server/pilot-model-profile.mjs";
 
 const ID = "studio-pilot-001", REV = 2;
@@ -24,6 +24,8 @@ const {primary:PRIMARY_BUILD,alternate:ALTERNATE_BUILD,review:REVIEW_MODEL,allow
 const groqGuard=createDeliveryRateGuard();
 const requalifyTests=process.env.STUDIO_DELIVERY_REQUALIFY_TESTS==="1";
 const requalifyFrom=process.env.STUDIO_DELIVERY_REQUALIFY_FROM||process.env.STUDIO_DELIVERY_REUSE_DIR;
+const amendFrom=process.env.STUDIO_DELIVERY_AMEND_OBSERVED_V2_FROM||"";
+if(amendFrom&&!requalifyTests)throw Error("Fixture amendment requires explicit test requalification");
 const [historyDir, orgDir, keyFile, deliveryDir, expected] = process.argv.slice(2);
 if (!historyDir || !orgDir || !keyFile || !deliveryDir || !/^[a-f0-9]{64}$/.test(expected || "")) {
   throw Error("Usage: node scripts/supervised-founder-delivery.mjs HISTORY ORG KEYFILE OUTPUT EXPECTED_CONTRACT_HASH");
@@ -237,12 +239,12 @@ function requireVerdict(artifact, wanted) {
 }
 function testRun(name) {
   const args=["--permission","--allow-fs-read="+candidate,"--allow-fs-read="+scratch,
-    "--allow-fs-write="+scratch,"--test-isolation=none","--test","--test-reporter=tap",TEST];
+    "--allow-fs-write="+scratch,"--import",join(candidate,"scripts","founder-test-preload.mjs"),"--test-isolation=none","--test","--test-reporter=tap",TEST];
   const result=spawnSync(process.execPath,args,{cwd:candidate,env:{PATH:process.env.PATH,HOME:scratch,TMPDIR:scratch,CI:"1"},
     encoding:"utf8",timeout:120000,maxBuffer:4*1024*1024});
   const report=(result.stdout||"")+"\n"+(result.stderr||"");
   writeFileSync(join(runDir,name+".log"),report,{mode:0o600});
-  const evidence={name,exitCode:result.status,pass:Number(report.match(/^# pass (\d+)$/m)?.[1]??0),
+  const evidence={name,fixtureMode:"permission-sandbox; journal fsync simulated only when denied",exitCode:result.status,pass:Number(report.match(/^# pass (\d+)$/m)?.[1]??0),
     fail:Number(report.match(/^# fail (\d+)$/m)?.[1]??0),reportHash:artifactDigest(report)};
   state.tests.push(evidence);save();print(name+" "+JSON.stringify(evidence));
   return {evidence,report};
@@ -289,7 +291,7 @@ async function authorTests(){
   state.qaArtifactHash=quinn.artifactHash;
   mkdirSync(join(runDir,"fragments"),{mode:0o700});
   save();
-  const oldDir=process.env.STUDIO_DELIVERY_REUSE_DIR;
+  const oldDir=amendFrom||process.env.STUDIO_DELIVERY_REUSE_DIR;
   let old, oldEvents;
   if(oldDir && existsSync(join(oldDir,"state.json"))){
     const prior=JSON.parse(readFileSync(join(oldDir,"state.json"),"utf8"));
@@ -299,6 +301,11 @@ async function authorTests(){
       if(oldEvents.invalidLines){old=null;oldEvents=null;}
     }
   }
+  if(amendFrom&&(!old||old.fragments?.length!==4||!old.lockedSuite?.artifact||old.testAmendment||
+      artifactDigest(old.lockedSuite.artifact)!==old.lockedSuite.artifactHash||
+      !existsSync(join(oldDir,"candidate",TEST))||
+      createHash("sha256").update(readFileSync(join(oldDir,"candidate",TEST))).digest("hex")!==old.lockedSuite.artifact.files?.[TEST]))
+    throw Error("Observed test-amendment source failed integrity verification");
   const focus=[
     "Save correction on two tasks; assert no model calls, correct parent/revision, validation limits and idempotency.",
     "Run a revision with mock model, wait for founder-review, accept it; assert accepted state, exact journal acknowledgement, and next correction preserves accepted history.",
@@ -321,6 +328,7 @@ async function authorTests(){
         print("REUSED "+id);continue;
       }
     }
+    if(amendFrom)throw Error("Cannot verify original Quinn checkpoint "+id+"; no regeneration allowed");
     const bundle={contractArtifactHash:expected,qaArtifactHash:quinn.artifactHash,criterionId:id,
       criterion:record.contract.acceptanceCriteria[i],qaCoverage:quinn.artifact.coverage?.find(c=>c.criterionId===id),
       fixtureSource:scaffold,focus:focus[i]||"Test the criterion",
@@ -351,10 +359,21 @@ async function authorTests(){
     requireVerdict(piece,"COMPLETE");
     state.fragments.push({id,executionId:piece.executionId,artifactHash:piece.hash,fileHash:piece.artifact.files[rel],originRun:runDir});save();
   }
-  const code=scaffold+"\n"+state.fragments.map(f=>readFileSync(join(runDir,"fragments",f.id+".mjs"),"utf8")).join("\n\n")+"\n";
+  let code=scaffold+"\n"+state.fragments.map(f=>readFileSync(join(runDir,"fragments",f.id+".mjs"),"utf8")).join("\n\n")+"\n";
+  if(amendFrom){
+    const originalHash=createHash("sha256").update(code).digest("hex");
+    if(originalHash!==old.lockedSuite.artifact.files[TEST])throw Error("Reassembled Quinn suite does not match its original lock");
+    const amended=amendObservedFixtureV2(code);
+    code=amended.source;
+    state.testAmendment={actor:"studio",origin:"deterministic-fixture-correction",sourceRun:oldDir,
+      sourceSuiteHash:originalHash,amendedSuiteHash:createHash("sha256").update(code).digest("hex"),changes:amended.changes,
+      limitation:"Journal fsync simulated only inside the isolated permission test process; physical durability not tested"};
+    writeFileSync(join(runDir,"test-amendment.json"),JSON.stringify(state.testAmendment,null,2),{flag:"wx",mode:0o600});
+    save();print("AMENDED OBSERVED FIXTURES; original Quinn responses retained; no model calls");
+  }
   writeFileSync(join(candidate,TEST),code,{mode:0o600,flag:"wx"});
   const suite={stage:"ai:tests",role:"studio",executionId:randomUUID(),sourceExecutionId:quinn.executionId};
-  const artifact={contractArtifactHash:expected,qaArtifactHash:quinn.artifactHash,fragments:state.fragments,files:{[TEST]:pathHash(TEST)}};
+  const artifact={contractArtifactHash:expected,qaArtifactHash:quinn.artifactHash,fragments:state.fragments,files:{[TEST]:pathHash(TEST)},...(state.testAmendment?{testAmendment:state.testAmendment}:{})};
   const hash=artifactDigest(artifact);
   writeFileSync(join(runDir,"locked-suite.json"),JSON.stringify(artifact),{mode:0o600,flag:"wx"});
   log("artifact.saved",suite,{artifactHash:hash});state.lockedSuite={executionId:suite.executionId,artifactHash:hash,artifact};save();
@@ -546,7 +565,7 @@ try {
   }
   if(after.evidence.exitCode!==0||after.evidence.fail!==0||after.evidence.pass!==4) throw Error("Candidate acceptance tests not green; preserve for repair");
   const qa=await runRole({stage:"ai:qa",role:"quinn-qa",previous:build,paths:[],rounds:5,requireIndependent:true,freeModel:REVIEW_MODEL(state.buildModel),
-    brief:"Review actual locked tests, changed paths "+JSON.stringify(state.changedPaths)+", and deterministic test report below. Independently assess coverage including race and gate failure. Do not claim browser testing or other runs. Return APPROVE only if evidence and tests are meaningful, otherwise CHANGES with specific findings. Report: "+after.report.slice(0,16000)});
+    brief:"Review actual locked tests, changed paths "+JSON.stringify(state.changedPaths)+", and deterministic test report below. Independently assess coverage including race and gate failure. The permission sandbox simulates only journal fsync; do not claim physical durability. If the locked suite has a Studio testAmendment, review its changes and original Quinn fragments before approval. Do not claim browser testing or other runs. Return APPROVE only if evidence and tests are meaningful, otherwise CHANGES with specific findings. Report: "+after.report.slice(0,16000)});
   requireVerdict(qa,"APPROVE");
   const rex=await runRole({stage:"ai:review",role:"rex-reviewer",previous:qa,paths:[],rounds:6,requireIndependent:true,freeModel:REVIEW_MODEL(state.buildModel),
     brief:"Read the actual candidate files in "+JSON.stringify(state.changedPaths)+" and locked tests. Review security, per-task isolation, state races, acceptance and scope. Return APPROVE only when no must-fix remains; otherwise CHANGES with precise file/line findings. Actual test report: "+after.report.slice(0,12000)});
