@@ -124,7 +124,7 @@ try {
     await page.waitForSelector(".eng[data-eng=claude]");
     assert((await page.$eval("#productPick", (s) => s.selectedOptions[0].textContent)) === "Parent Plus", "product shown");
     for (const n of ["Claude Code", "Codex", "Other models"]) assert(await page.isVisible(`.eng:has-text("${n}")`), `engine ${n}`);
-    for (const t of ["Real app", "Prototype", "Founder dashboard", "Changes"]) assert(await page.isVisible(`.rtab:has-text("${t}")`), `tab ${t}`);
+    for (const t of ["Real app", "Prototype", "Agents", "Changes"]) assert(await page.isVisible(`.rtab:has-text("${t}")`), `tab ${t}`);
     assert(cookie && cookie.httpOnly && cookie.sameSite === "Strict", "HttpOnly SameSite=Strict cookie");
     assert(!page.url().includes("k="), "key removed from the address bar");
   });
@@ -441,7 +441,7 @@ try {
     for (let i = 0; i < 40 && !JSON.parse(readFileSync(join(home, "team.json")))["parent-plus"]?.overrides?.["maya-ai-pm"]; i++) await page.waitForTimeout(150);
     const saved = JSON.parse(readFileSync(join(home, "team.json"))); assert(saved["parent-plus"].overrides["maya-ai-pm"] === "free:mistral", "override saved");
   });
-  await check("ST-10", "Founder dashboard shows the live board from GitHub", async () => {
+  await check("ST-10", "Agents tab shows the live board from GitHub", async () => {
     await page.click("#tab-agents");
     await page.waitForSelector("#tracks .trk:not(.head)", { timeout: 8000 });
     const rows = await page.$$eval("#tracks .trk:not(.head) .name", (n) => n.map((x) => x.innerText));
