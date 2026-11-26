@@ -450,8 +450,8 @@ try {
     assert((await page.$$("#tracks .st.agent")).length >= 1, "animated 'agent working' cell");
     assert((await page.$$("#feed a")).length >= 3, "feed");
     assert(await page.isHidden("#noAiOrg"), "AI Org detected");
-    await page.waitForSelector('.usage-card:has-text("test/served-model")');
-    const usage = await page.locator('.usage-card:has-text("test/served-model")').innerText();
+    const modelCard = page.locator('.usage-card:has-text("test/served-model")').filter({ hasText: "Requested test/model-a" });
+    const usage = await modelCard.innerText();
     assert(/Provider reported/.test(usage) && /Requested test\/model-a/.test(usage), "reported and requested models are distinguishable");
     assert(/Cache\s+\d+/.test(usage) && /Reasoning\s+Unknown/.test(usage), "measured cache and absent reasoning are distinguishable");
     const worker = await page.locator('.usage-card:has-text("fixture/worker-model")').innerText();
