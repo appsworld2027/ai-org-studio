@@ -18,6 +18,8 @@ import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
 import { providerAllowed, modelAllowed, validProvider, validModel, planEnv, scrubPaidEnv, BLOCKED } from "./billing.mjs";
 import { runTurn } from "./agent.mjs";
+import { createFounderPilot } from "./founder-pilot.mjs";
+
 import { createFounderInbox } from "./founder-inbox.mjs";
 import { handleFounderInbox } from "./founder-inbox-http.mjs";
 
@@ -33,6 +35,18 @@ import { ENGINE_MODELS, plan as teamPlanFor, parseAgent } from "./team.mjs";
 scrubPaidEnv();
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const store = makeStore();
+let localFounderPilot;
+function founderPilotInstance() {
+  if (process.env.STUDIO_LOCAL_PILOT !== "true") return null;
+
+  return localFounderPilot ||= createFounderPilot({
+    dir: join(store.dir, "founder-pilot"),
+    inbox: founderInbox,
+    orgDir: process.env.STUDIO_AI_ORG_DIR,
+    keyFile: process.env.STUDIO_PILOT_KEY_FILE
+  });
+}
+
 const founderInbox = createFounderInbox(
   join(store.dir, "founder-inbox")
 );
@@ -377,6 +391,35 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== "GET" && !originOk(req)) return json(res, 403, { error: "Blocked: request did not come from the Studio page." });
     if (STATIC[path]) { const f = join(ROOT, STATIC[path]); return send(res, 200, readFileSync(f), TYPES[extname(f)] || "application/octet-stream"); }
 
+
+
+    if (path === "/api/founder-pilot") {
+      const pilot = founderPilotInstance();
+      if (!pilot) {
+        return json(res, 403, {
+          error: "Local agent pilot disabled"
+        });
+      }
+      try {
+        if (req.method === "GET") {
+          return json(res, 200, {
+            revisions: pilot.history("studio-pilot-001")
+          });
+        }
+        if (req.method === "POST") {
+          return json(res, 200, await pilot.run(
+            await readBody(req, 100000)
+          ));
+        }
+        return json(res, 405, {
+          error: "Method not allowed"
+        });
+      } catch (error) {
+        return json(res, 409, {
+          error: String(error.message).slice(0, 250)
+        });
+      }
+    }
 
     if (path === "/api/founder-inbox") {
       return await handleFounderInbox(req, res, founderInbox);

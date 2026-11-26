@@ -75,7 +75,86 @@
         `${task.status} | Planned owner: Maya | ` +
         `Execution not verified`;
 
+
       item.append(name, detail, state);
+
+      if (task.requestId === "studio-pilot-001") {
+        const panel = document.createElement("section");
+        const feedback = document.createElement("textarea");
+        feedback.placeholder = "What should Maya correct?";
+        feedback.maxLength = 2000;
+        feedback.rows = 3;
+        feedback.style.width = "100%";
+
+        const run = document.createElement("button");
+        run.textContent = "Run discovery / request revision";
+        run.type = "button";
+
+        const evidence = document.createElement("div");
+
+        async function loadEvidence() {
+          const response = await fetch("/api/founder-pilot");
+          if (!response.ok) return;
+
+          const { revisions } = await response.json();
+          evidence.replaceChildren();
+
+          for (const revision of revisions) {
+            const h = document.createElement("h4");
+            h.textContent =
+              `Revision ${revision.revision}: ${revision.status}`;
+            evidence.append(h);
+
+            for (const agent of revision.agents) {
+              const heading = document.createElement("strong");
+              heading.textContent =
+                `${agent.agent} — ${agent.requestedModel}`;
+
+              const output = document.createElement("pre");
+              output.style.whiteSpace = "pre-wrap";
+              output.textContent = agent.output;
+
+              evidence.append(heading, output);
+            }
+          }
+        }
+
+        run.onclick = async () => {
+          run.disabled = true;
+          run.textContent = "Agents working…";
+
+          try {
+            const response = await fetch("/api/founder-pilot", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                requestId: task.requestId,
+                feedback: feedback.value
+              })
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+              throw new Error(result.error || "Pilot failed");
+            }
+
+            feedback.value = "";
+            await loadEvidence();
+          } catch (error) {
+            status.textContent = error.message;
+            await loadEvidence();
+          } finally {
+            run.disabled = false;
+            run.textContent = "Run discovery / request revision";
+          }
+        };
+
+        panel.append(feedback, run, evidence);
+        item.append(panel);
+        loadEvidence().catch(() => {});
+      }
+
       tasks.append(item, document.createElement("hr"));
     }
   }
