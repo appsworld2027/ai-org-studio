@@ -68,6 +68,30 @@ function snapshot(root, orgDir, role) {
   }
 }
 
+// Preload the most relevant committed implementation. The model can inspect
+// further via read tools, but it should not spend its entire budget discovering
+// file names or repeating reads. Missing excerpts are explicitly reported.
+export function discoveryContext(source) {
+  const selections = [
+    ["server/founder-inbox.mjs", "", 3000],
+    ["server/founder-pilot.mjs", "  function run(", 4600],
+    ["public/founder-inbox.js", "        const save = control(", 1900]
+  ];
+  const snippets = [];
+  let sourceFiles = 0;
+  for (const [path, marker, limit] of selections) {
+    try {
+      const content = readFileSync(join(source, path), "utf8");
+      const at = marker ? content.indexOf(marker) : 0;
+      if (at < 0) { snippets.push(path + ": requested excerpt unavailable"); continue; }
+      sourceFiles++;
+      const excerpt = content.slice(at, at + limit);
+      snippets.push(path + " (committed excerpt; not proof of runtime behavior):\n" + excerpt);
+    } catch { snippets.push(path + ": unavailable in snapshot"); }
+  }
+  return { text: snippets.join("\n\n"), sourceFiles };
+}
+
 export function createFounderPilot({
   dir, inbox, orgDir, keyFile, root = ROOT, runner = runTurn
 }) {
@@ -130,20 +154,24 @@ export function createFounderPilot({
       if (typeof key !== "string" || !key) throw new Error("NVIDIA connection unavailable");
       agent = router.agentInfo(role);
       source = snapshot(root, orgDir, role);
-      const profile = readFileSync(join(source, "org/agents", role + ".md"), "utf8");
       const playbook = readFileSync(join(source, "playbooks/ai-pm.md"), "utf8");
+      const decisions = playbook.match(/## Phase 2[^\n]*\n([\s\S]*?)(?=\n## |$)/)?.[1] || "";
+      const quality = playbook.match(/## Quality bar[^\n]*\n([\s\S]*?)(?=\n## |$)/)?.[1] || "";
+      const context = discoveryContext(source);
       const base = revisions.slice(0, -1).reverse().find(r => r.contract);
       const corrections = revisions.filter(r => r.revision > (base?.revision || 0) && r.feedback)
         .map(r => "Revision " + r.revision + ": " + r.feedback).join("\n");
       if (corrections.length > 12000) throw new Error("Too much pending feedback for this pilot; consolidate it first");
       event("context.prepared", record, { actor: role,
         baseRevision: base?.revision, baseArtifactHash: base?.contract ? artifactDigest(base.contract) : undefined,
-        correctionCount: revisions.filter(r => r.revision > (base?.revision || 0) && r.feedback).length });
+        correctionCount: revisions.filter(r => r.revision > (base?.revision || 0) && r.feedback).length,
+        contextChars: context.text.length, sourceFiles: context.sourceFiles });
       const messages = [{ role: "user", content: [
         "Founder objective: " + task.title + "\n" + task.description,
         base ? "Base contract: " + JSON.stringify(base.contract) : "",
         corrections ? "Founder corrections (in order):\n" + corrections : "",
-        "Review the available committed product files if needed. Produce the contract now."
+        "Existing implementation evidence (read these excerpts first; do not assume the feature is complete):\n" + context.text,
+        "Deliver the proposed founder feedback contract now. Inspect additional files only if a material question cannot be answered from the evidence."
       ].join("\n\n") }];
       record.requestedModel = model;
       record.step = "Maya is preparing the contract";
@@ -151,16 +179,22 @@ export function createFounderPilot({
       let done = false, failure, reportedModel = null;
       await runner({
         messages, provider: { ...PROVIDERS.nvidia, id: "nvidia", key }, model,
-        root: source, maxRounds: 6, maxTokens: 1600, allowedTools: READ_TOOLS,
+        root: source, maxRounds: 3, maxTokens: 1900, allowedTools: READ_TOOLS,
+        validateFinal: text => { try { parseContract(text); return true; } catch { return false; } },
+        finalInstruction: "Your reading budget is complete. Do not request more tools. Return the complete valid JSON contract now from the supplied evidence and previous tool results. Include any uncertainty as an open question, rather than making unsupported claims.",
         signal: AbortSignal.timeout(240000), auto: false, approve: async () => false,
-        systemPrompt: profile + "\n" + playbook +
-          "\n\nLOCAL PILOT OVERRIDE: You are Maya doing product discovery only. " +
-          "The supplied snapshot contains selected committed Studio files. Use actual list_files/read_file " +
-          "function calls if needed; never emit tool request JSON as your answer. Do not write files, use GitHub, " +
-          "run commands, or claim tests or implementation. Report unknowns honestly. " +
-          "After reading what you need, return ONLY one JSON object with summary (string), " +
-          "acceptanceCriteria (array of at least two testable strings), edgeCases (array of strings), " +
-          "and openQuestions (array of unresolved material product decisions, empty if none).",
+        systemPrompt: "You are " + agent.name + ", the AI Org product manager (" + role + "). " +
+          "This is a supervised, read-only product discovery task. Identify the user problem, expected behavior, " +
+          "scope and testable outcomes. The founder only decides material product questions; decide routine details. " +
+          "No writes, GitHub actions, tests, deployments or shell commands are possible in this pilot. " +
+          "The provided code excerpts are evidence of current implementation, not evidence that it runs correctly. " +
+          "You may use actual list_files/read_file function calls at most during the first two rounds if truly necessary. " +
+          "Never return a tool request as plain text or JSON. Return ONLY a JSON object with summary (string), " +
+          "acceptanceCriteria (at least two testable Given/When/Then strings with AC IDs), " +
+          "edgeCases (array of strings, aim for at least five), and openQuestions (array of unresolved founder decisions, " +
+          "empty if none). No markdown or extra fields. State material assumptions in the summary. " +
+          "Follow these applicable AI Org playbook guidelines for founder decisions and quality, while respecting the read-only pilot:\n" +
+          decisions.slice(0, 2000) + "\n" + quality.slice(0, 1200),
         observe(observation) {
           const { type, ...fields } = observation;
           if (type === "model.result" && observation.reportedModel) {
@@ -169,6 +203,10 @@ export function createFounderPilot({
             reportedModel = reportedModel && reportedModel !== reported ? "other-unverified" : reported;
           }
           event(type, record, { actor: role, ...fields });
+          if (type === "model.request" && fields.phase === "finalize") {
+            record.step = "Maya is producing the final contract";
+            save(revisions);
+          }
         },
         emit(event) {
           if (event.t === "tool") {

@@ -120,3 +120,73 @@ test("legacy attempt is rejected, corrections remain durable, and only latest va
   assert.ok(!readFileSync(join(dir, "execution-events.jsonl"), "utf8").includes("PRIVATE_PROVIDER_DETAILS"));
 
 });
+
+test("discovery reserves a tool-free final-answer round and preserves read results", async t => {
+  const root = mkdtempSync(join(tmpdir(), "pilot-final-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, "README.md"), "actual repo evidence");
+  const requests = [], events = [], observations = [];
+  const messages = [{ role: "user", content: "Create a feature contract" }];
+  const sse = delta => new Response("data: " + JSON.stringify({ choices: [{ delta }] }) + "\n\ndata: [DONE]\n\n");
+  await runTurn({
+    root, messages, systemPrompt: "Read only", provider: { id: "nvidia", base: "http://test.invalid" },
+    model: "test", maxRounds: 2, maxTokens: 1200, allowedTools: ["read_file"],
+    finalInstruction: "Return the contract now.", emit: e => events.push(e), observe: e => observations.push(e),
+    fetchImpl: async (_url, opts) => {
+      requests.push(JSON.parse(opts.body));
+      if (requests.length === 1) return sse({ tool_calls: [
+        { index: 0, id: "read", function: { name: "read_file", arguments: '{"path":"README.md"}' } }
+      ] });
+      return sse({ content: JSON.stringify(contract) });
+    }
+  });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].tools[0].function.name, "read_file");
+  assert.equal(requests[1].tools, undefined);
+  assert.equal(requests[1].tool_choice, undefined);
+  assert.match(requests[1].messages.find(m => m.tool_call_id === "read").content, /actual repo evidence/);
+  assert.equal(requests[1].messages.at(-1).content, "Return the contract now.");
+  assert.deepEqual(observations.filter(e => e.type === "model.request").map(e => e.phase), ["explore", "finalize"]);
+  assert.equal(events.at(-1).t, "done");
+  assert.deepEqual(parseContract(messages.at(-1).content), contract);
+});
+
+test("a tool request during the final-answer round is blocked and cannot report success", async t => {
+  const root = mkdtempSync(join(tmpdir(), "pilot-final-block-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const events = [], observations = [];
+  await runTurn({
+    root, messages: [{role:"user",content:"Produce contract"}], systemPrompt: "Read only",
+    provider: { id: "nvidia", base: "http://test.invalid" }, model: "test", maxRounds: 1,
+    allowedTools: ["read_file"], finalInstruction: "Return the contract now.",
+    emit: e => events.push(e), observe: e => observations.push(e),
+    fetchImpl: async () => new Response("data: " + JSON.stringify({ choices: [{ delta: { tool_calls: [
+      { index: 0, id: "read", function: { name: "read_file", arguments: '{"path":"README.md"}' } }
+    ] } }] }) + "\n\ndata: [DONE]\n\n")
+  });
+  assert.equal(events.at(-1).t, "error");
+  assert.equal(observations.find(e => e.type === "tool.result").outcome, "blocked");
+  assert.ok(!events.some(e => e.t === "done"));
+});
+
+test("an incomplete early text response triggers exactly one reserved final attempt", async () => {
+  const events = [], observations = [], requests = [];
+  const messages = [{ role: "user", content: "Create a contract" }];
+  await runTurn({
+    root: ".", messages, systemPrompt: "Discovery", provider: { id: "nvidia", base: "http://test.invalid" },
+    model: "test", maxRounds: 3, allowedTools: ["read_file"],
+    finalInstruction: "Return the complete contract.",
+    validateFinal: text => { try { parseContract(text); return true; } catch { return false; } },
+    emit: e => events.push(e), observe: e => observations.push(e),
+    fetchImpl: async (_url, opts) => {
+      requests.push(JSON.parse(opts.body));
+      const content = requests.length === 1 ? '{"action":"list_dir","path":"."}' : JSON.stringify(contract);
+      return new Response("data: " + JSON.stringify({ choices: [{ delta: { content } }] }) + "\n\ndata: [DONE]\n\n");
+    }
+  });
+  assert.equal(requests.length, 2);
+  assert.ok(observations.some(e => e.type === "artifact.rejected"));
+  assert.equal(observations.filter(e => e.type === "model.request").at(-1).phase, "finalize");
+  assert.equal(requests[1].tools, undefined);
+  assert.deepEqual(parseContract(messages.at(-1).content), contract);
+});

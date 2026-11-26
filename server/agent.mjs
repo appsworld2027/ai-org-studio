@@ -138,21 +138,27 @@ export function effortFields(providerId, effort) {
 }
 // apps: [{ name, app, tool, description, schema, session, readOnly }] from mcp-client.openApps — connected apps (MCP).
 // roots: extra folders the agent may read/write besides the product (e.g. the Garage).
-export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [], allowedTools = null, maxTokens, observe }) {
+export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [], allowedTools = null, maxTokens, observe, finalInstruction, validateFinal }) {
   const enabledTools = toolSchemas().filter(t => !allowedTools || allowedTools.includes(t.function.name));
   const appSchemas = apps.map((a) => ({ type: "function", function: { name: a.name, description: `[${a.app}] ${a.description}`, parameters: a.schema?.type === "object" ? a.schema : { type: "object", properties: {} } } }));
   let extra = effortFields(provider.id, effort);
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) return emit({ t: "stopped" });
+    // Reserve the last request for an actual answer when the caller opts in.
+    // Never let another round of reading consume the artifact-delivery budget.
+    const finalizing = !!finalInstruction && round === maxRounds - 1;
+    const phase = finalizing ? "finalize" : "explore";
+    const roundTools = finalizing ? [] : [...enabledTools, ...appSchemas];
+    const roundMessages = finalizing ? [...messages, { role: "user", content: finalInstruction }] : messages;
     const started = Date.now();
     const call = async () => {
-      observe?.({ type: "model.request", round: round + 1, requestedModel: model });
+      observe?.({ type: "model.request", round: round + 1, requestedModel: model, phase });
       const response = await fetchImpl(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,
       headers: { "Content-Type": "application/json", ...(provider.key ? { Authorization: `Bearer ${provider.key}` } : {}), ...(provider.extraHeaders || {}) },
-      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...messages], tools: [...enabledTools, ...appSchemas], tool_choice: "auto", ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra, ...(maxTokens ? { max_tokens: maxTokens } : {}) }),
+      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...roundMessages], ...(roundTools.length ? { tools: roundTools, tool_choice: "auto" } : {}), ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra, ...(maxTokens ? { max_tokens: maxTokens } : {}) }),
     });
-      observe?.({ type: "model.headers", round: round + 1, httpStatus: response.status,
+      observe?.({ type: "model.headers", round: round + 1, phase, httpStatus: response.status,
         durationMs: Date.now() - started });
       return response;
     };
@@ -170,15 +176,32 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
     }
     emit({ t: "assistant_start" });
     const { text, calls, usage, finish, reportedModel } = await readStream(res.body, (d) => emit({ t: "delta", d }));
-    observe?.({ type: "model.result", round: round + 1, durationMs: Date.now() - started,
+    observe?.({ type: "model.result", round: round + 1, phase, durationMs: Date.now() - started,
       toolRequests: calls.length, finish, reportedModel, inputTokens: usage?.input, outputTokens: usage?.output });
     emit({ t: "usage", models: [{ model, input: usage?.input, output: usage?.output }] });
     messages.push({ role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args || "{}" } })) } : {}) });
-    if (!calls.length) return emit({ t: "done" });
+    if (!calls.length) {
+      // A text-only tool request or malformed artifact is not a successful
+      // answer. Use the reserved final round once, not an unbounded retry loop.
+      if (finalInstruction && !finalizing && validateFinal && !validateFinal(text)) {
+        observe?.({ type: "artifact.rejected", round: round + 1, phase, outcome: "error", errorKind: "invalid_artifact" });
+        round = maxRounds - 2;
+        continue;
+      }
+      return emit({ t: "done" });
+    }
+    if (finalizing) {
+      for (const [toolIndex, c] of calls.entries()) {
+        const tool = TOOLS.some(t => t.name === c.name) ? c.name : "other";
+        observe?.({ type: "tool.request", round: round + 1, phase, toolIndex, tool });
+        observe?.({ type: "tool.result", round: round + 1, phase, toolIndex, tool, outcome: "blocked" });
+      }
+      return emit({ t: "error", message: "Agent requested tools in the reserved final-answer step; no contract was delivered." });
+    }
     for (const [toolIndex, c] of calls.entries()) {
       const observedTool = TOOLS.some(t => t.name === c.name) ? c.name : "other";
       const toolStart = Date.now();
-      const toolEvent = { round: round + 1, toolIndex, tool: observedTool };
+      const toolEvent = { round: round + 1, phase, toolIndex, tool: observedTool };
       observe?.({ type: "tool.request", ...toolEvent });
       let outcome = "ok";
       const observeResult = result => observe?.({ type: "tool.result", ...toolEvent, outcome,

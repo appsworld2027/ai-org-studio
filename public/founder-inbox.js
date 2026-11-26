@@ -203,16 +203,17 @@
             "revision.saved": "Correction saved", "run.started": "Run started", "route.selected": "Agent and engine selected",
             "context.prepared": "Context prepared", "model.request": "Model request initiated",
             "model.headers": "Provider HTTP response", "model.result": "Model response parsed",
-            "tool.request": "Tool requested", "tool.result": "Tool result", "artifact.saved": "Contract saved",
+            "tool.request": "Tool requested", "tool.result": "Tool result", "artifact.rejected": "Incomplete artifact rejected", "artifact.saved": "Contract saved",
             "handoff.offered": "Handoff offered", "handoff.acknowledged": "Handoff acknowledged",
             "run.completed": "Run completed", "run.failed": "Run failed", "run.interrupted": "Run interrupted"
           };
           for (const e of [...events].reverse()) {
             const fields = [new Date(e.at).toLocaleTimeString(), "r" + e.revision, roleLabel[e.actor] || e.actor || "Studio",
               kind[e.type] || e.type, e.requestedModel, e.reportedModel && "reported " + e.reportedModel,
-              e.round && "round " + e.round, e.httpStatus && "HTTP " + e.httpStatus, e.tool, e.outcome,
+              e.round && "round " + e.round, e.phase, e.httpStatus && "HTTP " + e.httpStatus, e.tool, e.outcome,
               e.artifactHash && "artifact " + e.artifactHash.slice(0, 12),
               e.baseArtifactHash && "base " + e.baseArtifactHash.slice(0, 12),
+              Number.isFinite(e.sourceFiles) && e.sourceFiles + " context files",
               e.fromRole && e.toRole && ((roleLabel[e.fromRole] || e.fromRole) + " → " + (roleLabel[e.toRole] || e.toRole)),
               Number.isFinite(e.durationMs) && e.durationMs + " ms",
               Number.isFinite(e.inputTokens) && e.inputTokens + " input tokens",

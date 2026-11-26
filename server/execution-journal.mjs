@@ -7,7 +7,7 @@ import { randomUUID, createHash } from "node:crypto";
 const TYPES = new Set([
   "revision.saved", "run.started", "route.selected", "context.prepared",
   "model.request", "model.headers", "model.result", "tool.request",
-  "tool.result", "artifact.saved", "handoff.offered", "handoff.acknowledged",
+  "tool.result", "artifact.rejected", "artifact.saved", "handoff.offered", "handoff.acknowledged",
   "run.completed", "run.failed", "run.interrupted"
 ]);
 const ROLES = new Set(["maya-ai-pm", "founder", "arjun-cpto", "quinn-qa", "dev-coder", "rex-reviewer", "studio"]);
@@ -45,6 +45,7 @@ export function createExecutionJournal(dir) {
       else if (k === "reportedModel" && fields[k] != null) event[k] = "other-unverified";
     }
     if (fields.engine === "free") event.engine = "free";
+    if (["explore", "finalize"].includes(fields.phase)) event.phase = fields.phase;
     if (TOOLS.has(fields.tool)) event.tool = fields.tool;
     if (FINISH.has(fields.finish)) event.finish = fields.finish;
     if (OUTCOMES.has(fields.outcome)) event.outcome = fields.outcome;
@@ -52,7 +53,7 @@ export function createExecutionJournal(dir) {
     if (SHA.test(fields.artifactHash || "")) event.artifactHash = fields.artifactHash;
     if (SHA.test(fields.baseArtifactHash || "")) event.baseArtifactHash = fields.baseArtifactHash;
     for (const k of ["parentRevision", "baseRevision", "round", "toolIndex", "toolRequests", "httpStatus",
-      "durationMs", "inputTokens", "outputTokens", "correctionCount", "resultChars"]) {
+      "durationMs", "inputTokens", "outputTokens", "correctionCount", "resultChars", "contextChars", "sourceFiles"]) {
       if (uint(fields[k])) event[k] = fields[k];
     }
     const fd = openSync(path, "a", 0o600);

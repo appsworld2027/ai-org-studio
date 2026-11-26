@@ -25,6 +25,12 @@ error category, and SHA-256 contract digest. No raw prompts, founder feedback,
 credentials, tool arguments/output, or HTTP bodies are written to the journal.
 Missing provider usage/model metadata is unknown, not zero or guessed.
 
+Discovery preloads selected committed source excerpts and records context size
+and file count. It has at most three model rounds, with the last reserved for
+a tool-free final artifact. Earlier invalid text artifacts are rejected and
+may use the reserved final round once. The journal identifies exploration and
+finalization; it does not count incomplete output as a delivered contract.
+
 A saved contract is logged before a handoff is offered. A founder acknowledgement
 must refer to the same execution ID and artifact digest for an instrumented
 contract. A revision can reference a prior contract digest and correction count.
