@@ -18,6 +18,9 @@ import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
 import { providerAllowed, modelAllowed, validProvider, validModel, planEnv, scrubPaidEnv, BLOCKED } from "./billing.mjs";
 import { runTurn } from "./agent.mjs";
+import { createFounderInbox } from "./founder-inbox.mjs";
+import { handleFounderInbox } from "./founder-inbox-http.mjs";
+
 import { makeConnectors, CATALOG } from "./connectors.mjs";
 import { openApps } from "./mcp-client.mjs";
 import { makeGarage } from "./garage.mjs";
@@ -30,6 +33,10 @@ import { ENGINE_MODELS, plan as teamPlanFor, parseAgent } from "./team.mjs";
 scrubPaidEnv();
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const store = makeStore();
+const founderInbox = createFounderInbox(
+  join(store.dir, "founder-inbox")
+);
+
 const garage = makeGarage({ dir: expand(process.env.STUDIO_GARAGE || "~/studio-garage"), repo: process.env.STUDIO_GARAGE_REPO || "", log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
 const connectors = makeConnectors({ dir: store.dir, root: resolve(dirname(fileURLToPath(import.meta.url)), ".."), log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
 const settings = (() => { try { return JSON.parse(readFileSync(process.env.STUDIO_CONFIG || join(ROOT, "studio.config.json"), "utf8")); } catch { return {}; } })();
@@ -369,6 +376,11 @@ const server = http.createServer(async (req, res) => {
     if (!cookieOk(req)) return send(res, 401, "This Studio is private. Open it with the link printed when it started (bash ~/ai-org-studio/bin/studio.sh).");
     if (req.method !== "GET" && !originOk(req)) return json(res, 403, { error: "Blocked: request did not come from the Studio page." });
     if (STATIC[path]) { const f = join(ROOT, STATIC[path]); return send(res, 200, readFileSync(f), TYPES[extname(f)] || "application/octet-stream"); }
+
+
+    if (path === "/api/founder-inbox") {
+      return await handleFounderInbox(req, res, founderInbox);
+    }
 
     if (path === "/api/config") return json(res, 200, {
       platform: platform(), workspace: WORKSPACE,
