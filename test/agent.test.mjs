@@ -255,3 +255,29 @@ test("v2.1 Claude Code: modes, thinking, plan (TodoWrite), memory, plan approval
   assert.equal(controlResponse("r", { tool_name: "Edit", input: {} }, "session").response.response.updatedPermissions[0].mode, "acceptEdits");
   assert.equal(ev({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", utilization: 0.83 } })[0].usedPercent, 83);
 });
+
+test("tool-free direct Nemotron generation disables extended thinking and records counts only", async () => {
+  const events=[], requests=[], emitted=[];
+  const invoke = (model, directGeneration) => runTurn({
+    messages:[{role:"user",content:"Return source"}],provider:{id:"nvidia",base:"https://p.example/v1"},model,
+    root:tmp(),systemPrompt:"",emit:e=>emitted.push(e),observe:e=>events.push(e),
+    allowedTools:[],directGeneration,maxTokens:6000,maxRounds:1,
+    finalInstruction:"Return the requested source",
+    approve:async()=>false,fetchImpl:async(_url,opts)=>{
+      requests.push(JSON.parse(opts.body));
+      return {ok:true,status:200,body:sse({model,choices:[{delta:{reasoning_content:"PRIVATE_REASONING",content:"code"},finish_reason:"stop"}]})};
+    }
+  });
+  await invoke("nvidia/nemotron-3-ultra-550b-a55b",true);
+  assert.deepEqual(requests[0].chat_template_kwargs,{enable_thinking:false});
+  assert.equal(requests[0].max_tokens,6000);
+  const result=events.find(e=>e.type==="model.result");
+  assert.equal(result.responseChars,4);
+  assert.equal(result.reasoningChars,"PRIVATE_REASONING".length);
+  assert.equal(events.find(e=>e.type==="model.request").thinkingMode,"off");
+  assert.doesNotMatch(JSON.stringify({events,emitted}),/PRIVATE_REASONING/);
+  await invoke("nvidia/nemotron-3-ultra-550b-a55b",false);
+  await invoke("mistralai/mistral-large-4-1t-a52b",true);
+  assert.equal(requests[1].chat_template_kwargs,undefined);
+  assert.equal(requests[2].chat_template_kwargs,undefined);
+});

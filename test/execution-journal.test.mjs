@@ -15,7 +15,7 @@ test("journal persists metadata only and reports malformed lines", t => {
     actor: "maya-ai-pm", round: 1, requestedModel: "nvidia/nemotron-3-ultra-550b-a55b",
     args: "PRIVATE_TOOL_ARGS", prompt: "PRIVATE_PROMPT", key: "PRIVATE_KEY" });
   log.append("model.result", { requestId: "studio-pilot-001", revision: 1,
-    inputTokens: 0, outputTokens: 5, reportedModel: "PRIVATE_PROVIDER_STRING", outcome: "ok" });
+    inputTokens: 0, outputTokens: 5, responseChars: 12, reasoningChars: 99, maxTokens: 6000, thinkingMode: "off", reasoning: "PRIVATE_REASONING", reportedModel: "PRIVATE_PROVIDER_STRING", outcome: "ok" });
   const path = join(dir, "execution-events.jsonl");
   const text = readFileSync(path, "utf8");
   assert.doesNotMatch(text, /PRIVATE_/);
@@ -23,6 +23,9 @@ test("journal persists metadata only and reports malformed lines", t => {
   const reopened = createExecutionJournal(dir).read();
   assert.equal(reopened.total, 2);
   assert.equal(reopened.events[1].inputTokens, 0);
+  assert.equal(reopened.events[1].reasoningChars, 99);
+  assert.equal(reopened.events[1].responseChars, 12);
+  assert.equal(reopened.events[1].thinkingMode, "off");
   assert.equal(reopened.events[1].reportedModel, "other-unverified");
   assert.equal(createExecutionJournal(dir).read(1).truncated, true);
   appendFileSync(path, "{truncated\n");

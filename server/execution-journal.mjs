@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 
 const TYPES = new Set([
-  "revision.saved", "run.started", "route.selected", "context.prepared",
+  "revision.saved", "run.started", "route.selected", "route.fallback", "context.prepared",
   "model.request", "model.headers", "model.result", "tool.request",
   "tool.result", "artifact.rejected", "artifact.recovered", "artifact.saved", "handoff.offered", "handoff.acknowledged",
   "run.completed", "run.failed", "run.interrupted", "coordination.requested", "coordination.started", "coordination.blocked", "coordination.completed", "coordination.failed", "stage.started", "stage.reused", "stage.completed", "stage.failed", "stage.interrupted", "handoff.received"
@@ -49,6 +49,7 @@ export function createExecutionJournal(dir) {
     if (/^BUILD-\d{2}$/.test(fields.buildUnit || "")) event.buildUnit = fields.buildUnit;
     if (["ai:discovery", "ai:plan", "ai:tests", "ai:build", "ai:qa", "ai:review"].includes(fields.stage)) event.stage = fields.stage;
     if (fields.engine === "free") event.engine = "free";
+    if (["off", "default"].includes(fields.thinkingMode)) event.thinkingMode = fields.thinkingMode;
     if (["explore", "finalize"].includes(fields.phase)) event.phase = fields.phase;
     if (TOOLS.has(fields.tool)) event.tool = fields.tool;
     if (FINISH.has(fields.finish)) event.finish = fields.finish;
@@ -62,7 +63,7 @@ export function createExecutionJournal(dir) {
     if (SHA.test(fields.artifactHash || "")) event.artifactHash = fields.artifactHash;
     if (SHA.test(fields.baseArtifactHash || "")) event.baseArtifactHash = fields.baseArtifactHash;
     for (const k of ["parentRevision", "baseRevision", "round", "toolIndex", "toolRequests", "httpStatus",
-      "durationMs", "inputTokens", "outputTokens", "correctionCount", "resultChars", "contextChars", "sourceFiles"]) {
+      "durationMs", "inputTokens", "outputTokens", "maxTokens", "responseChars", "reasoningChars", "correctionCount", "resultChars", "contextChars", "sourceFiles"]) {
       if (uint(fields[k])) event[k] = fields[k];
     }
     const fd = openSync(path, "a", 0o600);

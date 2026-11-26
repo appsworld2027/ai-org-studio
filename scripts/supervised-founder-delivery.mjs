@@ -11,6 +11,9 @@ import { createExecutionJournal, artifactDigest, failureKind } from "../server/e
 import { BUILD_UNITS, sourceRange } from "./founder-build-units.mjs";
 
 const ID = "studio-pilot-001", REV = 2;
+const PRIMARY_BUILD = "nvidia/nemotron-3-ultra-550b-a55b";
+const ALTERNATE_BUILD = "mistralai/mistral-large-4-1t-a52b";
+const REVIEW_MODEL = builder => builder === ALTERNATE_BUILD ? PRIMARY_BUILD : ALTERNATE_BUILD;
 const [historyDir, orgDir, keyFile, deliveryDir, expected] = process.argv.slice(2);
 if (!historyDir || !orgDir || !keyFile || !deliveryDir || !/^[a-f0-9]{64}$/.test(expected || "")) {
   throw Error("Usage: node scripts/supervised-founder-delivery.mjs HISTORY ORG KEYFILE OUTPUT EXPECTED_CONTRACT_HASH");
@@ -85,7 +88,7 @@ const parse = (s, inputHash, directSource = false) => {
       ...(directSource && p.verdict==="COMPLETE"?{source:p.source}:{}) };
   } catch { return null; }
 };
-async function runRole({stage: label, role, previous, paths, brief, requireIndependent = false, rounds = 10, directSource = false}) {
+async function runRole({stage: label, role, previous, paths, brief, requireIndependent = false, rounds = 10, directSource = false, freeModel = ""}) {
   const s = { stage: label, role, ...(directSource?(directSource.kind==="patch"?{buildUnit:directSource.id}:{criterionId:directSource.id}):{}), executionId: randomUUID(), sourceExecutionId: previous.executionId,
     inputArtifactHash: previous.hash, status: "running", startedAt: new Date().toISOString() };
   state.stages.push(s); save(); print("START " + role + " " + label + (directSource?" "+directSource.id:""));
@@ -94,10 +97,10 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
   try {
     send("stage.started");
     send("handoff.offered", { actor:"studio", fromRole:previous.role, toRole:role, artifactHash:previous.hash });
-    const chosen = router.route({ labels:[label,"engine:free"], engines:{free:true,claude:false,codex:false}, supervisedTrial:true });
+    const chosen = router.route({ labels:[label,"engine:free"], engines:{free:true,claude:false,codex:false}, supervisedTrial:true, freeModel:freeModel?"nvidia_nim/"+freeModel:"" });
     if (chosen.action !== "run" || chosen.role !== role || chosen.engine !== "free") throw Error("Expected free role unavailable");
     const model = chosen.free_model.replace(/^nvidia_nim\//,"");
-    if (!PROVIDERS.nvidia.models.includes(model)) throw Error("Model outside approved local allowlist");
+    if (!PROVIDERS.nvidia.models.includes(model) || (freeModel && model!==freeModel)) throw Error("Expected model outside approved local route");
     if (requireIndependent && state.stages.some(a=>a.stage==="ai:build" && a.status==="completed" && a.requestedModel===model))
       throw Error("Independent review model unavailable; stop for review");
     s.requestedModel = model;
@@ -122,7 +125,8 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
         if (!["write_file","edit_file"].includes(name) || typeof args.path!=="string") return false;
         return paths.includes(relative(candidate,resolve(candidate,args.path)).split(sep).join("/"));
       },
-      maxRounds:rounds,maxTokens:directSource?3500:5000,signal:AbortSignal.timeout(directSource?180000:900000),
+      maxRounds:rounds,maxTokens:directSource?.kind==="patch"?6000:directSource?3500:5000,
+      directGeneration:directSource?.kind==="patch",signal:AbortSignal.timeout(directSource?180000:900000),
       finalInstruction:directSource
         ?"Return the one-line JSON receipt followed by the exact requested fenced JavaScript source, not a description. No tools."
         :"Complete your final JSON receipt now, using the exact inputArtifactHash. Report incomplete work if files did not change. No further tools.",
@@ -140,7 +144,8 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
         return valid;
       },
       observe(e){const {type,...fields}=e;if(type==="model.headers"&&fields.httpStatus===200)httpOk=true;
-        if(type==="model.result"){modelResult=true;s.finish=fields.finish??null;if(fields.reportedModel)s.reportedModel=fields.reportedModel;}
+        if(type==="model.result"){modelResult=true;s.finish=fields.finish??null;if(fields.reportedModel)s.reportedModel=fields.reportedModel;
+          s.responseChars=fields.responseChars??null;s.reasoningChars=fields.reasoningChars??null;s.outputTokens=fields.outputTokens??null;}
         send(type,fields);},
       emit(e){if(e.t==="assistant_start")response="";if(e.t==="delta")response+=e.d;
         if(e.t==="done")done=true;if(["error","stopped"].includes(e.t))failure=e.message||"Stopped";}
@@ -326,6 +331,7 @@ async function authorBuild(locked){
     }
   }
   let previousExecution=state.lockedSuite.executionId;
+  let buildModel=PRIMARY_BUILD;
   for(const unit of BUILD_UNITS){
     const input=readFileSync(join(candidate,unit.path),"utf8"),range=sourceRange(input,unit),beforeHash=pathHash(unit.path);
     const oldUnit=old?.buildUnits?.find(u=>u.id===unit.id&&u.path===unit.path&&u.beforeHash===beforeHash);
@@ -337,7 +343,10 @@ async function authorBuild(locked){
       const completed=events.some(e=>e.type==="stage.completed"&&e.artifactHash===oldUnit.artifactHash)&&
         events.some(e=>e.type==="handoff.received"&&e.artifactHash===oldStage?.inputArtifactHash);
       const reused=oldStage?.reused&&events.some(e=>e.type==="stage.reused"&&e.artifactHash===oldUnit.artifactHash);
-      if((completed||reused)&&oldStage?.artifact?.files?.[unit.path]===digest&&digest===oldUnit.afterHash&&artifactDigest(oldStage.artifact)===oldUnit.artifactHash){
+      if((completed||reused)&&oldStage?.artifact?.files?.[unit.path]===digest&&digest===oldUnit.afterHash&&artifactDigest(oldStage.artifact)===oldUnit.artifactHash&&
+         [PRIMARY_BUILD,ALTERNATE_BUILD].includes(oldStage.requestedModel)&&
+         (!state.buildUnits.length||oldStage.requestedModel===buildModel)){
+        buildModel=oldStage.requestedModel;state.buildModel=buildModel;
         const bytes=readFileSync(join(oldDir,"build-checkpoints",unit.id+".mjs"));
         writeFileSync(checkpoint,bytes,{mode:0o600,flag:"wx"});writeFileSync(join(candidate,unit.path),bytes,{mode:0o600});
         state.buildUnits.push(oldUnit);state.stages.push({...oldStage,reused:true});save();
@@ -352,10 +361,25 @@ async function authorBuild(locked){
     const hash=artifactDigest(bundle);
     writeFileSync(join(runDir,"build-checkpoints",unit.id+"-input.json"),JSON.stringify(bundle),{mode:0o600,flag:"wx"});
     log("artifact.saved",upstream,{artifactHash:hash,buildUnit:unit.id});
-    const step=await runRole({stage:"ai:build",role:"dev-coder",previous:{role:"studio",executionId:upstream.executionId,hash,artifact:bundle},
+    const generate=()=>runRole({stage:"ai:build",role:"dev-coder",freeModel:buildModel,previous:{role:"studio",executionId:upstream.executionId,hash,artifact:bundle},
       paths:[],rounds:1,directSource:{kind:"patch",id:unit.id,target:unit.path,old:range,beforeHash},
       brief:"Implement only "+unit.id+" according to the incoming sourceRange and requirement. Return the COMPLETE REPLACEMENT for that range, not the entire file or an edit command. Preserve matching indentation and surrounding braces. The runner will apply it exactly, check complete file syntax, fingerprint and checkpoint it. Do not modify tests, claim test execution, or add unrelated features."});
+    let step;
+    try { step=await generate(); }
+    catch(error) {
+      // No mixing builder models: a single alternate is allowed only before
+      // the first successful patch. All subsequent work stays with that model.
+      const failed=state.stages.at(-1);
+      if(state.buildUnits.length||buildModel!==PRIMARY_BUILD||
+         !["output_limit","timeout","provider_http","provider_rate_limit"].includes(failed?.errorKind)||
+         pathHash(unit.path)!==beforeHash||existsSync(checkpoint))throw error;
+      buildModel=ALTERNATE_BUILD;
+      log("route.fallback",upstream,{buildUnit:unit.id,requestedModel:buildModel,engine:"free",errorKind:failed.errorKind});
+      print("FALLBACK "+unit.id+" "+buildModel+" (free; no prior code authorship)");
+      step=await generate();
+    }
     requireVerdict(step,"COMPLETE");
+    state.buildModel=buildModel;
     if(pathHash(TEST)!==locked)throw Error("Locked tests changed");
     const afterHash=pathHash(unit.path);
     state.buildUnits.push({id:unit.id,path:unit.path,beforeHash,afterHash,executionId:step.executionId,artifactHash:step.hash,originRun:runDir});
@@ -387,10 +411,10 @@ try {
   if(!state.changedPaths.length) throw Error("Dev did not change product source");
   const after=testRun("candidate");
   if(after.evidence.exitCode!==0||after.evidence.fail!==0||after.evidence.pass<4) throw Error("Candidate acceptance tests not green; preserve for repair");
-  const qa=await runRole({stage:"ai:qa",role:"quinn-qa",previous:build,paths:[],rounds:5,requireIndependent:true,
+  const qa=await runRole({stage:"ai:qa",role:"quinn-qa",previous:build,paths:[],rounds:5,requireIndependent:true,freeModel:REVIEW_MODEL(state.buildModel),
     brief:"Review actual locked tests, changed paths "+JSON.stringify(state.changedPaths)+", and deterministic test report below. Independently assess coverage including race and gate failure. Do not claim browser testing or other runs. Return APPROVE only if evidence and tests are meaningful, otherwise CHANGES with specific findings. Report: "+after.report.slice(0,16000)});
   requireVerdict(qa,"APPROVE");
-  const rex=await runRole({stage:"ai:review",role:"rex-reviewer",previous:qa,paths:[],rounds:6,requireIndependent:true,
+  const rex=await runRole({stage:"ai:review",role:"rex-reviewer",previous:qa,paths:[],rounds:6,requireIndependent:true,freeModel:REVIEW_MODEL(state.buildModel),
     brief:"Read the actual candidate files in "+JSON.stringify(state.changedPaths)+" and locked tests. Review security, per-task isolation, state races, acceptance and scope. Return APPROVE only when no must-fix remains; otherwise CHANGES with precise file/line findings. Actual test report: "+after.report.slice(0,12000)});
   requireVerdict(rex,"APPROVE");
   state.status="candidate-reviewed";save();print("CANDIDATE REVIEWED; not deployed, merged or pushed");

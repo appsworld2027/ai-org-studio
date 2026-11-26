@@ -100,7 +100,7 @@ export async function runTool(root, name, args = {}, { shell = "bash", timeoutMs
 
 // Reads an OpenAI-compatible streamed response (Server-Sent Events) into text + tool calls.
 export async function readStream(body, onText) {
-  const dec = new TextDecoder(); let buf = "", text = "", finish = null, usage = null, reportedModel = null; const calls = [];
+  const dec = new TextDecoder(); let buf = "", text = "", finish = null, usage = null, reportedModel = null, reasoningChars = 0; const calls = [];
   for await (const chunk of body) {
     buf += dec.decode(chunk, { stream: true });
     let i;
@@ -114,6 +114,9 @@ export async function readStream(body, onText) {
       const ch = j.choices?.[0]; if (!ch) continue;
       const d = ch.delta || ch.message || {};
       if (d.content) { text += d.content; onText?.(d.content); }
+      // Count provider reasoning separately without retaining or emitting its text.
+      const reasoning = d.reasoning_content ?? d.reasoning;
+      if (typeof reasoning === "string") reasoningChars += reasoning.length;
       for (const tc of d.tool_calls || []) {
         const k = tc.index ?? calls.length;
         calls[k] ||= { id: tc.id || `call_${k}`, name: "", args: "" };
@@ -124,7 +127,7 @@ export async function readStream(body, onText) {
       if (ch.finish_reason) finish = ch.finish_reason;
     }
   }
-  return { text, calls: calls.filter(Boolean), finish, usage, reportedModel };
+  return { text, calls: calls.filter(Boolean), finish, usage, reportedModel, reasoningChars };
 }
 
 // One user turn: call the model, run tools (asking when needed), repeat until the model answers without tools.
@@ -138,7 +141,7 @@ export function effortFields(providerId, effort) {
 }
 // apps: [{ name, app, tool, description, schema, session, readOnly }] from mcp-client.openApps — connected apps (MCP).
 // roots: extra folders the agent may read/write besides the product (e.g. the Garage).
-export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [], allowedTools = null, maxTokens, observe, finalInstruction, validateFinal }) {
+export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [], allowedTools = null, maxTokens, observe, finalInstruction, validateFinal, directGeneration = false }) {
   const enabledTools = toolSchemas().filter(t => !allowedTools || allowedTools.includes(t.function.name));
   const appSchemas = apps.map((a) => ({ type: "function", function: { name: a.name, description: `[${a.app}] ${a.description}`, parameters: a.schema?.type === "object" ? a.schema : { type: "object", properties: {} } } }));
   let extra = effortFields(provider.id, effort);
@@ -150,13 +153,18 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
     const phase = finalizing ? "finalize" : "explore";
     const roundTools = finalizing ? [] : [...enabledTools, ...appSchemas];
     const roundMessages = finalizing ? [...messages, { role: "user", content: finalInstruction }] : messages;
+    // Only the explicitly opted-in, tool-free Nemotron text generation path.
+    // Normal Studio conversation and tool use retain their existing behavior.
+    const directThinkingOff = directGeneration && provider.id === "nvidia" &&
+      model === "nvidia/nemotron-3-ultra-550b-a55b" && roundTools.length === 0;
+    const generationFields = directThinkingOff ? { chat_template_kwargs: { enable_thinking: false } } : {};
     const started = Date.now();
     const call = async () => {
-      observe?.({ type: "model.request", round: round + 1, requestedModel: model, phase });
+      observe?.({ type: "model.request", round: round + 1, requestedModel: model, phase, maxTokens, thinkingMode: directThinkingOff ? "off" : "default" });
       const response = await fetchImpl(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,
       headers: { "Content-Type": "application/json", ...(provider.key ? { Authorization: `Bearer ${provider.key}` } : {}), ...(provider.extraHeaders || {}) },
-      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...roundMessages], ...(roundTools.length ? { tools: roundTools, tool_choice: "auto" } : {}), ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra, ...(maxTokens ? { max_tokens: maxTokens } : {}) }),
+      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...roundMessages], ...(roundTools.length ? { tools: roundTools, tool_choice: "auto" } : {}), ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra, ...generationFields, ...(maxTokens ? { max_tokens: maxTokens } : {}) }),
     });
       observe?.({ type: "model.headers", round: round + 1, phase, httpStatus: response.status,
         durationMs: Date.now() - started });
@@ -175,9 +183,9 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
       throw new Error(`${res.status} ${hint || body}`);
     }
     emit({ t: "assistant_start" });
-    const { text, calls, usage, finish, reportedModel } = await readStream(res.body, (d) => emit({ t: "delta", d }));
+    const { text, calls, usage, finish, reportedModel, reasoningChars } = await readStream(res.body, (d) => emit({ t: "delta", d }));
     observe?.({ type: "model.result", round: round + 1, phase, durationMs: Date.now() - started,
-      toolRequests: calls.length, finish, reportedModel, inputTokens: usage?.input, outputTokens: usage?.output });
+      toolRequests: calls.length, finish, reportedModel, inputTokens: usage?.input, outputTokens: usage?.output, responseChars: text.length, reasoningChars });
     emit({ t: "usage", models: [{ model, input: usage?.input, output: usage?.output }] });
     messages.push({ role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args || "{}" } })) } : {}) });
     if (!calls.length) {

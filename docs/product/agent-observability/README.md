@@ -170,3 +170,24 @@ only when the build-plan digest, contract, locked suite, baseline file
 digests, input source digest, checkpoint digest and journal receipts match.
 The run still starts from a fresh candidate. No changes go into the active
 Studio, and no paid fallback, unattended execution or merge is enabled.
+
+### Direct generation and free-model fallback
+
+The first bounded build unit still hit `finish:length` after about 110
+seconds with a 3,500-token limit. This confirms truncation, not that all
+generated tokens were reasoning (earlier provider usage was unavailable).
+For tool-free Nemotron patch requests only, Studio now explicitly sends
+`chat_template_kwargs.enable_thinking: false` (NVIDIA Nemotron 3 Ultra
+model card, Reasoning OFF), with a single 6,000-token generation ceiling
+and the existing 180-second deadline. Other Studio turns remain unchanged.
+The metadata journal records the configured thinking mode, token ceiling,
+visible-response and provider-reasoning character counts, not reasoning
+text. Character counts are not token counts.
+
+If the first build unit hits an output limit, request timeout, provider
+HTTP error or rate limit before any patch is applied, the runner may try
+the other already-allowlisted free model, Mistral Large 4, exactly once.
+Successful authoring locks the builder model for all remaining units and
+verified resumed checkpoints. Reviewers are routed to the other model
+and actual provider model identity is still required at the review gate.
+No paid model, GitHub worker activation or deployment is introduced.
