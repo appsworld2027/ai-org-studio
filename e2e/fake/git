@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+// Test transport only: the verified HTTPS fixture URL resolves to a local bare repo.
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+const fixture = "https://github.com/example/studio-private-fixture.git";
+if (args.includes(fixture)) {
+  if (args[0] !== "-C" || args[1] !== process.env.FAKE_GARAGE_ROOT ||
+      !["push", "pull"].includes(args[2]) || !process.env.FAKE_GARAGE_REMOTE) {
+    console.error("Unexpected Git fixture transport"); process.exit(1);
+  }
+  args[args.indexOf(fixture)] = process.env.FAKE_GARAGE_REMOTE;
+}
+const result = spawnSync(process.env.REAL_GIT, args, { stdio: "inherit" });
+process.exit(result.status ?? 1);

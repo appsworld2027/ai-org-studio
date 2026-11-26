@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Only the synthetic Garage repository is verified private.
+if [ "$*" = "api --hostname github.com repos/example/studio-private-fixture --jq .visibility" ]; then
+  echo private
+  exit 0
+fi
 # Stand-in for the GitHub CLI during tests: serves the 23-Nov Parent Plus snapshot.
 F="$(cd "$(dirname "$0")/../../test/fixtures" && pwd)"
 [ -f "${FAKE_GH_FAIL:-/nonexistent}" ] && { echo "HTTP 503: GitHub unavailable" >&2; exit 1; }

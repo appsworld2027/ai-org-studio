@@ -68,10 +68,17 @@ const engineHome = join(tmp, "engine-home"); mkdirSync(join(engineHome, ".codex"
 const garageRemote = join(tmp, "garage.git"), garageDir = join(tmp, "studio-garage");
 execFileSync("git", ["init", "-q", "--bare", "-b", "main", garageRemote]); execFileSync("git", ["clone", "-q", garageRemote, garageDir], { stdio: "ignore" });
 execFileSync("git", ["-C", garageDir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "start"]); execFileSync("git", ["-C", garageDir, "push", "-q", "origin", "HEAD"]);
+// The guard must see a verified private GitHub URL. Route only this test's
+// exact fixture push/pull to the isolated bare repo, never the real network.
+const gitShimDir = join(tmp, "git-shim");
+mkdirSync(gitShimDir);
+writeFileSync(join(gitShimDir, "git"), readFileSync(join(ROOT, "e2e/fake/git")), { mode: 0o755 });
+const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+execFileSync("git", ["-C", garageDir, "remote", "set-url", "origin", "https://github.com/example/studio-private-fixture.git"]);
 const fakeModels = startFakeModels({ anthropicPort, openaiPort, projectDir: prod, garageDir: join(garageDir, "parent-plus") });
 // No pre-trust here: the Studio itself must mark the product folder trusted for Claude Code and Codex.
 const realClaude = process.env.STUDIO_REAL_CLAUDE || "", realCodex = process.env.STUDIO_REAL_CODEX || "";
-const env = { ...process.env, HOME: engineHome, ANTHROPIC_BASE_URL: `http://127.0.0.1:${anthropicPort}`, ANTHROPIC_API_KEY: "sk-ant-test", STUDIO_ALLOW_PAID_APIS: "1" /* stand-in model servers only; the default block is covered in test/billing.test.mjs */, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", FAKE_OPENAI_KEY: "test",
+const env = { ...process.env, PATH: gitShimDir + ":" + process.env.PATH, REAL_GIT: realGit, FAKE_GARAGE_ROOT: garageDir, FAKE_GARAGE_REMOTE: garageRemote, HOME: engineHome, ANTHROPIC_BASE_URL: `http://127.0.0.1:${anthropicPort}`, ANTHROPIC_API_KEY: "sk-ant-test", STUDIO_ALLOW_PAID_APIS: "1" /* stand-in model servers only; the default block is covered in test/billing.test.mjs */, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", FAKE_OPENAI_KEY: "test",
   STUDIO_CLAUDE_BIN: realClaude || join(ROOT, "e2e/fake/claude"), STUDIO_CODEX_BIN: realCodex || join(ROOT, "e2e/fake/codex"),
   STUDIO_CODEX_CONFIG: ['model_provider="fake"', 'model_providers.fake.name="fake"', `model_providers.fake.base_url="http://127.0.0.1:${openaiPort}/v1"`, 'model_providers.fake.env_key="FAKE_OPENAI_KEY"', 'model_providers.fake.wire_api="responses"', 'model_providers.fake.supports_websockets=false', 'model="gpt-fake"'].join("\n"), STUDIO_HOME: home, STUDIO_GARAGE: garageDir, STUDIO_GARAGE_REPO: "appsworld2027/studio-garage", FAKE_GARAGE_DIR: join(garageDir, "parent-plus"), STUDIO_PORT: String(port), STUDIO_HOST: "127.0.0.1", STUDIO_TOKEN: TOKEN, STUDIO_GH: join(ROOT, "e2e/fake/gh"),
   STUDIO_CONFIG: join(tmp, "none.json"), FAKE_GH_FAIL: failFlag, STUDIO_BOARD_TTL_MS: "500", STUDIO_POLL_MS: "1000", STUDIO_WORKSPACE: join(tmp, "ws"),
