@@ -339,6 +339,21 @@
     } catch (e) { $("#tNote").textContent = e.message; }
   };
 
+  // ---------- consumption: measured tokens by model (unknown stays "Unknown") ----------
+  const fmt = (n) => (n == null ? "Unknown" : n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
+  async function loadUsage() {
+    const t = $("#usage"); if (!t) return;
+    try {
+      const d = await api(`/api/products/${product.id}/usage?days=7`);
+      $("#usageNote").textContent = `Last ${d.days} days · ${d.total.turns} turns · input ${fmt(d.total.input)} · output ${fmt(d.total.output)} · cost ${d.total.cost == null ? "Unknown" : "$" + d.total.cost.toFixed(2)}. ${d.note}`;
+      t.replaceChildren(el("div", { class: "trk head", role: "row" }, ...["Model", "Used by", "Turns", "Input / Output", "Cost"].map((h) => el("div", { role: "columnheader", text: h }))));
+      for (const r of d.rows) t.append(el("div", { class: "trk", role: "row" }, el("div", { role: "rowheader" }, el("b", { text: r.model }), el("br"), el("small", { text: r.engine })), el("div", { role: "cell", text: r.role }),
+        el("div", { role: "cell", text: String(r.turns) }), el("div", { role: "cell", text: `${fmt(r.input)} / ${fmt(r.output)}` }), el("div", { role: "cell", text: r.cost == null ? "Unknown" : "$" + r.cost.toFixed(2) })));
+      if (!d.rows.length) t.append(el("div", { class: "trk", role: "row" }, el("div", { role: "cell", text: "No usage recorded yet. It appears after your next chat turn." })));
+      $("#usageErr").textContent = "";
+    } catch (e) { $("#usageErr").textContent = `Consumption could not load: ${e.message}`; }
+  }
+
   // ---------- team: which AI each agent uses ----------
   async function loadTeam(body) {
     const t = $("#team");
@@ -605,7 +620,7 @@
     showTab(tab || (product.productionUrl ? "app" : "proto"));
     pickEngine(engine);
     clearInterval(pollTimer); poll(); pollTimer = setInterval(poll, cfg.boardRefreshMs);
-    loadTeam(); $("#changesDiff").hidden = true; loadChanges();
+    loadTeam(); loadUsage(); $("#changesDiff").hidden = true; loadChanges();
   }
   async function reloadConfig(selectId) {
     cfg = await api("/api/config");

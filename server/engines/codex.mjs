@@ -34,7 +34,7 @@ export function translateNotification(m, state) {
     case "item/agentMessage/delta": out.push({ t: "delta", d: p.delta || "" }); break;
     case "item/commandExecution/outputDelta": if (state.items[p.itemId]) state.items[p.itemId].out = (state.items[p.itemId].out + (p.delta || "")).slice(-20000); break;
     case "turn/plan/updated": out.push({ t: "plan", steps: (p.plan || []).map((s) => ({ text: s.step, status: s.status === "inProgress" ? "in_progress" : s.status })), note: p.explanation || "" }); break;
-    case "thread/tokenUsage/updated": { const u = p.tokenUsage || {}; out.push({ t: "context", used: u.last?.inputTokens ?? u.total?.inputTokens, window: u.modelContextWindow || null }); break; }
+    case "thread/tokenUsage/updated": { const u = p.tokenUsage || {}; state.tokTotal = u.total || state.tokTotal; out.push({ t: "context", used: u.last?.inputTokens ?? u.total?.inputTokens, window: u.modelContextWindow || null }); break; }
     case "account/rateLimits/updated": { const r = p.rateLimits?.primary; if (r && r.usedPercent != null) out.push({ t: "limits", usedPercent: r.usedPercent, resetsAt: r.resetsAt || null }); break; }
     case "item/reasoning/summaryTextDelta": out.push({ t: "thinking", d: p.delta || "" }); break;
     case "item/reasoning/summaryPartAdded": out.push({ t: "thinking", d: "\n\n" }); break;
@@ -53,6 +53,7 @@ export function translateNotification(m, state) {
     case "turn/completed": {
       const st = p.turn?.status;
       if (st === "failed") out.push({ t: "error", message: explainError(p.turn?.error?.message || "the turn failed") });
+      { const t = state.tokTotal, b = state.tokBase || {}; if (t) { out.push({ t: "usage", models: [{ model: "", input: (t.inputTokens || 0) - (b.inputTokens || 0), output: (t.outputTokens || 0) - (b.outputTokens || 0), cache: (t.cachedInputTokens || 0) - (b.cachedInputTokens || 0) }] }); state.tokBase = { ...t }; } }
       out.push({ t: "done" }); out.push({ t: "idle" }); break;
     }
     case "error": out.push({ t: "error", message: explainError(p.error?.message || p.message || "") }); break;

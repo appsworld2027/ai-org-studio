@@ -8,7 +8,7 @@ export const MODES = ["ask", "auto", "plan"];
 
 // apps(): { claude: {file, allow}, codex: [-c ...], stamp } — the connected apps (MCP) every chat gets.
 // rulesFor(p, chat) may return fresh rules each start (it includes the shared memory pack).
-export function makeEngineChats({ store, env, rulesFor, bins = {}, codexConfig = [], log = () => {}, trustFolder, apps = () => ({ claude: null, codex: [], stamp: "" }), extraDirs = () => [], beforeTurn = async () => {}, afterTurn = () => {} }) {
+export function makeEngineChats({ store, env, rulesFor, bins = {}, codexConfig = [], onUsage = () => {}, log = () => {}, trustFolder, apps = () => ({ claude: null, codex: [], stamp: "" }), extraDirs = () => [], beforeTurn = async () => {}, afterTurn = () => {} }) {
   const live = new Map(); // `${pid}:${chatId}` -> { engine, clients:Set, busy, chat }
 
   function broadcast(L, e) { for (const ws of L.clients) if (ws.readyState === 1) ws.send(JSON.stringify(e)); }
@@ -37,6 +37,7 @@ export function makeEngineChats({ store, env, rulesFor, bins = {}, codexConfig =
       if (e.t === "session") { c.sessionId = e.id; if (e.model && !c.modelShown) c.modelShown = e.model; save(p, L); }
       if (e.t === "done" || e.t === "idle") { const was = L.busy; L.busy = false;
         if (was && L.turn) { const t = L.turn; L.turn = null; const said = [...c.events].reverse().find((x) => x.t === "assistant")?.text || ""; try { afterTurn(p, c, { engine: c.engine, model: c.modelShown || c.model, account: L.account || "", ask: t.text, did: said }); } catch (er) { log(`afterTurn: ${er.message}`); } } }
+      if (e.t === "usage") { for (const u of e.models?.length ? e.models : [{ cost: e.cost }]) { try { onUsage({ product: p.id, engine: c.engine, model: u.model || c.modelShown || c.model || "default", input: u.input, output: u.output, cache: u.cache, cost: u.cost, ms: e.ms, role: "Studio chat" }); } catch (er) { log(`usage: ${er.message}`); } } }
       record(p, L, e); broadcast(L, e);
       if (["done", "tool_done", "error", "approve", "ask"].includes(e.t)) save(p, L);
     };

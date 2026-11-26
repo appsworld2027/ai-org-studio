@@ -81,7 +81,7 @@ export function translate(m, state) {
     const r = m.rate_limit_info || {}; if (r.utilization != null || r.status) out.push({ t: "limits", usedPercent: r.utilization != null ? Math.round(r.utilization * 100) : null, status: r.status || "", resetsAt: r.resetsAt || null });
   } else if (m.type === "result") {
     if (m.is_error || (m.subtype && m.subtype !== "success")) out.push({ t: "error", message: explainError(m.result || m.subtype) });
-    out.push({ t: "usage", cost: m.total_cost_usd, ms: m.duration_ms }); out.push({ t: "done" });
+    out.push({ t: "usage", cost: m.total_cost_usd, ms: m.duration_ms, models: Object.entries(m.modelUsage || {}).map(([model, u]) => ({ model, input: u.inputTokens, output: u.outputTokens, cache: (u.cacheReadInputTokens || 0) + (u.cacheCreationInputTokens || 0), cost: u.costUSD })) }); out.push({ t: "done" });
   }
   return out;
 }
