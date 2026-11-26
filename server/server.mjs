@@ -53,7 +53,7 @@ const founderInbox = createFounderInbox(
   join(store.dir, "founder-inbox")
 );
 
-const garage = makeGarage({ dir: expand(process.env.STUDIO_GARAGE || "~/studio-garage"), repo: process.env.STUDIO_GARAGE_REPO || "", log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
+const garage = makeGarage({ dir: expand(process.env.STUDIO_GARAGE || "~/studio-garage"), repo: process.env.STUDIO_GARAGE_REPO || "", gh: process.env.STUDIO_GH || "gh", log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
 const connectors = makeConnectors({ dir: store.dir, root: resolve(dirname(fileURLToPath(import.meta.url)), ".."), log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
 const settings = (() => { try { return JSON.parse(readFileSync(process.env.STUDIO_CONFIG || join(ROOT, "studio.config.json"), "utf8")); } catch { return {}; } })();
 const PORT = Number(process.env.STUDIO_PORT || settings.port || 8484);
