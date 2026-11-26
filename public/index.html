@@ -122,6 +122,7 @@
     <div class="rtabs" role="tablist" aria-label="Right panel">
       <button class="rtab" role="tab" id="tab-app" aria-controls="pane-app" data-pane="app">Real app</button>
       <button class="rtab" role="tab" id="tab-proto" aria-controls="pane-proto" data-pane="proto">Prototype</button>
+      <button class="rtab" role="tab" id="tab-feedback" aria-controls="pane-feedback" data-pane="feedback">Feedback <span class="badge" id="feedbackBadge" hidden></span></button>
       <button class="rtab" role="tab" id="tab-agents" aria-controls="pane-agents" data-pane="agents">Agents <span class="badge" id="workingBadge" hidden></span></button>
       <button class="rtab" role="tab" id="tab-changes" aria-controls="pane-changes" data-pane="changes">Changes <span class="badge" id="changesBadge" hidden></span></button>
       <button class="rtab" role="tab" id="tab-garage" aria-controls="pane-garage" data-pane="garage">Garage</button>
@@ -150,6 +151,59 @@
         <h3>No prototypes found</h3>
         <p>The Studio looks for HTML files in folders named prototypes, mockups or design. Ask the AI on the left to create one, then press Rescan.</p>
         <button class="ghost" id="btnRescan">Rescan</button>
+      </div>
+    </div>
+
+    <div class="pane feedback" id="pane-feedback" role="tabpanel" aria-labelledby="tab-feedback">
+      <div class="statusline" id="feedbackStatus" role="status"></div>
+
+      <!-- Inbox: features waiting for founder review -->
+      <section id="feedbackInbox" hidden>
+        <h3>Waiting for your review</h3>
+        <div class="feedback-list" id="feedbackInboxList"></div>
+        <div class="empty left-align" id="feedbackInboxEmpty" hidden>
+          <h3>Nothing waiting for review</h3>
+          <p>When a feature is delivered (labeled <code>ai:delivery</code>), it appears here with a preview link and QA evidence.</p>
+        </div>
+      </section>
+
+      <!-- Deliveries: all delivered features with status -->
+      <section id="feedbackDeliveries" hidden>
+        <h3>All deliveries</h3>
+        <div class="feedback-list" id="feedbackDeliveriesList"></div>
+        <div class="empty left-align" id="feedbackDeliveriesEmpty" hidden>
+          <h3>No deliveries yet</h3>
+          <p>Features delivered by the AI Org will appear here.</p>
+        </div>
+      </section>
+
+      <!-- Fixes: correction work in progress -->
+      <section id="feedbackFixes" hidden>
+        <h3>Corrections in progress</h3>
+        <div class="feedback-list" id="feedbackFixesList"></div>
+        <div class="empty left-align" id="feedbackFixesEmpty" hidden>
+          <h3>No corrections in progress</h3>
+          <p>When you request changes, the AI Org creates a fix task. Track it here.</p>
+        </div>
+      </section>
+
+      <!-- Conflicts: contradictory feedback detection -->
+      <section id="feedbackConflicts" hidden>
+        <h3>Conflicting feedback detected</h3>
+        <div class="feedback-list" id="feedbackConflictsList"></div>
+      </section>
+
+      <!-- Usage: model consumption -->
+      <section id="feedbackUsage" hidden>
+        <h3>Model usage (feedback workflow)</h3>
+        <div class="tracks team" id="feedbackUsageTable"></div>
+        <p class="small muted" id="feedbackUsageNote"></p>
+      </section>
+
+      <!-- Detail view (shown when clicking a delivery/fix) -->
+      <div class="feedback-detail" id="feedbackDetail" hidden>
+        <button class="ghost small" id="feedbackDetailBack">← Back</button>
+        <div id="feedbackDetailContent"></div>
       </div>
     </div>
 

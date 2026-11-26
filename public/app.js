@@ -441,7 +441,7 @@
 
   // ---------- right tabs ----------
   let tab = store.get("studio.tab", "");
-  const TABS = ["app", "proto", "agents", "changes", "garage"];
+  const TABS = ["app", "proto", "feedback", "agents", "changes", "garage"];
   // Pop out: the app in its own Chrome window (a named window, reused), so F12 DevTools shows only the app.
   $("#openTab").addEventListener("click", (e) => { if (!["app", "proto"].includes(tab)) return; e.preventDefault(); window.open($("#openTab").href, "studio-app", "popup,width=430,height=900"); });
   $("#btnReload").onclick = () => { const f = tab === "proto" ? $("#protoFrame") : $("#appFrame"); const s = f.getAttribute("src"); if (s) { f.src = "about:blank"; setTimeout(() => (f.src = s), 50); } };
@@ -530,7 +530,8 @@
     for (const t of TABS) { $(`#tab-${t}`).setAttribute("aria-selected", String(t === p)); $(`#pane-${t}`).classList.toggle("show", t === p); }
     if (p === "changes") loadChanges();
     if (p === "garage") loadGarage();
-    const href = p === "app" ? lastAppUrl : p === "proto" ? $("#protoFrame").getAttribute("src") : ["changes", "garage"].includes(p) ? "" : `https://github.com/${product.repo}/issues?q=is%3Aopen+label%3Aai%3A*`;
+    if (p === "feedback") loadFeedback();
+    const href = p === "app" ? lastAppUrl : p === "proto" ? $("#protoFrame").getAttribute("src") : ["changes", "garage", "feedback"].includes(p) ? "" : `https://github.com/${product.repo}/issues?q=is%3Aopen+label%3Aai%3A*`;
     $("#openTab").hidden = !href; if (href) $("#openTab").href = href;
     $("#openTab").textContent = p === "agents" ? "Open on GitHub" : "Pop out";
     $("#btnAppLink").hidden = p !== "app";
@@ -657,6 +658,292 @@
     $("#focus").hidden = !focus;
     if (focus) { $("#focusTitle").textContent = focus.title; const p = $("#focusStage"); p.className = `stagepill ${focus.kind}`; p.textContent = focus.kind === "founder" ? "Waiting for your OK" : `${b.stages.find((s) => s.id === focus.stage)?.name || ""}: ${focus.who}`; }
     setApp(b.app);
+  }
+
+  // ---------- Feedback Workflow ----------
+  const FEEDBACK_STATES = {
+    delivered: "Delivered — waiting for review",
+    feedback_given: "Feedback sent — AI Org working",
+    fix_in_progress: "Fix in progress — Dev coding",
+    qa_in_progress: "QA in progress — Quinn testing",
+    review_in_progress: "Review in progress — Rex reviewing",
+    ready_for_test: "Ready for your test",
+    accepted: "Accepted — shipping",
+    shipped: "Shipped",
+    blocked: "Blocked — needs decision"
+  };
+
+  function renderStateBadge(state) {
+    const colors = {
+      delivered: "st-loop",
+      feedback_given: "st-agent",
+      fix_in_progress: "st-agent",
+      qa_in_progress: "st-agent",
+      review_in_progress: "st-agent",
+      ready_for_test: "st-founder",
+      accepted: "st-done",
+      shipped: "st-done",
+      blocked: "st-blocked"
+    };
+    return el("span", { class: `st ${colors[state] || "st-none"}`, text: FEEDBACK_STATES[state] || state });
+  }
+
+  function renderFeedbackItem(item, type) {
+    const isInbox = type === "inbox";
+    const row = el("div", { class: "feedback-item", "data-id": item.id, "data-type": item.type || "issue" });
+
+    const left = el("div", { class: "fb-left" });
+    left.append(el("b", { text: item.title }));
+    left.append(el("small", { text: item.slug ? `[${item.slug}]` : "" }));
+    if (item.previewUrl) {
+      left.append(el("a", { class: "linkish small", href: item.previewUrl, target: "_blank", rel: "noopener", text: "Preview" }));
+    }
+    left.append(el("a", { class: "linkish small", href: item.url, target: "_blank", rel: "noopener", text: "GitHub" }));
+
+    const right = el("div", { class: "fb-right" });
+    right.append(renderStateBadge(item.state));
+
+    // QA summary
+    if (item.qa && item.qa.status !== "unknown") {
+      const qaBadge = el("span", { class: `st ${item.qa.status === "passed" ? "st-done" : "st-blocked"}`, text: `QA: ${item.qa.status}` });
+      right.append(qaBadge);
+    }
+
+    // Review verdict
+    if (item.review && item.review.verdict !== "pending") {
+      const reviewBadge = el("span", { class: `st ${item.review.verdict === "approve" ? "st-done" : "st-blocked"}`, text: `Review: ${item.review.verdict}` });
+      right.append(reviewBadge);
+    }
+
+    // Founder feedback already given
+    if (item.founderFeedback) {
+      const fb = el("span", { class: "st st-agent", text: `You: /${item.founderFeedback.type} ${item.founderFeedback.text.slice(0, 40)}` });
+      right.append(fb);
+    }
+
+    row.append(left);
+    row.append(right);
+
+    row.onclick = (e) => {
+      if (e.target.tagName === "A") return;
+      showFeedbackDetail(item.id, item.type || "issue");
+    };
+
+    return row;
+  }
+
+  async function loadFeedback() {
+    try {
+      const [inboxRes, deliveriesRes, fixesRes, conflictsRes, usageRes] = await Promise.all([
+        api(`/api/products/${product.id}/feedback/inbox`),
+        api(`/api/products/${product.id}/feedback/deliveries`),
+        api(`/api/products/${product.id}/feedback/fixes`),
+        api(`/api/products/${product.id}/feedback/conflicts`),
+        api(`/api/products/${product.id}/feedback/usage`),
+      ]);
+
+      // Inbox
+      const inboxList = $("#feedbackInboxList");
+      inboxList.replaceChildren();
+      if (inboxRes.inbox?.length) {
+        $("#feedbackInbox").hidden = false;
+        $("#feedbackInboxEmpty").hidden = true;
+        for (const item of inboxRes.inbox) inboxList.append(renderFeedbackItem(item, "inbox"));
+        $("#feedbackBadge").hidden = false;
+        $("#feedbackBadge").textContent = String(inboxRes.inbox.length);
+      } else {
+        $("#feedbackInbox").hidden = true;
+        $("#feedbackInboxEmpty").hidden = false;
+        $("#feedbackBadge").hidden = true;
+      }
+
+      // Deliveries
+      const delList = $("#feedbackDeliveriesList");
+      delList.replaceChildren();
+      $("#feedbackDeliveries").hidden = false;
+      if (deliveriesRes.deliveries?.length) {
+        $("#feedbackDeliveriesEmpty").hidden = true;
+        for (const item of deliveriesRes.deliveries) delList.append(renderFeedbackItem(item, "delivery"));
+      } else {
+        $("#feedbackDeliveriesEmpty").hidden = false;
+      }
+
+      // Fixes
+      const fixList = $("#feedbackFixesList");
+      fixList.replaceChildren();
+      if (fixesRes.fixes?.length) {
+        $("#feedbackFixes").hidden = false;
+        $("#feedbackFixesEmpty").hidden = true;
+        for (const item of fixesRes.fixes) fixList.append(renderFeedbackItem(item, "fix"));
+      } else {
+        $("#feedbackFixes").hidden = true;
+        $("#feedbackFixesEmpty").hidden = false;
+      }
+
+      // Conflicts
+      if (conflictsRes.conflicts?.length) {
+        $("#feedbackConflicts").hidden = false;
+        const confList = $("#feedbackConflictsList");
+        confList.replaceChildren();
+        for (const c of conflictsRes.conflicts) {
+          const row = el("div", { class: "feedback-item conflict" });
+          row.append(el("b", { text: `Conflict in ${c.title} [${c.slug}]` }));
+          row.append(el("small", { text: c.feedbacks.map(f => `/${f.type} ${f.text}`).join("; ") }));
+          confList.append(row);
+        }
+      } else {
+        $("#feedbackConflicts").hidden = true;
+      }
+
+      // Usage
+      if (usageRes.agents?.length) {
+        $("#feedbackUsage").hidden = false;
+        const t = $("#feedbackUsageTable");
+        t.replaceChildren(el("div", { class: "trk head", role: "row" }, ...["Agent", "Model", "Tokens In", "Tokens Out", "Cost"].map(h => el("div", { role: "columnheader", text: h }))));
+        for (const a of usageRes.agents) {
+          t.append(el("div", { class: "trk", role: "row" },
+            el("div", { role: "rowheader" }, el("b", { text: a.name }), el("small", { text: a.role })),
+            el("div", { role: "cell", text: a.model || "—" }),
+            el("div", { role: "cell", text: a.tokensIn || "—" }),
+            el("div", { role: "cell", text: a.tokensOut || "—" }),
+            el("div", { role: "cell", text: a.cost ? `$${a.cost.toFixed(4)}` : "—" })
+          ));
+        }
+      }
+
+    } catch (e) {
+      console.error("Feedback load error:", e);
+      $("#feedbackStatus").className = "statusline err";
+      $("#feedbackStatus").textContent = `Failed to load feedback: ${e.message}`;
+    }
+  }
+
+  async function showFeedbackDetail(id, type) {
+    $("#feedbackInbox").hidden = true;
+    $("#feedbackDeliveries").hidden = true;
+    $("#feedbackFixes").hidden = true;
+    $("#feedbackConflicts").hidden = true;
+    $("#feedbackUsage").hidden = true;
+    $("#feedbackDetail").hidden = false;
+    $("#feedbackDetailContent").replaceChildren(el("div", { class: "idle", text: "Loading…" }));
+
+    try {
+      let detail;
+      if (type === "fix") {
+        detail = await api(`/api/products/${product.id}/feedback/fixes/${id}`);
+      } else {
+        detail = await api(`/api/products/${product.id}/feedback/deliveries/${id}`);
+      }
+
+      if (detail.error) throw new Error(detail.error);
+
+      const content = $("#feedbackDetailContent");
+      content.replaceChildren();
+
+      // Header
+      const header = el("div", { class: "fb-detail-header" });
+      header.append(el("b", { text: detail.title }));
+      if (detail.slug) header.append(el("small", { text: `[${detail.slug}]` }));
+      header.append(renderStateBadge(detail.state));
+      content.append(header);
+
+      // Actions for deliveries
+      if (type !== "fix" && [FEEDBACK_STATES.delivered, FEEDBACK_STATES.feedback_given].includes(detail.state)) {
+        const actions = el("div", { class: "fb-actions" });
+        actions.append(el("button", { class: "primary small", text: "Accept", onclick: () => submitFeedback(id, "approve", "") }));
+        actions.append(el("button", { class: "ghost small", text: "Request changes", onclick: () => promptFeedback(id, "changes") }));
+        actions.append(el("button", { class: "ghost small", text: "Discuss", onclick: () => promptFeedback(id, "discuss") }));
+        content.append(actions);
+      }
+
+      // Preview link
+      if (detail.previewUrl) {
+        content.append(el("a", { class: "primary", href: detail.previewUrl, target: "_blank", rel: "noopener", text: "Open preview to test" }));
+      }
+
+      // QA section
+      if (detail.qa) {
+        const qa = el("details", { open: true });
+        qa.append(el("summary", { text: `QA: ${detail.qa.status}` }));
+        qa.append(el("pre", { text: detail.qa.summary }));
+        if (detail.qa.details?.length) {
+          qa.append(el("small", { text: detail.qa.details.map(d => `${d.at}: ${d.text}`).join("\n") }));
+        }
+        content.append(qa);
+      }
+
+      // Review section
+      if (detail.review) {
+        const rev = el("details", { open: true });
+        rev.append(el("summary", { text: `Review: ${detail.review.verdict}` }));
+        rev.append(el("pre", { text: detail.review.summary }));
+        content.append(rev);
+      }
+
+      // Fix progress (for fix detail)
+      if (detail.task) {
+        content.append(el("h4", { text: "Fix task" }));
+        content.append(el("pre", { text: detail.task.text || detail.task.raw }));
+      }
+      if (detail.devProgress?.length) {
+        content.append(el("h4", { text: "Dev progress" }));
+        for (const d of detail.devProgress) {
+          content.append(el("pre", { class: "small", text: d.text || d.raw }));
+        }
+      }
+      if (detail.qaResults?.length) {
+        content.append(el("h4", { text: "QA results" }));
+        for (const q of detail.qaResults) {
+          content.append(el("pre", { class: "small", text: q.text || q.raw }));
+        }
+      }
+      if (detail.review?.length) {
+        content.append(el("h4", { text: "Review" }));
+        for (const r of detail.review) {
+          content.append(el("pre", { class: "small", text: r.text || r.raw }));
+        }
+      }
+
+      // All comments timeline
+      if (detail.allComments?.length) {
+        const timeline = el("details");
+        timeline.append(el("summary", { text: "All comments" }));
+        for (const c of detail.allComments) {
+          timeline.append(el("div", { class: "small" }, el("time", { text: new Date(c.at).toLocaleString() }), " ", el("b", { text: c.by || "?" }), ": ", c.body.slice(0, 200)));
+        }
+        content.append(timeline);
+      }
+
+    } catch (e) {
+      $("#feedbackDetailContent").replaceChildren(el("div", { class: "err", text: `Failed to load: ${e.message}` }));
+    }
+  }
+
+  $("#feedbackDetailBack").onclick = () => {
+    $("#feedbackDetail").hidden = true;
+    loadFeedback();
+  };
+
+  function promptFeedback(deliveryId, type) {
+    const text = prompt(`Enter your ${type === "changes" ? "correction" : "discussion"} notes:`);
+    if (text !== null) submitFeedback(deliveryId, type, text);
+  }
+
+  async function submitFeedback(deliveryId, type, text) {
+    try {
+      const res = await api(`/api/products/${product.id}/feedback/submit`, {
+        method: "POST",
+        body: JSON.stringify({ deliveryId, type, text })
+      });
+      if (res.ok) {
+        alert(res.message || "Feedback submitted");
+        loadFeedback();
+      } else {
+        alert(`Failed: ${res.error}`);
+      }
+    } catch (e) {
+      alert(`Error: ${e.message}`);
+    }
   }
   async function poll() {
     if (tab === "agents") void loadUsage();
