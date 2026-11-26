@@ -144,19 +144,29 @@ export function effortFields(providerId, effort) {
 export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [] }) {
   const appSchemas = apps.map((a) => ({ type: "function", function: { name: a.name, description: `[${a.app}] ${a.description}`, parameters: a.schema?.type === "object" ? a.schema : { type: "object", properties: {} } } }));
   let extra = effortFields(provider.id, effort);
+  let requestUsage = ["openai", "openrouter", "nvidia"].includes(provider.id);
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) return emit({ t: "stopped" });
     const call = () => fetchImpl(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,
       headers: { "Content-Type": "application/json", ...(provider.key ? { Authorization: `Bearer ${provider.key}` } : {}), ...(provider.extraHeaders || {}) },
-      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...messages], tools: [...toolSchemas(), ...appSchemas], tool_choice: "auto", ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra }),
+      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...messages], tools: [...toolSchemas(), ...appSchemas], tool_choice: "auto", ...(requestUsage ? { stream_options: { include_usage: true } } : {}), ...extra }),
     });
     let res = await call();
-    // Some models refuse a thinking level they do not support: retry once without it and say so.
-    if (!res.ok && res.status === 400 && Object.keys(extra).length) {
-      const body = (await res.text()).slice(0, 300);
-      if (/reason|effort|think/i.test(body)) { extra = {}; emit({ t: "note", message: `This model does not take a thinking level; continuing without “${effort}”.` }); res = await call(); }
-      else res = { ok: false, status: 400, text: async () => body };
+    // Compatibility retries apply only to rejected requests, before a reply is streamed.
+    while (!res.ok && [400, 422].includes(res.status) && (requestUsage || Object.keys(extra).length)) {
+      const { status } = res;
+      const body = (await res.text()).slice(0, 400);
+      if (requestUsage && /stream_options|include_usage/i.test(body)) {
+        requestUsage = false;
+      } else if (status === 400 && Object.keys(extra).length && /reason|effort|think/i.test(body)) {
+        extra = {};
+        emit({ t: "note", message: `This model does not take a thinking level; continuing without “${effort}”.` });
+      } else {
+        res = { ok: false, status, text: async () => body };
+        break;
+      }
+      res = await call();
     }
     if (!res.ok) {
       const body = (await res.text()).slice(0, 400);
