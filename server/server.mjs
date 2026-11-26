@@ -16,7 +16,7 @@ import { parseBacklog, buildBoard, feedFrom, appTarget, rosterFrom } from "./sta
 import { makeLedger, summarize } from "./usage.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
-import { providerAllowed, modelAllowed, planEnv, BLOCKED } from "./billing.mjs";
+import { providerAllowed, modelAllowed, validProvider, validModel, planEnv, scrubPaidEnv, BLOCKED } from "./billing.mjs";
 import { runTurn } from "./agent.mjs";
 import { makeConnectors, CATALOG } from "./connectors.mjs";
 import { openApps } from "./mcp-client.mjs";
@@ -27,6 +27,7 @@ import { UPLOAD_DIR, UPLOAD_MAX, safeUploadName, readRaw, ensureIgnored, pruneUp
 import { publicUrl, platform } from "./platform.mjs";
 import { ENGINE_MODELS, plan as teamPlanFor, parseAgent } from "./team.mjs";
 
+scrubPaidEnv();
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const store = makeStore();
 const garage = makeGarage({ dir: expand(process.env.STUDIO_GARAGE || "~/studio-garage"), repo: process.env.STUDIO_GARAGE_REPO || "", log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
@@ -523,9 +524,9 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "POST") {
         const b = await readBody(req);
         if (b.engine === "claude" || b.engine === "codex") return json(res, 200, store.chats.create(p.id, { engine: b.engine, model: /^[A-Za-z0-9._:\/-]{0,80}$/.test(b.model || "") ? b.model || "" : "", effort: EFFORTS.includes(b.effort) ? b.effort : "", mode: MODES.includes(b.mode) ? b.mode : "ask" }));
-        if (!PROVIDERS[b.provider] || !b.model) return json(res, 400, { error: "Pick a provider and model." });
+        if (!validProvider(b.provider) || !validModel(b.model)) return json(res, 400, { error: "Pick a provider and model." });
         if (!modelAllowed(b.provider, b.model)) return json(res, 403, { error: BLOCKED });
-        return json(res, 200, store.chats.create(p.id, { provider: b.provider, model: String(b.model).slice(0, 200) }));
+        return json(res, 200, store.chats.create(p.id, { provider: b.provider, model: b.model }));
       }
     }
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/chats\/([a-z0-9-]+)$/))) {
@@ -535,9 +536,9 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "PATCH") {
         const b = await readBody(req, 4096), c = store.chats.get(p.id, m[2]); if (!c) return json(res, 404, { error: "Chat not found" });
         if (live.get(`${p.id}:${c.id}`)?.abort) return json(res, 409, { error: "Wait until the current answer finishes." });
-        if (!PROVIDERS[b.provider] || !b.model) return json(res, 400, { error: "Pick a provider and model." });
+        if (!validProvider(b.provider) || !validModel(b.model)) return json(res, 400, { error: "Pick a provider and model." });
         if (!modelAllowed(b.provider, b.model)) return json(res, 403, { error: BLOCKED });
-        c.provider = b.provider; c.model = String(b.model).slice(0, 200); store.chats.save(p.id, c); return json(res, 200, { ok: true });
+        c.provider = b.provider; c.model = b.model; store.chats.save(p.id, c); return json(res, 200, { ok: true });
       }
     }
     send(res, 404, "Not found");

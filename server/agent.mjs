@@ -4,6 +4,7 @@
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, mkdirSync, realpathSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { join, resolve, relative, dirname, sep } from "node:path";
+import { planEnv } from "./billing.mjs";
 
 export const TOOLS = [
   { name: "list_files", desc: "List files and folders under a path in the product (default: the product root).",
@@ -91,7 +92,7 @@ export async function runTool(root, name, args = {}, { shell = "bash", timeoutMs
     case "run_command":
       // Plain (non-login) shell: login shells print welcome banners (e.g. Cloud Shell's) into every result.
       // The Studio's own environment already carries the user's PATH, so tools like gh, git and npm are found.
-      return new Promise((ok) => execFile(shell, ["-c", String(args.command)], { cwd: realpathSync(typeof root === "object" ? root.product : root), timeout: timeoutMs, maxBuffer: 16 << 20, env: { ...process.env, GH_PAGER: "", PAGER: "cat", GIT_PAGER: "cat", CI: "1" } },
+      return new Promise((ok) => execFile(shell, ["-c", String(args.command)], { cwd: realpathSync(typeof root === "object" ? root.product : root), timeout: timeoutMs, maxBuffer: 16 << 20, env: { ...planEnv(), GH_PAGER: "", PAGER: "cat", GIT_PAGER: "cat", CI: "1" } },
         (e, out, err) => ok(cap(`exit ${e ? (e.killed ? "timeout" : e.code ?? 1) : 0}\n${out || ""}${err ? `\n[stderr]\n${err}` : ""}`))));
     default: return `Unknown tool ${name}`;
   }

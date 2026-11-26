@@ -237,6 +237,7 @@
   const prov = () => cfg.providers.find((p) => p.id === $("#providerPick").value);
   async function loadModels(pid, keepModel) {
     const p = cfg.providers.find((x) => x.id === pid); const pick = $("#modelPick");
+    if (!p) { pick.replaceChildren(el("option", { value: "", text: "This provider is blocked. Pick another." })); return; }
     let models = p.models || [];
     if (p.hasKey || !p.needsKey) { try { const r = await api(`/api/providers/${pid}`); models = r.models?.length ? r.models : models; } catch { /* keep defaults */ } }
     pick.replaceChildren(...models.map((m) => el("option", { value: m, text: m })));
