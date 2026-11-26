@@ -638,7 +638,7 @@ if (req.method === "GET") {
         const b = await readBody(req, 4096), c = store.chats.get(p.id, m[2]); if (!c) return json(res, 404, { error: "Chat not found" });
         if (live.get(`${p.id}:${c.id}`)?.abort) return json(res, 409, { error: "Wait until the current answer finishes." });
         if (!validProvider(b.provider) || !validModel(b.model)) return json(res, 400, { error: "Pick a provider and model." });
-        if (!modelAllowed(b.provider, b.model)) return json(res, 403, { error: BLOCKED });
+        if (!modelAllowed(b.provider, b.model, process.env, store.keys.get(b.provider)?.base)) return json(res, 403, { error: BLOCKED });
         c.provider = b.provider; c.model = b.model; store.chats.save(p.id, c); return json(res, 200, { ok: true });
       }
     }
