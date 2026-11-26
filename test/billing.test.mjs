@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTool } from "../server/agent.mjs";
-import { providerAllowed, modelAllowed, planEnv, PAID_ENV } from "../server/billing.mjs";
+import { providerAllowed, modelAllowed, planEnv, PAID_ENV, paidAllowed, GROQ_FREE_MODELS } from "../server/billing.mjs";
 
 test("by default only free providers are allowed", () => {
   for (const id of ["nvidia", "openrouter", "groq", "gemini", "ollama"]) assert.equal(providerAllowed(id, {}), true, id);
@@ -20,10 +20,18 @@ test("engines start without pay-per-use credentials, keeping the plan sign-in", 
   assert.deepEqual(planEnv(env), { PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "plan" });
   assert.equal(env.OPENAI_API_KEY, "x", "the input is not changed");
 });
-test("only the exact owner opt-in lifts the block", () => {
-  assert.equal(providerAllowed("openai", { STUDIO_ALLOW_PAID_APIS: "true" }), false);
-  assert.equal(providerAllowed("openai", { STUDIO_ALLOW_PAID_APIS: "1" }), true);
-  assert.equal(planEnv({ STUDIO_ALLOW_PAID_APIS: "1", OPENAI_API_KEY: "x" }).OPENAI_API_KEY, "x");
+test("paid API providers remain blocked even when the legacy opt-in is present", () => {
+  assert.equal(paidAllowed({ STUDIO_ALLOW_PAID_APIS: "1" }), false);
+  assert.equal(providerAllowed("openai", { STUDIO_ALLOW_PAID_APIS: "1" }), false);
+  assert.equal(modelAllowed("anthropic", "claude-latest", { STUDIO_ALLOW_PAID_APIS: "1" }), false);
+  assert.equal(planEnv({ STUDIO_ALLOW_PAID_APIS: "1", OPENAI_API_KEY: "x" }).OPENAI_API_KEY, undefined);
+});
+test("Groq is restricted to the explicit free-tier allowlist", () => {
+  assert.equal(modelAllowed("groq", "openai/gpt-oss-120b", {}), true);
+  assert.equal(modelAllowed("groq", "qwen/qwen3.8-27b", {}), true);
+  assert.equal(modelAllowed("groq", "openai/gpt-oss-20b", {}), true);
+  assert.equal(modelAllowed("groq", "minimaxai/minimax-m2.7", {}), false);
+  assert.equal(GROQ_FREE_MODELS.size, 3);
 });
 
 test("a provider or model that is not a plain string is rejected", () => {
