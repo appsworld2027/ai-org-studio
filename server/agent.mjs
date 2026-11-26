@@ -137,7 +137,7 @@ export function effortFields(providerId, effort) {
 }
 // apps: [{ name, app, tool, description, schema, session, readOnly }] from mcp-client.openApps — connected apps (MCP).
 // roots: extra folders the agent may read/write besides the product (e.g. the Garage).
-export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [] }) {
+export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [] }) {
   const appSchemas = apps.map((a) => ({ type: "function", function: { name: a.name, description: `[${a.app}] ${a.description}`, parameters: a.schema?.type === "object" ? a.schema : { type: "object", properties: {} } } }));
   let extra = effortFields(provider.id, effort);
   for (let round = 0; round < maxRounds; round++) {
@@ -189,7 +189,7 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
         }
       }
       else {
-        const ask = needsApproval(c.name, args);
+        const ask = !auto && needsApproval(c.name, args);
         emit({ t: "tool", id: c.id, name: c.name, args, ask });
         const ok = ask ? await approve({ id: c.id, name: c.name, args }) : true;
         if (signal?.aborted) return emit({ t: "stopped" });

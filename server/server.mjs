@@ -270,7 +270,7 @@ async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
     L.apps = await openApps(connectors.servers(), { env: ENGINE_ENV, log }).catch(() => ({ tools: [], problems: [], close() {} }));
     if (L.apps.problems.length) emit({ t: "note", message: `Some connected apps did not start: ${L.apps.problems.join("; ").slice(0, 300)}` });
     await runTurn({ messages: c.messages, provider: pc, model: c.model, effort: c.effort, root: garage.ready() ? { product: p.dir, garage: garage.ensureProduct(p) } : p.dir, systemPrompt: systemPromptFor(p), signal: ac.signal, emit, apps: L.apps.tools,
-      approve: (call) => auto ? Promise.resolve(true) : new Promise((ok) => L.pending.set(call.id, ok)),
+      auto, approve: (call) => new Promise((ok) => L.pending.set(call.id, ok)),
       askUser: (q) => new Promise((ok) => L.pending.set(q.id, ok)) });
   } catch (e) { if (!ac.signal.aborted) emit({ t: "error", message: e.message }); }
   finally {

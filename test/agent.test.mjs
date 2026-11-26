@@ -73,6 +73,25 @@ test("runTurn: reads freely, asks before writing, obeys a 'no', then answers", a
   assert.ok(events.some((e) => e.t === "tool" && e.name === "write_file" && e.ask === true));
   assert.equal(events.at(-1).t, "done");
 });
+test("runTurn: Auto runs a shell command without emitting an approval prompt", async () => {
+  const events = [];
+  const replies = [
+    sse({ choices: [{ delta: { tool_calls: [{
+      index: 0, id: "shell", function: {
+        name: "run_command", arguments: JSON.stringify({ command: "printf studio-auto-ok" }),
+      },
+    }] } }] }),
+    sse({ choices: [{ delta: { content: "Done." } }] }),
+  ];
+  await runTurn({
+    messages: [], provider: { base: "https://p.example/v1" }, model: "m", root: tmp(),
+    systemPrompt: "", auto: true, emit: (event) => events.push(event),
+    approve: () => assert.fail("Auto must not request approval"),
+    fetchImpl: async () => ({ ok: true, body: replies.shift() }),
+  });
+  assert.equal(events.find((event) => event.t === "tool").ask, false);
+  assert.match(events.find((event) => event.t === "tool_result").result, /exit 0\nstudio-auto-ok/);
+});
 test("runTurn: plain-language errors for bad key and quota", async () => {
   for (const [status, re] of [[401, /key was rejected/], [429, /quota/], [404, /not available/]]) {
     await assert.rejects(runTurn({ messages: [{ role: "user", content: "x" }], provider: { base: "https://p/v1" }, model: "m", root: tmp(), systemPrompt: "", emit() {}, approve: async () => true,
