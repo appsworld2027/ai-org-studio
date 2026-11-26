@@ -102,11 +102,17 @@
         const save = control("Save correction", () => send("save"));
         const run = control("Run Maya", () => send("run"));
         const accept = control("Accept latest contract", () => send("accept"));
+        const recover = control("Recover saved contract (no model call)", () => send("recover"));
         control("Refresh status", () => loadEvidence().catch(showError));
         feedback.oninput = () => updateButtons();
         function showError(error) { status.textContent = error.message; }
         function updateButtons() {
           const running = latest?.status === "running";
+          const recoverable = latest?.status === "failed" &&
+            latest.error === "Maya's contract is missing required fields" &&
+            !!latest.attempts?.at(-1)?.output;
+          recover.hidden = !recoverable;
+          recover.disabled = !available || busy || !recoverable;
           save.disabled = !available || busy || running || !feedback.value.trim();
           run.disabled = !available || busy || running || !!feedback.value.trim() || !!(latest && !["queued", "failed", "interrupted"].includes(latest.status));
           accept.disabled = !available || busy || !!feedback.value.trim() || latest?.status !== "founder-review" || !!latest?.contract?.openQuestions?.length;
@@ -145,12 +151,12 @@
             if (!r.journalVersion) textElement("small", "This run predates structured logging.", card);
             if (r.requestedModel) textElement("small",
               "Requested model: " + r.requestedModel + " · Read-tool requests: " + (r.toolCalls || 0), card);
+            if (r.recoveredAt) textElement("p", "Saved response recovered by local validation; no new model call.", card);
             if (r.contract) {
               textElement("p", r.contract.summary, card);
               for (const [label, lines] of [
                 ["Acceptance criteria", r.contract.acceptanceCriteria],
-                ["Edge cases", r.contract.edgeCases],
-                ["Open founder questions", r.contract.openQuestions]
+                ["Edge cases", r.contract.edgeCases]
               ]) {
                 textElement("strong", label, card);
                 const list = document.createElement("ul");
@@ -158,18 +164,82 @@
                 if (!lines.length) textElement("li", "None", list);
                 card.append(list);
               }
+              renderQuestions(r, card);
               for (const agent of r.agents || []) textElement("small",
                 agent.agent + " · requested " + agent.requestedModel + " · reported " + (agent.reportedModel || "unknown") + " · " +
                 (agent.inputTokens ?? "unknown") + " input / " +
                 (agent.outputTokens ?? "unknown") + " output tokens (reported)", card);
             }
             if (r.attempts?.length) textElement("p",
-              r.attempts.length + " incomplete attempt(s) preserved; not counted as delivered.", card);
+              r.attempts.length + " original failed attempt(s) preserved; recovery is recorded separately.", card);
             evidence.append(card);
           }
           updateButtons();
           if (latest?.status === "running" && dialog.open && panel.isConnected) {
             timer = setTimeout(() => loadEvidence().catch(showError), 2500);
+          }
+        }
+        function renderQuestions(r, card) {
+          const questions = r.contract.openQuestions || [];
+          textElement("strong", "Open founder decisions", card);
+          if (!questions.length) { textElement("p", "None", card); return; }
+          const interactive = r.revision === latest?.revision && r.status === "founder-review";
+          const choices = new Map();
+          let previousApplied = "";
+          const structured = questions.filter(q => typeof q !== "string").length;
+          for (const [i, q] of questions.entries()) {
+            const group = document.createElement("fieldset");
+            group.style.cssText = "margin:8px 0;padding:10px;border:1px solid currentColor;border-radius:6px";
+            textElement("legend", (i + 1) + ". " + (typeof q === "string" ? q : q.question), group);
+            if (typeof q === "string") {
+              textElement("p", "Respond in the correction box.", group);
+            } else {
+              textElement("p", q.why, group);
+              for (const option of q.options) {
+                const line = document.createElement("div");
+                const label = document.createElement("label");
+                if (interactive) {
+                  const input = document.createElement("input");
+                  input.type = "radio";
+                  input.name = "studio-decision-" + r.revision + "-" + i;
+                  input.onchange = () => choices.set(i, option.label);
+                  label.append(input, document.createTextNode(" "));
+                }
+                label.append(document.createTextNode(option.label +
+                  (option.label === q.recommended && !/recommended/i.test(option.label) ? " (Recommended)" : "")));
+                line.append(label);
+                textElement("small", " — " + option.consequence, line);
+                group.append(line);
+              }
+            }
+            card.append(group);
+          }
+          if (interactive && structured) {
+            const apply = document.createElement("button");
+            apply.type = "button";
+            apply.textContent = "Use selected decisions as correction";
+            apply.onclick = () => {
+              if (choices.size !== structured) {
+                status.textContent = "Select an option for each structured decision first.";
+                return;
+              }
+              const selected = questions.flatMap((q, i) => typeof q === "string" ? [] :
+                [q.question + "\nDecision: " + choices.get(i)]).join("\n\n");
+              const current = feedback.value.trim();
+              const additional = previousApplied && current.startsWith(previousApplied)
+                ? current.slice(previousApplied.length).trim() : current;
+              const combined = [selected, additional].filter(Boolean).join("\n\n");
+              if (combined.length > feedback.maxLength) {
+                status.textContent = "Selected decisions and additional feedback exceed 2000 characters. Shorten the correction.";
+                return;
+              }
+              previousApplied = selected;
+              feedback.value = combined;
+              updateButtons();
+              status.textContent = "Decisions added to the correction box. Review and Save correction; no model called.";
+              feedback.focus();
+            };
+            card.append(apply);
           }
         }
         function renderActivity(journal) {
@@ -203,7 +273,7 @@
             "revision.saved": "Correction saved", "run.started": "Run started", "route.selected": "Agent and engine selected",
             "context.prepared": "Context prepared", "model.request": "Model request initiated",
             "model.headers": "Provider HTTP response", "model.result": "Model response parsed",
-            "tool.request": "Tool requested", "tool.result": "Tool result", "artifact.rejected": "Incomplete artifact rejected", "artifact.saved": "Contract saved",
+            "tool.request": "Tool requested", "tool.result": "Tool result", "artifact.rejected": "Incomplete artifact rejected", "artifact.recovered": "Saved response recovered locally", "artifact.saved": "Contract saved",
             "handoff.offered": "Handoff offered", "handoff.acknowledged": "Handoff acknowledged",
             "run.completed": "Run completed", "run.failed": "Run failed", "run.interrupted": "Run interrupted"
           };
@@ -240,6 +310,7 @@
             if (action === "save") feedback.value = "";
             status.textContent = action === "save" ? "Correction saved locally; no model called."
               : action === "accept" ? "Contract accepted locally. No code, release or merge approved."
+              : action === "recover" ? "Saved contract recovered. Review founder decisions; no model called."
               : "Maya started. This panel updates automatically.";
             await loadEvidence();
           } catch (error) {
@@ -253,7 +324,8 @@
         textElement("p", "Supervised discovery only. Corrections remain local until Run Maya sends them to the configured NVIDIA model. No code changes, reviewer verdict, or delivery is implied.", panel);
         panel.append(feedback, controls, activity, evidence);
         item.append(panel);
-        save.disabled = run.disabled = accept.disabled = true;
+        save.disabled = run.disabled = accept.disabled = recover.disabled = true;
+        recover.hidden = true;
         loadEvidence().catch(showError);
       }
 

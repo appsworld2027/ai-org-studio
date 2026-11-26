@@ -7,7 +7,7 @@ import { randomUUID, createHash } from "node:crypto";
 const TYPES = new Set([
   "revision.saved", "run.started", "route.selected", "context.prepared",
   "model.request", "model.headers", "model.result", "tool.request",
-  "tool.result", "artifact.rejected", "artifact.saved", "handoff.offered", "handoff.acknowledged",
+  "tool.result", "artifact.rejected", "artifact.recovered", "artifact.saved", "handoff.offered", "handoff.acknowledged",
   "run.completed", "run.failed", "run.interrupted"
 ]);
 const ROLES = new Set(["maya-ai-pm", "founder", "arjun-cpto", "quinn-qa", "dev-coder", "rex-reviewer", "studio"]);
@@ -26,7 +26,7 @@ export function failureKind(error) {
   if (/^429\b/.test(message)) return "provider_rate_limit";
   if (/^(401|403)\b/.test(message)) return "provider_auth";
   if (/^[45]\d\d\b/.test(message)) return "provider_http";
-  if (/structured contract|missing required fields|final response/i.test(message)) return "invalid_artifact";
+  if (/structured contract|missing required fields|invalid founder decision|final response/i.test(message)) return "invalid_artifact";
   return "execution_error";
 }
 

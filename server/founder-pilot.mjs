@@ -29,15 +29,31 @@ export function parseContract(output) {
   } catch {
     throw new Error("Maya did not return a complete structured contract");
   }
+  const nonempty = v => typeof v === "string" && v.trim().length > 0;
   const strings = (v, min) => Array.isArray(v) && v.length >= min &&
-    v.length <= 30 && v.every(x => typeof x === "string" && x.trim().length > 0);
-  if (!c || typeof c.summary !== "string" || !c.summary.trim() ||
+    v.length <= 30 && v.every(nonempty);
+  if (!c || !nonempty(c.summary) ||
       !strings(c.acceptanceCriteria, 2) || !strings(c.edgeCases, 1) ||
-      !strings(c.openQuestions, 0)) {
+      !Array.isArray(c.openQuestions) || c.openQuestions.length > 30) {
     throw new Error("Maya's contract is missing required fields");
   }
+  const openQuestions = c.openQuestions.map(q => {
+    // Preserve older plain-text questions. New contracts can contain the
+    // AI Org playbook's structured decision, options and recommendation.
+    if (nonempty(q)) return q;
+    if (!q || !nonempty(q.question) || !nonempty(q.why) ||
+        !Array.isArray(q.options) || q.options.length < 2 || q.options.length > 4 ||
+        !q.options.every(o => o && nonempty(o.label) && nonempty(o.consequence)) ||
+        new Set(q.options.map(o => o.label)).size !== q.options.length ||
+        !nonempty(q.recommended) || !q.options.some(o => o.label === q.recommended)) {
+      throw new Error("Maya's contract has an invalid founder decision");
+    }
+    return { question: q.question, why: q.why,
+      options: q.options.map(o => ({ label: o.label, consequence: o.consequence })),
+      recommended: q.recommended };
+  });
   return { summary: c.summary, acceptanceCriteria: c.acceptanceCriteria,
-    edgeCases: c.edgeCases, openQuestions: c.openQuestions };
+    edgeCases: c.edgeCases, openQuestions };
 }
 
 // Only explicitly selected, committed product files enter the reader's sandbox.
@@ -191,8 +207,9 @@ export function createFounderPilot({
           "You may use actual list_files/read_file function calls at most during the first two rounds if truly necessary. " +
           "Never return a tool request as plain text or JSON. Return ONLY a JSON object with summary (string), " +
           "acceptanceCriteria (at least two testable Given/When/Then strings with AC IDs), " +
-          "edgeCases (array of strings, aim for at least five), and openQuestions (array of unresolved founder decisions, " +
-          "empty if none). No markdown or extra fields. State material assumptions in the summary. " +
+          "edgeCases (array of strings, aim for at least five), and openQuestions (array of decision objects, empty if none). " +
+          "Each decision object must have question and why (strings), options (2–4 objects with label and consequence strings), " +
+          "and recommended (the exact label of the recommended option). No markdown or extra fields. State material assumptions in the summary. " +
           "Follow these applicable AI Org playbook guidelines for founder decisions and quality, while respecting the read-only pilot:\n" +
           decisions.slice(0, 2000) + "\n" + quality.slice(0, 1200),
         observe(observation) {
@@ -267,13 +284,65 @@ export function createFounderPilot({
 
   function run({ requestId, action, revision, feedback = "" } = {}) {
     if (requestId !== PILOT_ID) throw new Error("Only the synthetic pilot is enabled");
-    if (!["save", "run", "accept"].includes(action)) throw new Error("Choose save, run, or accept explicitly");
+    if (!["save", "run", "accept", "recover"].includes(action)) throw new Error("Choose save, run, accept, or recover explicitly");
     if (active.has(requestId)) throw new Error("Maya is already working");
     const task = inbox.list().find(t => t.requestId === requestId);
     if (!task) throw new Error("Founder task not found");
     const revisions = history(requestId);
     let record = revisions.at(-1);
     if ((record?.revision ?? null) !== (revision ?? null)) throw new Error("Revision changed; refresh first");
+    if (action === "recover") {
+      if (feedback !== "") throw new Error("Recovery does not modify feedback");
+      if (record?.status === "founder-review" && record.recoveredAt) return record;
+      if (record?.status !== "failed" || record.error !== "Maya's contract is missing required fields" || record.contract) {
+        throw new Error("Only the saved format-rejected latest response can be recovered");
+      }
+      const attempt = record.attempts?.at(-1);
+      if (!attempt || attempt.role !== "maya-ai-pm" || !record.executionId ||
+          attempt.executionId !== record.executionId || attempt.error !== record.error ||
+          typeof attempt.output !== "string") {
+        throw new Error("Saved attempt does not match the failed execution");
+      }
+      const evidence = journal.read(100000);
+      if (evidence.invalidLines) throw new Error("Execution journal is incomplete; recovery blocked");
+      const events = evidence.events.filter(e => e.revision === record.revision &&
+        e.requestId === requestId && e.executionId === record.executionId);
+      if (!events.some(e => e.type === "run.started") ||
+          !events.some(e => e.type === "route.selected" && e.actor === "maya-ai-pm") ||
+          !events.some(e => e.type === "model.headers" && e.httpStatus === 200) ||
+          !events.some(e => e.type === "model.result" && e.actor === "maya-ai-pm") ||
+          !events.some(e => e.type === "run.failed" && e.errorKind === "invalid_artifact")) {
+        throw new Error("No matching instrumented response and validation failure");
+      }
+      const contract = parseContract(attempt.output);
+      const digest = artifactDigest(contract);
+      const previous = structuredClone(record);
+      const reportedModel = events.filter(e => e.type === "model.result" && e.reportedModel).at(-1)?.reportedModel ?? null;
+      record.contract = contract;
+      record.artifactHash = digest;
+      record.recoveredAt = new Date().toISOString();
+      record.agents = [{ executionId: attempt.executionId, agent: attempt.agent, role: attempt.role,
+        requestedModel: attempt.requestedModel, reportedModel, inputTokens: attempt.inputTokens ?? null,
+        outputTokens: attempt.outputTokens ?? null, cost: null, output: attempt.output,
+        startedAt: record.startedAt, completedAt: record.completedAt }];
+      record.status = "founder-review";
+      record.step = "Saved Maya response revalidated locally; no new model call";
+      delete record.error;
+      delete record.journalError;
+      try {
+        save(revisions);
+        event("artifact.recovered", record, { actor: "studio", artifactHash: digest });
+        event("artifact.saved", record, { actor: "studio", artifactHash: digest });
+        event("handoff.offered", record, { actor: "studio", fromRole: "maya-ai-pm",
+          toRole: "founder", artifactHash: digest });
+      } catch {
+        revisions[revisions.length - 1] = previous;
+        previous.journalError = "Recovery not completed: could not save execution evidence";
+        save(revisions);
+        throw new Error(previous.journalError);
+      }
+      return record;
+    }
     if (action === "save") {
       if (typeof feedback !== "string" || !feedback.trim() || feedback.length > 2000) {
         throw new Error("Enter a correction of 1–2000 characters");

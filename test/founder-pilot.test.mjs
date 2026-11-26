@@ -190,3 +190,72 @@ test("an incomplete early text response triggers exactly one reserved final atte
   assert.equal(requests[1].tools, undefined);
   assert.deepEqual(parseContract(messages.at(-1).content), contract);
 });
+
+const structuredContract = {
+  ...contract,
+  openQuestions: [{
+    question: "Which review presentation should we use?",
+    why: "Controls the founder's review effort.",
+    options: [{ label: "Latest", consequence: "Show current contract." }, { label: "History", consequence: "Show all revisions." }],
+    recommended: "Latest"
+  }]
+};
+
+test("Maya's structured founder decisions are preserved, not flattened or silently dismissed", () => {
+  assert.deepEqual(parseContract(JSON.stringify(structuredContract)), structuredContract);
+  assert.throws(() => parseContract(JSON.stringify({ ...structuredContract,
+    openQuestions: [{ ...structuredContract.openQuestions[0], recommended: "Not an option" }] })), /invalid founder decision/);
+  assert.throws(() => parseContract(JSON.stringify({ ...structuredContract, openQuestions: null })), /missing required fields/);
+});
+
+test("recover the matching previously rejected response without a model retry or fake run completion", async t => {
+  const { createExecutionJournal, artifactDigest } = await import("../server/execution-journal.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "pilot-recovery-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const id = "studio-pilot-001", executionId = "4591b422-0000-4000-8000-000000000001";
+  const file = join(dir, id + ".json");
+  const error = "Maya's contract is missing required fields";
+  const output = JSON.stringify(structuredContract);
+  const record = {
+    journalVersion: 1, revision: 1, status: "failed", executionId, error, feedback: "",
+    startedAt: "2026-01-01T00:00:00Z", completedAt: "2026-01-01T00:01:00Z",
+    agents: [], attempts: [{ executionId, role: "maya-ai-pm", agent: "Maya",
+      requestedModel: "nvidia/nemotron-3-ultra-550b-a55b", output, error }]
+  };
+  writeFileSync(file, JSON.stringify([record]));
+  const journal = createExecutionJournal(dir);
+  const base = { requestId: id, revision: 1, executionId };
+  const append = (type, fields) => journal.append(type, { ...base, ...fields });
+  let modelCalls = 0;
+  const config = { dir, inbox: { list: () => [{ requestId: id, title: "Feedback" }] },
+    runner: async () => { modelCalls++; throw new Error("Do not call the model during recovery"); } };
+  const pilot = createFounderPilot(config);
+  assert.throws(() => pilot.run({ requestId: id, action: "recover", revision: 1 }), /No matching instrumented/);
+  append("run.started", { actor: "studio", engine: "free" });
+  append("route.selected", { actor: "maya-ai-pm" });
+  append("model.request", { actor: "maya-ai-pm", round: 1 });
+  append("model.headers", { actor: "maya-ai-pm", httpStatus: 200 });
+  append("model.result", { actor: "maya-ai-pm" });
+  append("run.failed", { actor: "maya-ai-pm", errorKind: "invalid_artifact" });
+  const recovered = pilot.run({ requestId: id, action: "recover", revision: 1 });
+  assert.equal(recovered.status, "founder-review");
+  assert.equal(recovered.executionId, executionId);
+  assert.equal(recovered.attempts.length, 1);
+  assert.equal(recovered.agents[0].output, output);
+  assert.deepEqual(recovered.contract, structuredContract);
+  assert.equal(recovered.artifactHash, artifactDigest(structuredContract));
+  assert.equal(modelCalls, 0);
+  const events = journal.read().events;
+  assert.equal(events.filter(e => e.type === "run.failed").length, 1);
+  assert.equal(events.filter(e => e.type === "run.completed").length, 0);
+  assert.equal(events.find(e => e.type === "artifact.recovered").artifactHash, recovered.artifactHash);
+  assert.equal(events.find(e => e.type === "handoff.offered").artifactHash, recovered.artifactHash);
+  assert.equal(createFounderPilot(config).history(id)[0].status, "founder-review");
+  assert.equal(pilot.run({ requestId: id, action: "recover", revision: 1 }).artifactHash, recovered.artifactHash);
+  assert.equal(journal.read().total, events.length);
+  assert.throws(() => pilot.run({ requestId: id, action: "accept", revision: 1 }), /unresolved questions/);
+  const correction = pilot.run({ requestId: id, action: "save", revision: 1, feedback: "Use latest view with history available" });
+  assert.equal(correction.status, "queued");
+  assert.equal(correction.parentRevision, 1);
+  assert.equal(modelCalls, 0);
+});

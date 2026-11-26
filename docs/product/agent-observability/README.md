@@ -35,7 +35,12 @@ A saved contract is logged before a handoff is offered. A founder acknowledgemen
 must refer to the same execution ID and artifact digest for an instrumented
 contract. A revision can reference a prior contract digest and correction count.
 A failed or interrupted run is not counted as complete. Prior uninstrumented
-runs stay uninstrumented; there is no backfilled proof. The journal is local
+runs stay uninstrumented; there is no backfilled proof. A format-rejected response can be recovered explicitly, without a model call,
+only when the saved attempt and actual instrumented model response and prior
+validation failure match the same execution. Recovery appends a separate
+artifact.recovered event and handoff; it never rewrites the original run.failed
+as a successful run. Structured founder questions preserve options and
+recommendations; unresolved questions still block acceptance. The journal is local
 persistent evidence, not a tamper-proof external audit service, and does not
 survive loss of the underlying home directory.
 
