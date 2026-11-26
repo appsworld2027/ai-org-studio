@@ -281,3 +281,19 @@ test("tool-free direct Nemotron generation disables extended thinking and record
   assert.equal(requests[1].chat_template_kwargs,undefined);
   assert.equal(requests[2].chat_template_kwargs,undefined);
 });
+
+test("supervised free OpenRouter and Groq requests use explicit cost and completion limits", async () => {
+  const requests=[];
+  const invoke=(id,model)=>runTurn({messages:[{role:"user",content:"Test"}],provider:{id,base:"https://p.example/v1"},
+    model,root:tmp(),systemPrompt:"",emit(){},allowedTools:[],maxRounds:1,maxTokens:6000,freeOnly:true,
+    approve:async()=>false,fetchImpl:async(_url,opts)=>{
+      requests.push(JSON.parse(opts.body));return {ok:true,status:200,body:sse({model,choices:[{delta:{content:"done"},finish_reason:"stop"}]})};
+    }});
+  await invoke("openrouter","deepseek/deepseek-v4.1-flash-1017:free");
+  assert.deepEqual(requests[0].provider.max_price,{prompt:0,completion:0,request:0});
+  assert.equal(requests[0].provider.allow_fallbacks,false);
+  await assert.rejects(invoke("openrouter","deepseek/deepseek-v4.1-flash-1017"),/explicit OpenRouter/);
+  await invoke("groq","openai/gpt-oss-120b");
+  assert.equal(requests[1].max_completion_tokens,6000);
+  assert.equal(requests[1].max_tokens,undefined);
+});

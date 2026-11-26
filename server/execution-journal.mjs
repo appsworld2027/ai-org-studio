@@ -3,6 +3,7 @@
 import { openSync, closeSync, writeFileSync, fsyncSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
+import { PROBE_ROUTES, splitRoute } from "./pilot-model-profile.mjs";
 
 const TYPES = new Set([
   "revision.saved", "run.started", "route.selected", "route.fallback", "context.prepared",
@@ -15,7 +16,7 @@ const TOOLS = new Set(["read_file", "list_files", "search", "write_file", "edit_
 const FINISH = new Set(["stop", "length", "tool_calls", "content_filter", "function_call"]);
 const OUTCOMES = new Set(["ok", "blocked", "error"]);
 const ERRORS = new Set(["timeout", "provider_rate_limit", "provider_auth", "provider_http", "invalid_artifact", "output_limit", "interrupted", "execution_error"]);
-const MODELS = new Set(["nvidia/nemotron-3-ultra-550b-a55b", "mistralai/mistral-large-4-1t-a52b", "moonshotai/kimi-k3.1-pro"]);
+const MODELS = new Set(["moonshotai/kimi-k3.1-pro", ...PROBE_ROUTES.flatMap(r=>{const m=splitRoute(r).model;return [m,m.replace(/:free$/,"")];})]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA = /^[0-9a-f]{64}$/;
 const uint = value => Number.isSafeInteger(value) && value >= 0;
@@ -49,6 +50,7 @@ export function createExecutionJournal(dir) {
     if (/^BUILD-\d{2}$/.test(fields.buildUnit || "")) event.buildUnit = fields.buildUnit;
     if (["ai:discovery", "ai:plan", "ai:tests", "ai:build", "ai:qa", "ai:review"].includes(fields.stage)) event.stage = fields.stage;
     if (fields.engine === "free") event.engine = "free";
+    if (["nvidia","groq","openrouter"].includes(fields.providerId)) event.providerId=fields.providerId;
     if (["off", "default"].includes(fields.thinkingMode)) event.thinkingMode = fields.thinkingMode;
     if (["explore", "finalize"].includes(fields.phase)) event.phase = fields.phase;
     if (TOOLS.has(fields.tool)) event.tool = fields.tool;

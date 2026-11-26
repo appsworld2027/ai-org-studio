@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, mkdirSy
 import { execFile } from "node:child_process";
 import { join, resolve, relative, dirname, sep } from "node:path";
 import { planEnv } from "./billing.mjs";
+import { freeRequestFields } from "./pilot-model-profile.mjs";
 
 export const TOOLS = [
   { name: "list_files", desc: "List files and folders under a path in the product (default: the product root).",
@@ -110,7 +111,8 @@ export async function readStream(body, onText) {
       const data = line.slice(5).trim(); if (data === "[DONE]") continue;
       let j; try { j = JSON.parse(data); } catch { continue; }
       if (typeof j.model === "string" && j.model) reportedModel = reportedModel && reportedModel !== j.model ? "multiple" : j.model;
-      if (j.usage) usage = { input: j.usage.prompt_tokens, output: j.usage.completion_tokens };
+      const counts=j.usage||j.x_groq?.usage;
+      if (counts) usage = { input: counts.prompt_tokens, output: counts.completion_tokens };
       const ch = j.choices?.[0]; if (!ch) continue;
       const d = ch.delta || ch.message || {};
       if (d.content) { text += d.content; onText?.(d.content); }
@@ -141,10 +143,11 @@ export function effortFields(providerId, effort) {
 }
 // apps: [{ name, app, tool, description, schema, session, readOnly }] from mcp-client.openApps — connected apps (MCP).
 // roots: extra folders the agent may read/write besides the product (e.g. the Garage).
-export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [], allowedTools = null, maxTokens, observe, finalInstruction, validateFinal, directGeneration = false }) {
+export async function runTurn({ messages, provider, model, effort, root, systemPrompt, emit, approve, auto = false, askUser, signal, fetchImpl = fetch, maxRounds = 30, apps = [], allowedTools = null, maxTokens, observe, finalInstruction, validateFinal, directGeneration = false, freeOnly = false }) {
   const enabledTools = toolSchemas().filter(t => !allowedTools || allowedTools.includes(t.function.name));
   const appSchemas = apps.map((a) => ({ type: "function", function: { name: a.name, description: `[${a.app}] ${a.description}`, parameters: a.schema?.type === "object" ? a.schema : { type: "object", properties: {} } } }));
   let extra = effortFields(provider.id, effort);
+  const routeFields = freeOnly ? freeRequestFields(provider.id, model) : {};
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) return emit({ t: "stopped" });
     // Reserve the last request for an actual answer when the caller opts in.
@@ -156,7 +159,7 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
     // Only the explicitly opted-in, tool-free Nemotron text generation path.
     // Normal Studio conversation and tool use retain their existing behavior.
     const directThinkingOff = directGeneration && provider.id === "nvidia" &&
-      model === "nvidia/nemotron-3-ultra-550b-a55b" && roundTools.length === 0;
+      ["nvidia/nemotron-3-ultra-550b-a55b","nvidia/nemotron-3.5-lightning-30b-a3b"].includes(model) && roundTools.length === 0;
     const generationFields = directThinkingOff ? { chat_template_kwargs: { enable_thinking: false } } : {};
     const started = Date.now();
     const call = async () => {
@@ -164,7 +167,7 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
       const response = await fetchImpl(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,
       headers: { "Content-Type": "application/json", ...(provider.key ? { Authorization: `Bearer ${provider.key}` } : {}), ...(provider.extraHeaders || {}) },
-      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...roundMessages], ...(roundTools.length ? { tools: roundTools, tool_choice: "auto" } : {}), ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra, ...generationFields, ...(maxTokens ? { max_tokens: maxTokens } : {}) }),
+      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...roundMessages], ...(roundTools.length ? { tools: roundTools, tool_choice: "auto" } : {}), ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra, ...generationFields, ...routeFields, ...(maxTokens ? {[freeOnly&&provider.id==="groq"?"max_completion_tokens":"max_tokens"]:maxTokens} : {}) }),
     });
       observe?.({ type: "model.headers", round: round + 1, phase, httpStatus: response.status,
         durationMs: Date.now() - started });

@@ -9,11 +9,14 @@ import { runTurn } from "../server/agent.mjs";
 import { PROVIDERS } from "../server/providers.mjs";
 import { createExecutionJournal, artifactDigest, failureKind } from "../server/execution-journal.mjs";
 import { BUILD_UNITS, sourceRange } from "./founder-build-units.mjs";
+import { pilotModelProfile, splitRoute, fromOrgRoute, orgRoute, modelMatches, modelFamily, stageRoute, routeFamily, ENDPOINTS } from "../server/pilot-model-profile.mjs";
 
 const ID = "studio-pilot-001", REV = 2;
-const PRIMARY_BUILD = "nvidia/nemotron-3-ultra-550b-a55b";
-const ALTERNATE_BUILD = "mistralai/mistral-large-4-1t-a52b";
-const REVIEW_MODEL = builder => builder === ALTERNATE_BUILD ? PRIMARY_BUILD : ALTERNATE_BUILD;
+const requestedModel = process.env.STUDIO_DELIVERY_BUILD_MODEL || "";
+const modelProfile = pilotModelProfile({requested:requestedModel,groqFree:process.env.STUDIO_GROQ_FREE_ONLY==="1",
+  report:requestedModel&&process.env.STUDIO_DELIVERY_MODEL_PROBE
+    ?JSON.parse(readFileSync(process.env.STUDIO_DELIVERY_MODEL_PROBE,"utf8")):null});
+const {primary:PRIMARY_BUILD,alternate:ALTERNATE_BUILD,review:REVIEW_MODEL,allowed:qualifiedModels}=modelProfile;
 const [historyDir, orgDir, keyFile, deliveryDir, expected] = process.argv.slice(2);
 if (!historyDir || !orgDir || !keyFile || !deliveryDir || !/^[a-f0-9]{64}$/.test(expected || "")) {
   throw Error("Usage: node scripts/supervised-founder-delivery.mjs HISTORY ORG KEYFILE OUTPUT EXPECTED_CONTRACT_HASH");
@@ -41,8 +44,7 @@ for (const [stage, sourceId, inputHash] of [[arjun, record.executionId, expected
         e.sourceExecutionId === sourceId && e.artifactHash === stage.artifactHash)) throw Error("Missing verified planning handoff");
 }
 const router = await import(pathToFileURL(join(orgDir, "scripts/agent-router.mjs")).href);
-const key = JSON.parse(readFileSync(keyFile, "utf8")).nvidia?.key;
-if (typeof key !== "string" || !key) throw Error("Free NVIDIA connection unavailable");
+const keys = JSON.parse(readFileSync(keyFile, "utf8"));
 const git = args => execFileSync("git", args, { cwd: root, maxBuffer: 64 * 1024 * 1024 });
 if (git(["status", "--porcelain"]).toString().trim()) throw Error("Studio integration tree must be clean");
 const baseCommit = git(["rev-parse", "HEAD"]).toString().trim();
@@ -97,14 +99,18 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
   try {
     send("stage.started");
     send("handoff.offered", { actor:"studio", fromRole:previous.role, toRole:role, artifactHash:previous.hash });
-    const chosen = router.route({ labels:[label,"engine:free"], engines:{free:true,claude:false,codex:false}, supervisedTrial:true, freeModel:freeModel?"nvidia_nim/"+freeModel:"" });
+    const chosen = router.route({ labels:[label,"engine:free"], engines:{free:true,claude:false,codex:false}, supervisedTrial:true, freeModel:freeModel?orgRoute(freeModel):"" });
     if (chosen.action !== "run" || chosen.role !== role || chosen.engine !== "free") throw Error("Expected free role unavailable");
-    const model = chosen.free_model.replace(/^nvidia_nim\//,"");
-    if (!PROVIDERS.nvidia.models.includes(model) || (freeModel && model!==freeModel)) throw Error("Expected model outside approved local route");
-    if (requireIndependent && state.stages.some(a=>a.stage==="ai:build" && a.status==="completed" && a.requestedModel===model))
+    const route=fromOrgRoute(chosen.free_model), {provider:providerId,model}=splitRoute(route);
+    const legacyTest=label==="ai:tests"&&providerId==="nvidia"&&PROVIDERS.nvidia.models.includes(model);
+    if ((!qualifiedModels.includes(route)&&!legacyTest)||(freeModel&&route!==freeModel)||
+        !ENDPOINTS[providerId]||PROVIDERS[providerId]?.base!==ENDPOINTS[providerId]) throw Error("Expected model outside approved local route");
+    const key=keys[providerId]?.key;
+    if(typeof key!=="string"||!key)throw Error("Qualified provider credential is unavailable");
+    if(requireIndependent && state.stages.some(a=>a.stage==="ai:build"&&a.status==="completed"&&modelFamily(a.requestedModel)===modelFamily(model)))
       throw Error("Independent review model unavailable; stop for review");
-    s.requestedModel = model;
-    send("route.selected",{engine:"free",requestedModel:model}); save();
+    s.requestedModel = model; s.providerId=providerId;
+    send("route.selected",{engine:"free",requestedModel:model,providerId}); save();
     const profile = readFileSync(join(orgDir,"org/agents",role+".md"),"utf8");
     const schema = JSON.stringify({inputArtifactHash:previous.hash,verdict:(paths.length||directSource)?"COMPLETE":"APPROVE",summary:"REPLACE with evidence, gaps and file names"});
     const responseFormat = directSource ? schema +
@@ -118,7 +124,7 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
     send("context.prepared",{baseArtifactHash:previous.hash,contextChars:messages[0].content.length});
     let done=false, failure, httpOk=false, modelResult=false;
     const allowed = directSource?[]:["list_files","read_file",...(paths.length?["write_file","edit_file"]:[])];
-    await runTurn({messages,provider:{...PROVIDERS.nvidia,id:"nvidia",key},model,root:candidate,
+    await runTurn({messages,provider:{...PROVIDERS[providerId],id:providerId,key},model,root:candidate,freeOnly:true,
       systemPrompt:"You are the AI Org role "+role+". Work only on this local synthetic candidate. No shell commands, git, network tools, deployment, credentials, or claims of test execution. Runner executes tests separately. Only write exact allowlisted paths: "+JSON.stringify(paths)+
       ". Ignore role-profile instructions to publish or alter other files. Role expertise:\n"+profile,
       allowedTools:allowed,auto:false,approve:async ({name,args})=> {
@@ -126,7 +132,8 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
         return paths.includes(relative(candidate,resolve(candidate,args.path)).split(sep).join("/"));
       },
       maxRounds:rounds,maxTokens:directSource?.kind==="patch"?6000:directSource?3500:5000,
-      directGeneration:directSource?.kind==="patch",signal:AbortSignal.timeout(directSource?180000:900000),
+      directGeneration:directSource?.kind==="patch",
+      ...(directSource?.kind==="patch"&&(model==="moonshotai/kimi-k3.1-pro"||providerId==="groq"&&model.startsWith("openai/gpt-oss"))?{effort:"low"}:{}),signal:AbortSignal.timeout(directSource?180000:900000),
       finalInstruction:directSource
         ?"Return the one-line JSON receipt followed by the exact requested fenced JavaScript source, not a description. No tools."
         :"Complete your final JSON receipt now, using the exact inputArtifactHash. Report incomplete work if files did not change. No further tools.",
@@ -146,7 +153,7 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
       observe(e){const {type,...fields}=e;if(type==="model.headers"&&fields.httpStatus===200)httpOk=true;
         if(type==="model.result"){modelResult=true;s.finish=fields.finish??null;if(fields.reportedModel)s.reportedModel=fields.reportedModel;
           s.responseChars=fields.responseChars??null;s.reasoningChars=fields.reasoningChars??null;s.outputTokens=fields.outputTokens??null;}
-        send(type,fields);},
+        send(type,{...fields,providerId});},
       emit(e){if(e.t==="assistant_start")response="";if(e.t==="delta")response+=e.d;
         if(e.t==="done")done=true;if(["error","stopped"].includes(e.t))failure=e.message||"Stopped";}
     });
@@ -154,6 +161,8 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
     if(s.finish==="length") throw Error("Model output limit reached (finish:length)");
     const receipt=parse(messages.at(-1)?.content||response,previous.hash,directSource);
     if (!done||failure||!httpOk||!modelResult||!receipt) throw Error(failure||"Invalid artifact: no valid model receipt");
+    if(label==="ai:build"&&modelProfile.explicit&&!modelMatches(model,s.reportedModel,providerId))
+      throw Error("Provider did not confirm the requested qualified builder model");
     let fragmentFiles = {};
     if (receipt.verdict==="COMPLETE" && directSource) {
       if(directSource.kind==="patch"){
@@ -192,9 +201,8 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
        !paths.some(p=>pathHash(p)!==initialHashes[p])) throw Error("Invalid artifact: agent claimed completion without changing an authorized file");
     if (requireIndependent) {
       const builders = state.stages.filter(a=>a.stage==="ai:build" && a.status==="completed");
-      if (!builders.length || !s.reportedModel ||
-          !PROVIDERS.nvidia.models.includes(s.reportedModel) ||
-          builders.some(b=>!b.reportedModel||b.reportedModel===s.reportedModel))
+      if (!builders.length || !modelMatches(model,s.reportedModel,providerId) ||
+          builders.some(b=>!b.reportedModel||modelFamily(b.reportedModel)===modelFamily(s.reportedModel)))
         throw Error("Provider model independence not confirmed");
     }
     s.artifact={receipt,files:{...fragmentFiles,...Object.fromEntries(paths.map(p=>[p,pathHash(p)]))}};
@@ -332,6 +340,14 @@ async function authorBuild(locked){
   }
   let previousExecution=state.lockedSuite.executionId;
   let buildModel=PRIMARY_BUILD;
+  if(old?.buildUnits?.length){
+    const oldDone=old.stages.filter(s=>s.stage==="ai:build"&&s.status==="completed"&&old.buildUnits.some(u=>u.executionId===s.executionId));
+    const priorModels=[...new Set(oldDone.map(stageRoute))];
+    if(priorModels.length!==1||!qualifiedModels.includes(priorModels[0]))
+      throw Error("Existing build checkpoints require their original qualified model; do not repeat successful work");
+    buildModel=priorModels[0];
+    print("RESUMING ORIGINAL BUILDER "+buildModel);
+  }
   for(const unit of BUILD_UNITS){
     const input=readFileSync(join(candidate,unit.path),"utf8"),range=sourceRange(input,unit),beforeHash=pathHash(unit.path);
     const oldUnit=old?.buildUnits?.find(u=>u.id===unit.id&&u.path===unit.path&&u.beforeHash===beforeHash);
@@ -344,9 +360,9 @@ async function authorBuild(locked){
         events.some(e=>e.type==="handoff.received"&&e.artifactHash===oldStage?.inputArtifactHash);
       const reused=oldStage?.reused&&events.some(e=>e.type==="stage.reused"&&e.artifactHash===oldUnit.artifactHash);
       if((completed||reused)&&oldStage?.artifact?.files?.[unit.path]===digest&&digest===oldUnit.afterHash&&artifactDigest(oldStage.artifact)===oldUnit.artifactHash&&
-         [PRIMARY_BUILD,ALTERNATE_BUILD].includes(oldStage.requestedModel)&&
-         (!state.buildUnits.length||oldStage.requestedModel===buildModel)){
-        buildModel=oldStage.requestedModel;state.buildModel=buildModel;
+         qualifiedModels.includes(stageRoute(oldStage))&&
+         (!state.buildUnits.length||stageRoute(oldStage)===buildModel)){
+        buildModel=stageRoute(oldStage);state.buildModel=buildModel;
         const bytes=readFileSync(join(oldDir,"build-checkpoints",unit.id+".mjs"));
         writeFileSync(checkpoint,bytes,{mode:0o600,flag:"wx"});writeFileSync(join(candidate,unit.path),bytes,{mode:0o600});
         state.buildUnits.push(oldUnit);state.stages.push({...oldStage,reused:true});save();
@@ -370,11 +386,11 @@ async function authorBuild(locked){
       // No mixing builder models: a single alternate is allowed only before
       // the first successful patch. All subsequent work stays with that model.
       const failed=state.stages.at(-1);
-      if(state.buildUnits.length||buildModel!==PRIMARY_BUILD||
+      if(state.buildUnits.length||buildModel!==PRIMARY_BUILD||!ALTERNATE_BUILD||
          !["output_limit","timeout","provider_http","provider_rate_limit"].includes(failed?.errorKind)||
          pathHash(unit.path)!==beforeHash||existsSync(checkpoint))throw error;
       buildModel=ALTERNATE_BUILD;
-      log("route.fallback",upstream,{buildUnit:unit.id,requestedModel:buildModel,engine:"free",errorKind:failed.errorKind});
+      log("route.fallback",upstream,{buildUnit:unit.id,requestedModel:splitRoute(buildModel).model,providerId:splitRoute(buildModel).provider,engine:"free",errorKind:failed.errorKind});
       print("FALLBACK "+unit.id+" "+buildModel+" (free; no prior code authorship)");
       step=await generate();
     }

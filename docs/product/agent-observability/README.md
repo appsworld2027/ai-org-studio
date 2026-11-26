@@ -191,3 +191,64 @@ Successful authoring locks the builder model for all remaining units and
 verified resumed checkpoints. Reviewers are routed to the other model
 and actual provider model identity is still required at the review gate.
 No paid model, GitHub worker activation or deployment is introduced.
+
+### Qualified multi-provider free-model trials
+
+Studio already has NVIDIA, Groq and OpenRouter connectors. The supervised
+pilot now accepts an explicit local model route, without changing the
+canonical AI Org worker, manifest execution policy or stable Studio.
+Candidate lists are not proof of hosted availability.
+
+On 2026-11-26, the official NVIDIA Build pages showed a free GLM 5.3
+Flash endpoint (actual API ID `z-ai/glm-5.3-flash`), Nemotron 3.5
+Lightning, and Kimi K3.1 Pro (availability reports have varied).
+NVIDIA's DeepSeek V4/V4.1 and original Kimi K3 free endpoints were
+marked deprecated. OpenRouter has published DeepSeek V4 Flash free
+variants; availability is checked from its current catalog. Groq's
+current catalog lists GPT-OSS 120B/20B and Qwen3.8-27B; only use Groq
+when the founder has confirmed the account is free-tier.
+
+1. Save available provider keys through Studio Keys (never commit them).
+2. After the existing delivery has stopped, from the integration checkout:
+   `STUDIO_GROQ_FREE_ONLY=1 node scripts/probe-free-models.mjs "$HOME/.ai-org-studio/keys.json" "$HOME/studio-integration-preview/free-model-probe.json"`.
+   Set the Groq flag only for a confirmed free account. Missing keys
+   are skipped. The probe uses a synthetic fixed JavaScript/JSON fixture,
+   one bounded request per available candidate, exact model identity,
+   and no model-generated code execution. It skips superseded DeepSeek
+   variants after the first successful one. Its private report includes
+   latency, status, finish and token counts when returned; no source or
+   secret. This is readiness qualification, not a feature-quality ranking.
+3. Set `STUDIO_DELIVERY_MODEL_PROBE` to the report path and
+   `STUDIO_DELIVERY_BUILD_MODEL` to an exact qualified provider:model
+   route, or `auto` for the first qualified new candidate. Repeat the
+   Groq free confirmation if it will be used. The existing delivery
+   command, accepted contract, and reuse directory remain unchanged.
+   Reports expire after 24 hours. If prior code checkpoints exist, resume
+   with their original qualified model rather than discard or repeat work.
+4. OpenRouter is restricted to listed explicit `:free` models with zero
+   catalog prices and per-request zero price caps; no paid model fallback
+   or random router. Groq is gated by founder free-tier confirmation,
+   not by a claim that its API key proves account billing status.
+   Requests use fixed provider endpoints. Fallback is bounded to before
+   the first successful build unit; review uses another qualified model
+   family, even when the same model is hosted by multiple services.
+   The journal logs the chosen provider and model.
+
+OpenCode is an optional separate CLI trial. Its upstream install and
+provider connection are not required to use the above model routes.
+Test it with synthetic source in an isolated directory first; choose
+only a confirmed free endpoint, set provider-specific reasoning
+variants where supported, and do not grant it live credentials, writes
+or canonical workflow permissions. A production OpenCode worker adapter
+would require its own permission, tool-use, checkpoint and review
+qualification; it is not enabled by these changes.
+
+Official references:
+- https://build.nvidia.com/z-ai/glm-5-3-flash/build
+- https://build.nvidia.com/moonshotai/kimi-k3_1-pro/build
+- https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/build
+- https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash/build
+- https://console.groq.com/docs/models
+- https://openrouter.ai/collections/free-models
+- https://openrouter.ai/docs/guides/routing/provider-selection
+- https://opencode.ai/docs/
