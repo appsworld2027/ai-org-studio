@@ -12,7 +12,7 @@ export const isLocalModelBase = (base) => {
     if (!["http:", "https:"].includes(u.protocol)) return false;
     const h = u.hostname.toLowerCase();
     return h === "localhost" || h.endsWith(".localhost") || h === "::1" || h === "127.0.0.1" ||
-      /^10\\./.test(h) || /^192\\.168\\./.test(h) || /^172\\.(1[6-9]|2\\d|3[01])\\./.test(h);
+      /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
   } catch { return false; }
 };
 export const providerAllowed = (id, env = process.env, base) => validProvider(id) &&
