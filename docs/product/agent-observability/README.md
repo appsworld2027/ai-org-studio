@@ -305,3 +305,28 @@ oversized edits, ambiguity and overlap, preserves all unedited source bytes,
 and still checks the entire resulting file syntax before checkpointing.
 This is runtime validation, not human-authored feature code. Locked tests,
 provider identity checks, rate guard and independent reviewers stay in force.
+
+### Acceptance-test requalification (2026-11-26)
+
+The eight model-authored build units completed syntax checks, but the four
+original tests all failed before testing behavior: the tests passed literal
+"A"/"B" instead of the valid fixture constants, expected a zero-based index
+and invented UI/evidence fields or called the numeric calls getter as a function.
+These failures do not demonstrate a product defect. Do not relax identifier
+validation or count the old suite's red result as proof of coverage.
+
+Opt-in `STUDIO_DELIVERY_REQUALIFY_TESTS=1` with
+`STUDIO_DELIVERY_REQUALIFY_FROM` pointing at the original stopped eight-unit
+run preserves the historical suite and original author/model fingerprints.
+Quinn receives the exact shared fixture source, original agreed criterion
+and explicit real API guidance; the runner rejects known fixture misuse,
+disabled tests and broken baseline harness failures. One bounded test-format
+repair is allowed before a fragment is committed. No contract is changed.
+The new locked test hash and original locked test hash are separately
+recorded in the build manifest. Verify and replay each of the eight old
+checkpoints; do not regenerate them if any cannot be verified. During this
+explicit requalification, a failed test exposing the separately observed
+"No such worker" public history/evidence defect triggers one scoped Dev
+repair of the public facade, then reruns the unchanged tests. Other failing
+behavior remains a blocked delivery with evidence, not a pass. Independent
+review remains mandatory and the historical failed run is preserved.

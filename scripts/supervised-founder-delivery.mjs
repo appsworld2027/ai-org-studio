@@ -12,6 +12,7 @@ import { BUILD_UNITS, sourceRange } from "./founder-build-units.mjs";
 import { parseDeliveryResponse } from "./delivery-response.mjs";
 import { createDeliveryRateGuard } from "./delivery-rate-limit.mjs";
 import { uiEditSlots } from "./founder-ui-edit-slots.mjs";
+import { fixtureIssues, baselineQuality } from "./founder-test-qualification.mjs";
 import { pilotModelProfile, splitRoute, fromOrgRoute, orgRoute, modelMatches, modelFamily, stageRoute, routeFamily, ENDPOINTS } from "../server/pilot-model-profile.mjs";
 
 const ID = "studio-pilot-001", REV = 2;
@@ -21,6 +22,8 @@ const modelProfile = pilotModelProfile({requested:requestedModel,groqFree:proces
     ?JSON.parse(readFileSync(process.env.STUDIO_DELIVERY_MODEL_PROBE,"utf8")):null});
 const {primary:PRIMARY_BUILD,alternate:ALTERNATE_BUILD,review:REVIEW_MODEL,allowed:qualifiedModels}=modelProfile;
 const groqGuard=createDeliveryRateGuard();
+const requalifyTests=process.env.STUDIO_DELIVERY_REQUALIFY_TESTS==="1";
+const requalifyFrom=process.env.STUDIO_DELIVERY_REQUALIFY_FROM||process.env.STUDIO_DELIVERY_REUSE_DIR;
 const [historyDir, orgDir, keyFile, deliveryDir, expected] = process.argv.slice(2);
 if (!historyDir || !orgDir || !keyFile || !deliveryDir || !/^[a-f0-9]{64}$/.test(expected || "")) {
   throw Error("Usage: node scripts/supervised-founder-delivery.mjs HISTORY ORG KEYFILE OUTPUT EXPECTED_CONTRACT_HASH");
@@ -165,8 +168,8 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
       send("artifact.rejected",{outcome:"error",errorKind:"invalid_artifact",validationIssues:issues});
       throw Error("Invalid artifact: "+issues.join(", "));
     }
-    if(label==="ai:build"&&modelProfile.explicit&&!modelMatches(model,s.reportedModel,providerId))
-      throw Error("Provider did not confirm the requested qualified builder model");
+    if(["ai:build","ai:tests"].includes(label)&&modelProfile.explicit&&!modelMatches(model,s.reportedModel,providerId))
+      throw Error("Provider did not confirm the requested qualified author model");
     let fragmentFiles = {};
     if (receipt.verdict==="COMPLETE" && directSource) {
       if(directSource.kind==="patch"){
@@ -193,14 +196,21 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
         fragmentFiles[target]=pathHash(target);
       }else{
         const rel="fragments/"+directSource.id+".mjs",dest=join(runDir,rel);
-        writeFileSync(dest,receipt.source,{mode:0o600,flag:"wx"});
-        delete receipt.source;
-        const checked=spawnSync(process.execPath,["--check",dest],{cwd:runDir,
+        const issues=fixtureIssues(receipt.source);
+        if(issues.length){
+          s.validationIssues=issues;save();
+          send("artifact.rejected",{outcome:"error",errorKind:"invalid_artifact",validationIssues:issues});
+          throw Error("Invalid artifact: "+issues.join(", "));
+        }
+        const checked=spawnSync(process.execPath,["--input-type=module","--check"],{cwd:runDir,input:receipt.source,
           env:{PATH:process.env.PATH,HOME:scratch,TMPDIR:scratch,CI:"1"},encoding:"utf8",timeout:10000});
         if(checked.status!==0){
-          writeFileSync(join(runDir,directSource.id+"-syntax.log"),checked.stderr||"Syntax check failed",{mode:0o600});
+          s.syntaxDiagnostic=(checked.stderr||"Syntax check failed").slice(0,1600);save();
+          writeFileSync(join(runDir,directSource.id+"-"+s.executionId+"-syntax.log"),s.syntaxDiagnostic,{mode:0o600});
           throw Error("Invalid artifact: generated criterion test did not pass syntax check");
         }
+        writeFileSync(dest,receipt.source,{mode:0o600,flag:"wx"});
+        delete receipt.source;
         fragmentFiles[rel]=createHash("sha256").update(readFileSync(dest)).digest("hex");
       }
     }
@@ -273,6 +283,7 @@ async function waitFor(pilot,requestId,revision,status){
 `;
 async function authorTests(){
   state.fragments=[];
+  state.testProtocol="fixture-v2";
   state.baselineHashes=before;
   state.fixtureHash=artifactDigest(scaffold);
   state.qaArtifactHash=quinn.artifactHash;
@@ -283,7 +294,7 @@ async function authorTests(){
   if(oldDir && existsSync(join(oldDir,"state.json"))){
     const prior=JSON.parse(readFileSync(join(oldDir,"state.json"),"utf8"));
     if(prior.status==="stopped"&&prior.contractHash===expected&&prior.qaArtifactHash===quinn.artifactHash&&prior.fixtureHash===state.fixtureHash&&
-      JSON.stringify(prior.baselineHashes)===JSON.stringify(before)){
+      prior.testProtocol===state.testProtocol&&JSON.stringify(prior.baselineHashes)===JSON.stringify(before)){
       old=prior;oldEvents=createExecutionJournal(oldDir).read(100000);
       if(oldEvents.invalidLines){old=null;oldEvents=null;}
     }
@@ -311,15 +322,32 @@ async function authorTests(){
       }
     }
     const bundle={contractArtifactHash:expected,qaArtifactHash:quinn.artifactHash,criterionId:id,
-      criterion:record.contract.acceptanceCriteria[i],qaCoverage:quinn.artifact.coverage?.find(c=>c.criterionId===id),focus:focus[i]||"Test the criterion"};
+      criterion:record.contract.acceptanceCriteria[i],qaCoverage:quinn.artifact.coverage?.find(c=>c.criterionId===id),
+      fixtureSource:scaffold,focus:focus[i]||"Test the criterion",
+      contractRules:"Explicit save, no automatic model launch. Revision numbering is one-based. Browser UI behavior is a separate gate; do not invent backend UI fields."};
     if(!bundle.qaCoverage)throw Error("Missing QA coverage for "+id);
     const upstream={role:"studio",stage:"ai:tests",executionId:randomUUID(),sourceExecutionId:quinn.executionId};
     const bundleHash=artifactDigest(bundle);
     writeFileSync(join(runDir,"fragments",id+"-input.json"),JSON.stringify(bundle),{mode:0o600,flag:"wx"});
     log("artifact.saved",upstream,{artifactHash:bundleHash,criterionId:id});
     const previous={role:"studio",executionId:upstream.executionId,hash:bundleHash,artifact:bundle};
-    const piece=await runRole({stage:"ai:tests",role:"quinn-qa",previous,paths:[],rounds:1,directSource:{id},
-      brief:"Write exactly one compact executable test() block titled "+id+" followed by a descriptive name. Use existing shared imports test, assert, fs helpers; fixture(t,{hold:false}) returns {pilot,config,dir,release,calls getter}; task IDs A/B are valid. act(pilot,requestId,action,revision=null,feedback) wraps pilot.run; waitFor(pilot,id,revision,status) waits asynchronously and returns record; pilot.history(id) returns revisions; pilot.evidence() returns journal. contract is the valid shared fixture contract. No imports, helper definitions, shell, real model calls, or browser. Do not copy the scaffold. Keep to 20-35 lines. Assert actual behavior. The exact incoming criterion and focus above govern, even if QA coverage suggests automatic scheduling. Return the exact receipt and test block."});
+    const testBrief="Write exactly one compact test("+JSON.stringify(id+" descriptive name")+", async (t) => {...}) block using the provided fixtureSource verbatim as context (do NOT copy it). "+
+      "Use fixture(t), not fixture(test); const f=fixture(t); const {pilot}=f. Use the JavaScript constants A and B, NEVER the literal strings A/B. "+
+      "f.calls is a numeric live getter; never call it or destructure it. act(pilot,A,\"save\",null,\"correction\") returns a record synchronously; first record has revision 1, parentRevision null; never use index. "+
+      "Use assert.throws(() => act(...)) for invalid synchronous input; match meaningful error messages rather than HTTP codes. To run: save first, then act(pilot,A,\"run\",saved.revision) WITHOUT feedback; "+
+      "waitFor(pilot,A,saved.revision,\"founder-review\") returns the record. To accept call act(pilot,A,\"accept\",revision). In a held-run test wait until f.calls>0 (bounded async loop), save correction while held, assert count unchanged, f.release(), wait for prior review. "+
+      "pilot.history(A) returns ordered records (revision, parentRevision, status, feedback, createdAt and contract when delivered); pilot.evidence(A).events returns journal events. Validate matching offer/ack hashes; do not invent evidence.revisions, taskId, index, runMayaEnabled, or nonexistent fields. "+
+      "New instance createFounderPilot(f.config) must recover history from disk. No browser assertions here, no shell, imports, real model calls, skipped tests, helper redefinitions or global mutations. Use the actual approved criterion and focus. Return only the exact receipt and code fence. Keep to 20-45 lines.";
+    const generate=(extra="")=>runRole({stage:"ai:tests",role:"quinn-qa",previous,paths:[],rounds:1,directSource:{id},
+      ...(modelProfile.explicit?{freeModel:REVIEW_MODEL(PRIMARY_BUILD)}:{}),brief:testBrief+extra});
+    let piece;
+    try{piece=await generate();}
+    catch(error){
+      const failed=state.stages.at(-1);
+      if(failed?.errorKind!=="invalid_artifact"||existsSync(join(runDir,rel)))throw error;
+      print("REPAIR "+id+" (fixture validation; one retry)");
+      piece=await generate("\nPrevious response rejected: "+failed.error+"; use the fixtureSource and correct the test.");
+    }
     requireVerdict(piece,"COMPLETE");
     state.fragments.push({id,executionId:piece.executionId,artifactHash:piece.hash,fileHash:piece.artifact.files[rel],originRun:runDir});save();
   }
@@ -338,13 +366,25 @@ async function authorBuild(locked){
   state.buildPlanHash=artifactDigest(BUILD_UNITS);
   mkdirSync(join(runDir,"build-checkpoints"),{mode:0o700});
   let old, oldEvents;
-  const oldDir=process.env.STUDIO_DELIVERY_REUSE_DIR;
+  const oldDir=requalifyTests?requalifyFrom:process.env.STUDIO_DELIVERY_REUSE_DIR;
   if(oldDir&&existsSync(join(oldDir,"state.json"))){
     const p=JSON.parse(readFileSync(join(oldDir,"state.json"),"utf8"));
-    if(p.status==="stopped"&&p.contractHash===expected&&p.buildPlanHash===state.buildPlanHash&&
-       p.lockedSuite?.artifact?.files?.[TEST]===locked&&JSON.stringify(p.baselineHashes)===JSON.stringify(before)){
+    const priorLocked=p.lockedSuite?.artifact?.files?.[TEST];
+    const compatible=p.status==="stopped"&&p.contractHash===expected&&p.buildPlanHash===state.buildPlanHash&&
+      JSON.stringify(p.baselineHashes)===JSON.stringify(before);
+    const explicitRequalification=requalifyTests&&compatible&&p.buildUnits?.length===BUILD_UNITS.length&&
+      /^[a-f0-9]{64}$/.test(priorLocked||"")&&p.testProtocol!==state.testProtocol&&
+      existsSync(join(oldDir,"candidate",TEST))&&
+      createHash("sha256").update(readFileSync(join(oldDir,"candidate",TEST))).digest("hex")===priorLocked&&
+      artifactDigest(p.lockedSuite.artifact)===p.lockedSuite.artifactHash;
+    if(compatible&&(priorLocked===locked||explicitRequalification)){
       old=p;oldEvents=createExecutionJournal(oldDir).read(100000);if(oldEvents.invalidLines){old=null;oldEvents=null;}
+      if(old&&explicitRequalification){
+        state.testRequalification={originalTestHash:priorLocked,newTestHash:locked,originalRun:oldDir,reason:"Original suite used invalid fixture IDs and invented API fields; re-authored against unchanged approved contract",originalBuildArtifactHash:p.buildArtifact?.artifactHash};
+        save();print("REQUALIFY EXISTING BUILD against corrected locked tests; original authorship preserved");
+      }else if(old?.testRequalification){state.testRequalification=old.testRequalification;save();}
     }
+    if(requalifyTests&&!old)throw Error("Cannot verify original candidate and locked suite for explicit requalification");
   }
   let previousExecution=state.lockedSuite.executionId;
   let buildModel=PRIMARY_BUILD;
@@ -378,6 +418,8 @@ async function authorBuild(locked){
         previousExecution=oldUnit.executionId; print("REUSED "+unit.id);continue;
       }
     }
+    if(state.testRequalification&&old?.buildUnits?.some(u=>u.id===unit.id))
+      throw Error("Existing checkpoint failed verification during requalification: "+unit.id);
     const pos=input.indexOf(range), slots=uiEditSlots(unit.id,range);
     const bundle={contractArtifactHash:expected,lockedTestHash:locked,id:unit.id,path:unit.path,beforeHash,
       requirement:unit.requirement,sourceRange:range,
@@ -431,6 +473,7 @@ async function authorBuild(locked){
     previousExecution=step.executionId;save();
   }
   const artifact={contractArtifactHash:expected,lockedTestHash:locked,units:state.buildUnits,
+    ...(state.testRequalification?{testRequalification:state.testRequalification}:{}),
     files:Object.fromEntries(APP.filter(p=>pathHash(p)!==before[p]).map(p=>[p,pathHash(p)]))};
   const hash=artifactDigest(artifact),suite={stage:"ai:build",role:"studio",executionId:randomUUID(),sourceExecutionId:previousExecution};
   writeFileSync(join(runDir,"build-manifest.json"),JSON.stringify(artifact),{mode:0o600,flag:"wx"});
@@ -438,24 +481,70 @@ async function authorBuild(locked){
   print("BUILD CHECKPOINTS "+state.buildUnits.length+" units");
   return {role:"studio",executionId:suite.executionId,hash,artifact};
 }
+// One narrowly scoped functional repair after the corrected suite exposes the
+// known lazy-worker defect. Unrelated failures remain visible, not guessed at.
+async function repairHistoryFacade(build,locked,report){
+  const target="server/founder-pilot.mjs", id="BUILD-09";
+  if(!/No such worker/.test(report)||!/Object\.(?:history|evidence)/.test(report))return null;
+  const file=readFileSync(join(candidate,target),"utf8"),start=file.indexOf("export function createFounderPilot("),
+    end=file.indexOf("function createTaskPilot(",start+1);
+  if(start<0||end<0||end-start>5500)throw Error("History repair scope unavailable");
+  const old=file.slice(start,end);
+  const beforeHash=pathHash(target);
+  const bundle={contractArtifactHash:expected,lockedTestHash:locked,id,path:target,beforeHash,
+    failureReport:report.slice(0,14000),sourceRange:old,
+    followingContext:file.slice(end,end+1100),
+    requirement:"Correct lazy worker lookup for valid existing task IDs. Factor validation, inbox existence and worker caching into one synchronous helper shared by run(input), history(id) and evidence(id=module PILOT_ID). Preserve single-object run and all current security checks, structuredClone for public data, and prior persisted revisions. Valid history and evidence must work before run, including after creating a fresh pilot instance. Keep journal metadata filtered by requestId, with accurate totals; read sufficient events before filtering and preserve truncation semantics. Do not change private createTaskPilot or any test. Return only this public facade, not the following private function."};
+  const upstream={role:"studio",stage:"ai:build",executionId:randomUUID(),sourceExecutionId:build.executionId},hash=artifactDigest(bundle);
+  writeFileSync(join(runDir,"build-checkpoints",id+"-input.json"),JSON.stringify(bundle),{mode:0o600,flag:"wx"});
+  log("artifact.saved",upstream,{artifactHash:hash,buildUnit:id});
+  print("FUNCTIONAL REPAIR "+id+" history facade");
+  const step=await runRole({stage:"ai:build",role:"dev-coder",freeModel:state.buildModel,
+    previous:{role:"studio",executionId:upstream.executionId,hash,artifact:bundle},paths:[],rounds:1,
+    directSource:{kind:"patch",id,target,old,beforeHash},
+    brief:"Correct ONLY the exact sourceRange (the public facade) based on the actual failed acceptance report and requirement. Preserve synchronous API, valid request ID checks and private worker. The followingContext is read-only. Return only the replacement code fence; do not duplicate the private function."});
+  requireVerdict(step,"COMPLETE");
+  if(pathHash(TEST)!==locked)throw Error("Locked tests changed during repair");
+  state.repairs=[{id,path:target,beforeHash,afterHash:pathHash(target),executionId:step.executionId,artifactHash:step.hash,lockedTestHash:locked}];
+  const artifact={...build.artifact,repairs:state.repairs,files:Object.fromEntries(APP.filter(p=>pathHash(p)!==before[p]).map(p=>[p,pathHash(p)]))};
+  const digest=artifactDigest(artifact),completed={role:"studio",stage:"ai:build",executionId:randomUUID(),sourceExecutionId:step.executionId};
+  writeFileSync(join(runDir,"repair-manifest.json"),JSON.stringify(artifact),{mode:0o600,flag:"wx"});
+  log("artifact.saved",completed,{artifactHash:digest,buildUnit:id});
+  state.buildArtifact={executionId:completed.executionId,artifactHash:digest,artifact};save();
+  return {role:"studio",executionId:completed.executionId,hash:digest,artifact};
+}
+
 try {
   save();
+  if(requalifyTests){
+    const p=JSON.parse(readFileSync(join(requalifyFrom,"state.json"),"utf8"));
+    const originalLocked=p.lockedSuite?.artifact?.files?.[TEST];
+    if(p.status!=="stopped"||p.contractHash!==expected||p.buildPlanHash!==artifactDigest(BUILD_UNITS)||
+       p.buildUnits?.length!==BUILD_UNITS.length||p.testProtocol==="fixture-v2"||
+       JSON.stringify(p.baselineHashes)!==JSON.stringify(before)||
+       artifactDigest(p.lockedSuite?.artifact)!==p.lockedSuite?.artifactHash||
+       createHash("sha256").update(readFileSync(join(requalifyFrom,"candidate",TEST))).digest("hex")!==originalLocked)
+      throw Error("Original suite/candidate requalification preflight failed");
+    state.requalificationSource=requalifyFrom;save();
+  }
   const tests=await authorTests();
   const locked=pathHash(TEST);
   if (!locked) throw Error("Quinn did not write executable tests");
   const testSource=readFileSync(join(candidate,TEST),"utf8");
   for(const id of ["AC-01","AC-02","AC-03","AC-04"]) if(!testSource.includes(id)) throw Error("Missing locked criterion "+id);
   const baseline=testRun("baseline");
-  if (baseline.evidence.exitCode!==1||baseline.evidence.fail<1||
-    !/ERR_ASSERTION|Outside pilot scope|Only the synthetic pilot is enabled|A supervised agent is already working/i.test(baseline.report)||
-    /ERR_MODULE_NOT_FOUND|SyntaxError|ERR_ACCESS_DENIED/.test(baseline.report))
+  if (!baselineQuality(baseline.report,baseline.evidence))
     throw Error("Baseline did not demonstrate a feature-related failure; tests need review");
-  const build=await authorBuild(locked);
+  let build=await authorBuild(locked);
   if(pathHash(TEST)!==locked) throw Error("Locked acceptance tests changed");
   state.changedPaths=APP.filter(p=>pathHash(p)!==before[p]);save();
   if(!state.changedPaths.length) throw Error("Dev did not change product source");
-  const after=testRun("candidate");
-  if(after.evidence.exitCode!==0||after.evidence.fail!==0||after.evidence.pass<4) throw Error("Candidate acceptance tests not green; preserve for repair");
+  let after=testRun("candidate");
+  if(requalifyTests&&(after.evidence.exitCode!==0||after.evidence.fail!==0||after.evidence.pass!==4)){
+    const repaired=await repairHistoryFacade(build,locked,after.report);
+    if(repaired){build=repaired;after=testRun("candidate-after-repair");}
+  }
+  if(after.evidence.exitCode!==0||after.evidence.fail!==0||after.evidence.pass!==4) throw Error("Candidate acceptance tests not green; preserve for repair");
   const qa=await runRole({stage:"ai:qa",role:"quinn-qa",previous:build,paths:[],rounds:5,requireIndependent:true,freeModel:REVIEW_MODEL(state.buildModel),
     brief:"Review actual locked tests, changed paths "+JSON.stringify(state.changedPaths)+", and deterministic test report below. Independently assess coverage including race and gate failure. Do not claim browser testing or other runs. Return APPROVE only if evidence and tests are meaningful, otherwise CHANGES with specific findings. Report: "+after.report.slice(0,16000)});
   requireVerdict(qa,"APPROVE");
