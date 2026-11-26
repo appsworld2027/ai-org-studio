@@ -305,3 +305,77 @@ oversized edits, ambiguity and overlap, preserves all unedited source bytes,
 and still checks the entire resulting file syntax before checkpointing.
 This is runtime validation, not human-authored feature code. Locked tests,
 provider identity checks, rate guard and independent reviewers stay in force.
+
+### Acceptance-test requalification (2026-11-26)
+
+The eight model-authored build units completed syntax checks, but the four
+original tests all failed before testing behavior: the tests passed literal
+"A"/"B" instead of the valid fixture constants, expected a zero-based index
+and invented UI/evidence fields or called the numeric calls getter as a function.
+These failures do not demonstrate a product defect. Do not relax identifier
+validation or count the old suite's red result as proof of coverage.
+
+Opt-in `STUDIO_DELIVERY_REQUALIFY_TESTS=1` with
+`STUDIO_DELIVERY_REQUALIFY_FROM` pointing at the original stopped eight-unit
+run preserves the historical suite and original author/model fingerprints.
+Quinn receives the exact shared fixture source, original agreed criterion
+and explicit real API guidance; the runner rejects known fixture misuse,
+disabled tests and broken baseline harness failures. One bounded test-format
+repair is allowed before a fragment is committed. No contract is changed.
+The new locked test hash and original locked test hash are separately
+recorded in the build manifest. Verify and replay each of the eight old
+checkpoints; do not regenerate them if any cannot be verified. During this
+explicit requalification, a failed test exposing the separately observed
+"No such worker" public history/evidence defect triggers one scoped Dev
+repair of the public facade, then reruns the unchanged tests. Other failing
+behavior remains a blocked delivery with evidence, not a pass. Independent
+review remains mandatory and the historical failed run is preserved.
+
+### Observed fixture-v2 correction and permission-mode journal test
+
+The second real Quinn suite failed in both baseline and built candidate before
+the feature could be exercised. Node's permission model rejects
+`fsyncSync` even on an allowed scratch file. The product's durable journal
+must retain its actual fsync. Only the isolated acceptance-test subprocess
+loads `scripts/founder-test-preload.mjs`, which tolerates this exact permission
+restriction exclusively for open scratch execution-journal descriptors;
+all real writes and the filesystem permission boundaries remain in place.
+The acceptance suite does not certify crash/power-loss durability.
+
+An explicit `STUDIO_DELIVERY_AMEND_OBSERVED_V2_FROM` path (together with
+requalification from the original eight-unit delivery) recovers the four
+existing Quinn fragments only after verifying their saved model receipts,
+file hashes and original lock. It applies a deterministic, exact-match
+correction to the observed suite: valid revision parent arguments and save
+before run, valid feedback errors, correct fixture on recovery, actual
+offered/acknowledged artifact hashes instead of invented properties, and a
+stronger assertion of no automatic model launch. No criteria are removed.
+It writes `test-amendment.json` with the original and amended hashes,
+explicit Studio authorship, and all changes. Any mismatch stops without
+regeneration. Independent review is still required. A local run against the
+actual baseline yielded two passing tests and two genuine feature failures
+(multiple-task scope and save while active), not infrastructure errors.
+
+### Resume a verified functional repair without rebuilding
+
+The actual amended suite qualified baseline 2/4, then exposed a missing
+lazy worker. Model-authored BUILD-09 repaired it and made AC-02 and AC-04
+green. AC-01/03 both lost the second revision after active work finished.
+The observed history function replaced its live array on every read;
+the active asynchronous run still held the old array and overwrote the
+new queued correction. BUILD-09 also permitted history/evidence lookup
+without confirming current inbox membership and returned shared counts.
+
+Explicit `STUDIO_DELIVERY_RESUME_REPAIRS_FROM` replays original verified
+build and repair snapshots, checking exact source continuity, original
+model identity, receipt and journal hashes, and the locked suite hash.
+It allows only ordered BUILD-09, BUILD-10 (active revision reference)
+and BUILD-11 (inbox authorization and scoped evidence) checkpoints.
+Both new fixes are bounded Dev model patches; no change to accepted
+contract or locked tests is allowed. A separate deterministic isolation
+gate checks unknown, removed and malformed task IDs, task-scoped counts,
+pre-run access and no model launch on save. Actual independent QA and
+review still gate completion. The reconstruction of the observed code
+locally reproduced the two lost-revision failures; temporary validation
+of the proposed repair design passed all four tests plus isolation.
+This was not the delivered model-authored candidate.

@@ -1,0 +1,265 @@
+{
+  "requestId": "studio-pilot-001",
+  "revision": 2,
+  "contractHash": "a27d7a4498313f13acdcc0b9bb3daee71891da37338906eb5c78581d94e089a1",
+  "baseCommit": "8a912d66862d701256108dc6f6de8ef5555e0321",
+  "status": "stopped",
+  "buildUnits": [
+    {
+      "id": "BUILD-01",
+      "path": "server/founder-pilot.mjs",
+      "beforeHash": "9a81573b42aa19b74dd77bc4c3c99041fc5e56e901d6f2a669bd0b52e6794f64",
+      "afterHash": "110a67f9d8f7d6693e831b36097d641f33e780c2bc2ab920ed7ddb620d56abcd",
+      "executionId": "fa542330-6937-433b-a7de-1cdb05cd7207",
+      "artifactHash": "a101d6f8ad4a6b5c278503aec4eec9585cc9e400161742d9c801b803ba375cb6",
+      "originRun": "/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-162640"
+    },
+    {
+      "id": "BUILD-02",
+      "path": "server/founder-pilot.mjs",
+      "beforeHash": "110a67f9d8f7d6693e831b36097d641f33e780c2bc2ab920ed7ddb620d56abcd",
+      "afterHash": "963ddfbd47ab8a2da2fd33eca6bc94c98d076b627f4aff22048d118e81133439",
+      "executionId": "2febe6d0-47f6-425d-a6a5-5c5c328b1a9a",
+      "artifactHash": "b2eb300cf731c65d8735b85ba02e0fea5e4e5d9c70585230f9b259680d13319b",
+      "originRun": "/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-163148"
+    },
+    {
+      "id": "BUILD-03",
+      "path": "server/founder-pilot.mjs",
+      "beforeHash": "963ddfbd47ab8a2da2fd33eca6bc94c98d076b627f4aff22048d118e81133439",
+      "afterHash": "a6178b24b9e5d10d06d202400d1f93d5498f472e550b5fbfecc81acbc9e13081",
+      "executionId": "16e8f814-9b8b-4716-bc9d-9145191fa909",
+      "artifactHash": "239c1da2f4e0ca51c69ab7c02d8e06086bba67e67548978a4950b1c07d3564c6",
+      "originRun": "/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-163148"
+    },
+    {
+      "id": "BUILD-04",
+      "path": "server/founder-pilot.mjs",
+      "beforeHash": "a6178b24b9e5d10d06d202400d1f93d5498f472e550b5fbfecc81acbc9e13081",
+      "afterHash": "5c88ed474d169dc9f2710fd54120c2297a1133c1063488a652d3988bde9c935a",
+      "executionId": "b5b2015f-be7b-4049-a686-28dd46ffc9a3",
+      "artifactHash": "cb930819da8f6a21b3be347dad0dc3c20ddf8741f2be5fd188df3f482c6dff32",
+      "originRun": "/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-163148"
+    },
+    {
+      "id": "BUILD-05",
+      "path": "server/founder-pilot.mjs",
+      "beforeHash": "5c88ed474d169dc9f2710fd54120c2297a1133c1063488a652d3988bde9c935a",
+      "afterHash": "5206c30678e9d1c8954e845375dd0c26d5ac2292e3c9761788201f4c955dc6f5",
+      "executionId": "71e1939b-923e-430d-b2d7-4b64956856cb",
+      "artifactHash": "ada89cd2e9297c2d8496de3aa99876c5f338a63a129f38cb5a82b368cb4a5c0d",
+      "originRun": "/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-163148"
+    },
+    {
+      "id": "BUILD-06",
+      "path": "server/server.mjs",
+      "beforeHash": "60f4fa972ee410b0523133b38b25777866ab5d1961e47b9350bf184ac26ff1fd",
+      "afterHash": "f6c4bcb48bb986b64dc26bae831cf0e5c16c565a3ce63d44128d67f6afe65f7d",
+      "executionId": "e48c6d4b-50a6-43b4-ae5b-8ff04de4bf2c",
+      "artifactHash": "e93c5493c4066c66b2049007a053453dee6e3b1673a278b712497686ab118c93",
+      "originRun": "/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-163148"
+    },
+    {
+      "id": "BUILD-07",
+      "path": "public/founder-inbox.js",
+      "beforeHash": "f235a5c25bfb4615ff316ad71c730aab730be8d90b82a491c8e587a58c788567",
+      "afterHash": "b3fd2710da86eb1bad9bb3ce2691ec945545fc66e70f6f82d67f50801e5d6256",
+      "executionId": "2ad8c5a2-5c6a-454a-ab1c-a8eedcfe2255",
+      "artifactHash": "a081f5bcf3859eb10ec4bc37d04356c27a99fac955fdc51b3793207041f3c059",
+      "originRun": "/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-164028"
+    },
+    {
+      "id": "BUILD-08",
+      "path": "public/founder-inbox.js",
+      "beforeHash": "b3fd2710da86eb1bad9bb3ce2691ec945545fc66e70f6f82d67f50801e5d6256",
+      "afterHash": "43b39ade6d980179ddf5265b54a129b1c04512649d495feb794c8a329856f24a",
+      "executionId": "bef2c9ef-c554-4725-89da-fde3a0549022",
+      "artifactHash": "cfcb863c30f59e715b7dd45c081d3730b5f6bad31565437340c9fe17f9fd1fcf",
+      "originRun": "/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-164028"
+    }
+  ],
+  "repairs": [
+    {
+      "id": "BUILD-09",
+      "path": "server/founder-pilot.mjs",
+      "beforeHash": "5206c30678e9d1c8954e845375dd0c26d5ac2292e3c9761788201f4c955dc6f5",
+      "afterHash": "41ca7311b4488e7efafaf6f7296f089afd6ff036e0e8d5a3cd9834dfd816bdbb",
+      "executionId": "cf50d402-062b-4d45-ae72-26172ec1c920",
+      "artifactHash": "4d511a7a4e65977386fccd7dca24a0bfc2b1ba0fb69f8e739367a3ca5284ce92",
+      "lockedTestHash": "666b870f7eb1a64080e8ef4952c304451f7e22f4a48fc8d3a3175b53e24e69ba"
+    }
+  ],
+  "tests": [
+    {
+      "name": "baseline",
+      "fixtureMode": "permission-sandbox; journal fsync simulated only when denied",
+      "exitCode": 1,
+      "pass": 2,
+      "fail": 2,
+      "reportHash": "1cb60c9d223fca1cf7a7f265118d2f4dc98f942c04913052b8019139c950d7ef"
+    },
+    {
+      "name": "candidate",
+      "fixtureMode": "permission-sandbox; journal fsync simulated only when denied",
+      "exitCode": 1,
+      "pass": 0,
+      "fail": 4,
+      "reportHash": "b6cc12e0202cfe18f2188fb880d5c00e7c0af4fc363c5fcbd2f6629441bff867"
+    },
+    {
+      "name": "candidate-after-repair",
+      "fixtureMode": "permission-sandbox; journal fsync simulated only when denied",
+      "exitCode": 1,
+      "pass": 2,
+      "fail": 2,
+      "reportHash": "6ccee224022b58890d00860a6e5bcfc560b95ae881962793a2793669096043e3"
+    }
+  ],
+  "buildArtifactHash": "69ac2fee1cb2b7c534d79aa8ee19f066bae701ecb716eaea18314d7e5cb4047c",
+  "lockedSuiteHash": "e0888436714c6b0d0181ebee26cdfa71c5ea636df43cb39607e90ae4b4160f3f",
+  "stages": [
+    {
+      "role": "quinn-qa",
+      "stage": "ai:tests",
+      "buildUnit": null,
+      "criterionId": "AC-01",
+      "status": "completed",
+      "providerId": "nvidia",
+      "requestedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+      "reportedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+      "artifactHash": "8e908af0a5f2e4395bb8e1fe00a59228544b6c1e7063d884fb90fb3bb693cf2f"
+    },
+    {
+      "role": "quinn-qa",
+      "stage": "ai:tests",
+      "buildUnit": null,
+      "criterionId": "AC-02",
+      "status": "completed",
+      "providerId": "nvidia",
+      "requestedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+      "reportedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+      "artifactHash": "7c80f91bccac25e432c46777c080ba60fd62f8130d96a85f327e1d2a0293eb0a"
+    },
+    {
+      "role": "quinn-qa",
+      "stage": "ai:tests",
+      "buildUnit": null,
+      "criterionId": "AC-03",
+      "status": "completed",
+      "providerId": "nvidia",
+      "requestedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+      "reportedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+      "artifactHash": "643e149fb735e8a0879cc7c5c3fe309938613e305431823ea22b569f0b6dcdde"
+    },
+    {
+      "role": "quinn-qa",
+      "stage": "ai:tests",
+      "buildUnit": null,
+      "criterionId": "AC-04",
+      "status": "completed",
+      "providerId": "nvidia",
+      "requestedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+      "reportedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+      "artifactHash": "875d175e1c814cbf50d629f3cf032078577f2afec9d67a1b45bac21d9c5e1758"
+    },
+    {
+      "role": "dev-coder",
+      "stage": "ai:build",
+      "buildUnit": "BUILD-01",
+      "criterionId": null,
+      "status": "completed",
+      "providerId": "groq",
+      "requestedModel": "openai/gpt-oss-120b",
+      "reportedModel": "openai/gpt-oss-120b",
+      "artifactHash": "a101d6f8ad4a6b5c278503aec4eec9585cc9e400161742d9c801b803ba375cb6"
+    },
+    {
+      "role": "dev-coder",
+      "stage": "ai:build",
+      "buildUnit": "BUILD-02",
+      "criterionId": null,
+      "status": "completed",
+      "providerId": "groq",
+      "requestedModel": "openai/gpt-oss-120b",
+      "reportedModel": "openai/gpt-oss-120b",
+      "artifactHash": "b2eb300cf731c65d8735b85ba02e0fea5e4e5d9c70585230f9b259680d13319b"
+    },
+    {
+      "role": "dev-coder",
+      "stage": "ai:build",
+      "buildUnit": "BUILD-03",
+      "criterionId": null,
+      "status": "completed",
+      "providerId": "groq",
+      "requestedModel": "openai/gpt-oss-120b",
+      "reportedModel": "openai/gpt-oss-120b",
+      "artifactHash": "239c1da2f4e0ca51c69ab7c02d8e06086bba67e67548978a4950b1c07d3564c6"
+    },
+    {
+      "role": "dev-coder",
+      "stage": "ai:build",
+      "buildUnit": "BUILD-04",
+      "criterionId": null,
+      "status": "completed",
+      "providerId": "groq",
+      "requestedModel": "openai/gpt-oss-120b",
+      "reportedModel": "openai/gpt-oss-120b",
+      "artifactHash": "cb930819da8f6a21b3be347dad0dc3c20ddf8741f2be5fd188df3f482c6dff32"
+    },
+    {
+      "role": "dev-coder",
+      "stage": "ai:build",
+      "buildUnit": "BUILD-05",
+      "criterionId": null,
+      "status": "completed",
+      "providerId": "groq",
+      "requestedModel": "openai/gpt-oss-120b",
+      "reportedModel": "openai/gpt-oss-120b",
+      "artifactHash": "ada89cd2e9297c2d8496de3aa99876c5f338a63a129f38cb5a82b368cb4a5c0d"
+    },
+    {
+      "role": "dev-coder",
+      "stage": "ai:build",
+      "buildUnit": "BUILD-06",
+      "criterionId": null,
+      "status": "completed",
+      "providerId": "groq",
+      "requestedModel": "openai/gpt-oss-120b",
+      "reportedModel": "openai/gpt-oss-120b",
+      "artifactHash": "e93c5493c4066c66b2049007a053453dee6e3b1673a278b712497686ab118c93"
+    },
+    {
+      "role": "dev-coder",
+      "stage": "ai:build",
+      "buildUnit": "BUILD-07",
+      "criterionId": null,
+      "status": "completed",
+      "providerId": "groq",
+      "requestedModel": "openai/gpt-oss-120b",
+      "reportedModel": "openai/gpt-oss-120b",
+      "artifactHash": "a081f5bcf3859eb10ec4bc37d04356c27a99fac955fdc51b3793207041f3c059"
+    },
+    {
+      "role": "dev-coder",
+      "stage": "ai:build",
+      "buildUnit": "BUILD-08",
+      "criterionId": null,
+      "status": "completed",
+      "providerId": "groq",
+      "requestedModel": "openai/gpt-oss-120b",
+      "reportedModel": "openai/gpt-oss-120b",
+      "artifactHash": "cfcb863c30f59e715b7dd45c081d3730b5f6bad31565437340c9fe17f9fd1fcf"
+    },
+    {
+      "role": "dev-coder",
+      "stage": "ai:build",
+      "buildUnit": "BUILD-09",
+      "criterionId": null,
+      "status": "completed",
+      "providerId": "groq",
+      "requestedModel": "openai/gpt-oss-120b",
+      "reportedModel": "openai/gpt-oss-120b",
+      "artifactHash": "4d511a7a4e65977386fccd7dca24a0bfc2b1ba0fb69f8e739367a3ca5284ce92"
+    }
+  ]
+}

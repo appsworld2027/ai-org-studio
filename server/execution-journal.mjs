@@ -61,7 +61,7 @@ export function createExecutionJournal(dir) {
     if (Array.isArray(fields.validationIssues)) {
       const allowed = new Set(["invalid_json", "input_hash_mismatch", "contract_hash_mismatch",
         "missing_summary", "invalid_deliverables", "invalid_risks", "coverage_count", "coverage_ids", "coverage_approach", "missing_source", "invalid_source_frame",
-        "source_bounds", "invalid_edit_slots", "invalid_verdict", "placeholder_summary", "missing_criterion_test", "syntax_error"]);
+        "source_bounds", "invalid_edit_slots", "invalid_verdict", "placeholder_summary", "missing_criterion_test", "syntax_error", "literal_fixture_id", "wrong_test_context", "wrong_calls_api", "invented_fixture_fields", "wrong_sync_assertion", "disabled_test"]);
       event.validationIssues = [...new Set(fields.validationIssues.filter(x => allowed.has(x)))];
     }
     if (SHA.test(fields.artifactHash || "")) event.artifactHash = fields.artifactHash;
