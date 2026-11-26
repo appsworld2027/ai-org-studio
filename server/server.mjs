@@ -14,6 +14,7 @@ import { WebSocketServer } from "ws";
 import pty from "node-pty";
 import { parseBacklog, buildBoard, feedFrom, appTarget, rosterFrom } from "./status.mjs";
 import { makeLedger, summarize } from "./usage.mjs";
+import { FEEDBACK_STATES } from "./feedback.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
 import { providerAllowed, modelAllowed, validProvider, validModel, planEnv, scrubPaidEnv, BLOCKED } from "./billing.mjs";
@@ -438,6 +439,39 @@ const server = http.createServer(async (req, res) => {
         const all = store.readJson("team.json", {}); all[p.id] = { overrides: ov, availability: b.availability && typeof b.availability === "object" ? Object.fromEntries(Object.entries(b.availability).filter(([k]) => ENGINE_MODELS.some((x) => x.id === k)).map(([k, v]) => [k, !!v])) : all[p.id]?.availability };
         store.writeJson("team.json", all); return json(res, 200, await teamPlan(p));
       }
+    }
+    // ---------- Feedback Workflow ----------
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/inbox$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackInbox(p));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/deliveries$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackDeliveries(p));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/deliveries\/([0-9]+)$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackDeliveryDetail(p, Number(m[2])));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/submit$/)) && req.method === "POST") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackSubmit(p, await readBody(req)));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/fixes$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackFixes(p));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/fixes\/([0-9]+)$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackFixDetail(p, Number(m[2])));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/conflicts$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackConflicts(p));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/usage$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackUsage(p));
     }
     // ---------- Apps (connectors) ----------
     if (path === "/api/apps" && req.method === "GET") return json(res, 200, { apps: connectors.list() });
