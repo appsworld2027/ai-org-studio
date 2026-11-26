@@ -60,6 +60,7 @@
     }
 
     const data = await response.json();
+    if (status.textContent === "Could not load founder inbox") status.textContent = "";
     tasks.replaceChildren();
 
     for (const task of data.tasks) {
@@ -298,7 +299,7 @@
         function renderActivity(journal) {
           activity.replaceChildren();
           textElement("h3", "Verified execution activity", activity);
-          textElement("p", "Local metadata only · Task studio-pilot-001 · No prompts, keys, or tool output in the journal.", activity);
+          textElement("p", `Local metadata only · Task ${task.requestId} · No prompts, keys, or tool output in the journal.`, activity);
           if (journal?.invalidLines) textElement("p", journal.invalidLines + " malformed journal line(s); evidence incomplete.", activity);
           if (!journal?.events?.length) {
             textElement("p", "No instrumented activity yet. Earlier runs cannot be reconstructed as verified logs.", activity);

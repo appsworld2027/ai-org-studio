@@ -85,11 +85,11 @@ jobs:
       contents: read
       issues: write
 
-    uses: appsworld2027/parent-plus-ai-org/.github/workflows/agent-worker.yml@cd77a3b55449e83db6010a643eb938a3c4af578b
+    uses: appsworld2027/parent-plus-ai-org/.github/workflows/agent-worker.yml@46ab6c4f2e77e8f0a3a733379a0676f370b4198e
 
     with:
       number: ${{ inputs.number }}
-      handbook_ref: cd77a3b55449e83db6010a643eb938a3c4af578b
+      handbook_ref: 46ab6c4f2e77e8f0a3a733379a0676f370b4198e
 
     secrets:
       NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
