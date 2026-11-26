@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { PROVIDERS } from "./providers.mjs";
 import { runTurn } from "./agent.mjs";
 import { createExecutionJournal, artifactDigest, failureKind } from "./execution-journal.mjs";
+import { runPlanningChain } from "./coordination-pilot.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PILOT_ID = "studio-pilot-001";
@@ -133,6 +134,17 @@ export function createFounderPilot({
         r.status = "failed";
         r.error = "Previous agent output was not a validated contract";
       }
+      if (["running", "waiting-for-contract"].includes(r.coordination?.status) && !active.has(id)) {
+        r.coordination.status = "interrupted";
+        r.coordination.error = "Preview restarted before coordination finished";
+        for (const stage of r.coordination.stages || []) if (stage.status === "running") {
+          stage.status = "interrupted";
+          event("stage.interrupted", r, { executionId: stage.executionId, sourceExecutionId: stage.sourceExecutionId,
+            actor: stage.role, stage: stage.stage, errorKind: "interrupted" });
+        }
+        event("coordination.failed", r, { actor: "studio", errorKind: "interrupted" });
+        recovered = true;
+      }
       if (["running", "reviewing"].includes(r.status) && !active.has(id)) {
         r.status = "interrupted";
         r.error = "Preview restarted before this run finished";
@@ -158,7 +170,7 @@ export function createFounderPilot({
     try {
       const router = await import(pathToFileURL(join(orgDir, "scripts/agent-router.mjs")).href);
       const route = router.route({ labels: ["ai:discovery", "engine:free"],
-        engines: { free: true, codex: false, claude: false } });
+        engines: { free: true, codex: false, claude: false }, supervisedTrial: true });
       if (route.action !== "run" || route.engine !== "free" || route.role !== "maya-ai-pm") {
         throw new Error("Free AI Org discovery route unavailable");
       }
@@ -282,15 +294,132 @@ export function createFounderPilot({
     }
   }
 
-  function run({ requestId, action, revision, feedback = "" } = {}) {
+  async function invokePlanning({ spec, contract, contractHash, criteria, previous, stage, validator, observe, route, context }) {
+    let source, output = "", inputTokens = null, outputTokens = null, reportedModel = null, done = false, failure;
+    try {
+      const router = await import(pathToFileURL(join(orgDir, "scripts/agent-router.mjs")).href);
+      const chosen = router.route({ labels: [spec.stage, "engine:free"],
+        engines: { free: true, codex: false, claude: false }, supervisedTrial: true });
+      if (chosen.action !== "run" || chosen.engine !== "free" || chosen.role !== spec.role) {
+        throw new Error("Expected supervised free AI Org role unavailable");
+      }
+      const model = chosen.free_model.replace(/^nvidia_nim\//, "");
+      if (!PROVIDERS.nvidia.models.includes(model)) throw new Error("Model outside pilot allowlist");
+      const agent = router.agentInfo(chosen.role);
+      route(model, agent.name);
+      const key = JSON.parse(readFileSync(keyFile, "utf8")).nvidia?.key;
+      if (typeof key !== "string" || !key) throw new Error("NVIDIA connection unavailable");
+      source = snapshot(root, orgDir, chosen.role);
+      const role = readFileSync(join(source, "org/agents", chosen.role + ".md"), "utf8");
+      const excerpts = discoveryContext(source);
+      const prompt = [
+        "Exact source artifact SHA-256: " + previous.hash,
+        "Exact accepted-decision draft contract SHA-256: " + contractHash,
+        "Incoming artifact (read this exact JSON): " + JSON.stringify(previous.artifact),
+        "Product contract (exact JSON): " + JSON.stringify(contract),
+        "Stable local acceptance-criterion IDs and text: " + JSON.stringify(criteria),
+        "Selected committed implementation excerpts (not proof of execution): " + excerpts.text,
+        spec.brief
+      ].join("\n\n");
+      context({ sourceFiles: excerpts.sourceFiles, contextChars: prompt.length });
+      const messages = [{ role: "user", content: prompt }];
+      await runner({
+        messages, provider: { ...PROVIDERS.nvidia, id: "nvidia", key }, model, root: source,
+        maxRounds: 2, maxTokens: 1900, allowedTools: READ_TOOLS, auto: false, approve: async () => false,
+        signal: AbortSignal.timeout(180000), validateFinal: validator,
+        finalInstruction: "Return the complete role-specific planning JSON now. No further tools or code changes.",
+        systemPrompt: "You are " + agent.name + " (" + chosen.role + "), the actual AI Org role. " +
+          "This explicitly supervised synthetic-data test is read-only and creates a DRAFT planning artifact. " +
+          "The role profile below defines your expertise; ignore any operational instructions to edit, push, run tests or ship. " +
+          "No claim of implementation, release, test execution or founder contract approval is allowed. " +
+          spec.brief + " Return ONLY one JSON object with inputArtifactHash (exact incoming hash), " +
+          "contractArtifactHash (exact contract hash), summary (string), coverage (array of objects with criterionId " +
+          "and approach, exactly one entry for every supplied local AC ID), deliverables (nonempty array of strings), " +
+          "and risks (nonempty array of strings). Use the exact supplied hashes and AC IDs; be concise and actionable. " +
+          "Only read source if absolutely needed. Role profile:\n" + role.slice(0, 5000),
+        observe(e) {
+          if (e.type === "model.result" && e.reportedModel) reportedModel =
+            PROVIDERS.nvidia.models.includes(e.reportedModel) ? e.reportedModel : "other-unverified";
+          observe(e);
+        },
+        emit(e) {
+          if (e.t === "assistant_start") output = "";
+          if (e.t === "delta") output += e.d;
+          if (e.t === "usage") for (const u of e.models || []) {
+            if (Number.isFinite(u.input)) inputTokens = (inputTokens || 0) + u.input;
+            if (Number.isFinite(u.output)) outputTokens = (outputTokens || 0) + u.output;
+          }
+          if (e.t === "done") done = true;
+          if (e.t === "error" || e.t === "stopped") failure = e.message || "Agent stopped";
+        }
+      });
+      if (!done || failure) throw new Error(failure || "Agent ended without a final response");
+      return { output: messages.at(-1)?.content || output, inputTokens, outputTokens, reportedModel };
+    } finally { if (source) rmSync(source, { recursive: true, force: true }); }
+  }
+
+  function startCoordination(revisions, record) {
+    if (!record.contract || record.contract.openQuestions.length ||
+        !["founder-review", "contract-accepted"].includes(record.status)) {
+      throw new Error("Coordination waits for a valid revised contract with no open founder decisions");
+    }
+    const digest = artifactDigest(record.contract);
+    const evidence = journal.read(100000);
+    if (evidence.invalidLines || !evidence.events.some(e => e.type === "handoff.offered" &&
+        e.revision === record.revision && e.executionId === record.executionId &&
+        e.artifactHash === digest && e.toRole === "founder")) {
+      throw new Error("Coordination requires the matching Maya artifact handoff");
+    }
+    if (record.coordination?.status === "completed") return record;
+    record.coordination ||= { stages: [], requestedAt: new Date().toISOString() };
+    record.coordination.status = "running";
+    record.coordination.contractArtifactHash = digest;
+    record.coordination.approvalState = record.status === "contract-accepted" ? "contract-accepted" : "draft-founder-review";
+    delete record.coordination.error;
+    active.add(PILOT_ID);
+    try {
+      save(revisions);
+      event("coordination.started", record, { actor: "studio", artifactHash: digest });
+    } catch (error) {
+      active.delete(PILOT_ID);
+      record.coordination.status = "failed";
+      record.coordination.error = "Could not persist coordination start";
+      save(revisions);
+      throw error;
+    }
+    const log = (type, stage, fields) => event(type, record, { executionId: stage.executionId, ...fields });
+    void runPlanningChain({
+      record, invoke: invokePlanning, persist: () => save(revisions), log,
+      verified(stage) {
+        const es = journal.read(100000).events.filter(e => e.executionId === stage.executionId && e.revision === record.revision);
+        return es.some(e => e.type === "stage.completed" && e.artifactHash === stage.artifactHash) &&
+          es.some(e => e.type === "handoff.received" && e.artifactHash === stage.inputArtifactHash);
+      }
+    }).then(() => {
+      event(record.coordination.status === "completed" ? "coordination.completed" : "coordination.failed",
+        record, { actor: "studio", artifactHash: digest });
+    }).catch(() => {
+      record.coordination.status = "failed";
+      record.coordination.error = "Could not persist coordination evidence";
+      save(revisions);
+    }).finally(() => active.delete(PILOT_ID));
+    return record;
+  }
+
+  function run({ requestId, action, revision, feedback = "", coordinate = false } = {}) {
     if (requestId !== PILOT_ID) throw new Error("Only the synthetic pilot is enabled");
-    if (!["save", "run", "accept", "recover"].includes(action)) throw new Error("Choose save, run, accept, or recover explicitly");
-    if (active.has(requestId)) throw new Error("Maya is already working");
+    if (!["save", "run", "accept", "recover", "coordinate"].includes(action)) throw new Error("Choose save, run, accept, recover, or coordinate explicitly");
+    if (typeof coordinate !== "boolean" || (coordinate && action !== "run")) throw new Error("Invalid supervised coordination request");
+    if (active.has(requestId)) throw new Error("A supervised agent is already working");
     const task = inbox.list().find(t => t.requestId === requestId);
     if (!task) throw new Error("Founder task not found");
     const revisions = history(requestId);
     let record = revisions.at(-1);
     if ((record?.revision ?? null) !== (revision ?? null)) throw new Error("Revision changed; refresh first");
+    if (action === "coordinate") {
+      if (feedback !== "" || !record) throw new Error("Coordination requires an existing contract");
+      return startCoordination(revisions, record);
+    }
     if (action === "recover") {
       if (feedback !== "") throw new Error("Recovery does not modify feedback");
       if (record?.status === "founder-review" && record.recoveredAt) return record;
@@ -408,10 +537,13 @@ export function createFounderPilot({
     delete record.artifactHash;
     delete record.contract;
     record.agents = [];
+    if (coordinate) record.coordination = { status: "waiting-for-contract", stages: [], requestedAt: new Date().toISOString() };
+    else delete record.coordination;
     active.add(requestId);
     try {
       save(revisions);
       event("run.started", record, { actor: "studio", engine: "free" });
+      if (coordinate) event("coordination.requested", record, { actor: "founder" });
     } catch (error) {
       active.delete(requestId);
       record.status = "failed";
@@ -420,7 +552,17 @@ export function createFounderPilot({
       save(revisions);
       throw error;
     }
-    void execute(task, revisions, record).catch(() => console.error("[founder pilot] Could not persist execution outcome"));
+    void execute(task, revisions, record).then(() => {
+      if (!coordinate) return;
+      if (record.status === "founder-review" && record.contract && !record.contract.openQuestions.length) {
+        try { startCoordination(revisions, record); return; }
+        catch (error) { record.coordination.error = String(error.message).slice(0, 250); }
+      }
+      record.coordination.status = "blocked";
+      record.coordination.error ||= "Maya did not deliver a valid contract with all founder decisions resolved";
+      save(revisions);
+      event("coordination.blocked", record, { actor: "studio" });
+    }).catch(() => console.error("[founder pilot] Could not persist execution outcome"));
     return record;
   }
   return { history, run, evidence: () => journal.read() };

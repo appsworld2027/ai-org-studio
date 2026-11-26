@@ -101,13 +101,16 @@
 
         const save = control("Save correction", () => send("save"));
         const run = control("Run Maya", () => send("run"));
+        const runChain = control("Run Maya, then Arjun and Quinn", () => send("run", true));
+        const coordinate = control("Run Arjun and Quinn (draft plans)", () => send("coordinate"));
         const accept = control("Accept latest contract", () => send("accept"));
         const recover = control("Recover saved contract (no model call)", () => send("recover"));
         control("Refresh status", () => loadEvidence().catch(showError));
         feedback.oninput = () => updateButtons();
         function showError(error) { status.textContent = error.message; }
         function updateButtons() {
-          const running = latest?.status === "running";
+          const running = latest?.status === "running" ||
+            ["running", "waiting-for-contract"].includes(latest?.coordination?.status);
           const recoverable = latest?.status === "failed" &&
             latest.error === "Maya's contract is missing required fields" &&
             !!latest.attempts?.at(-1)?.output;
@@ -115,8 +118,10 @@
           recover.disabled = !available || busy || !recoverable;
           save.disabled = !available || busy || running || !feedback.value.trim();
           run.disabled = !available || busy || running || !!feedback.value.trim() || !!(latest && !["queued", "failed", "interrupted"].includes(latest.status));
-          accept.disabled = !available || busy || !!feedback.value.trim() || latest?.status !== "founder-review" || !!latest?.contract?.openQuestions?.length;
-          run.textContent = running ? "Maya working…" : "Run Maya";
+          runChain.disabled = run.disabled;
+          coordinate.disabled = !available || busy || running || !latest?.contract || !!latest.contract.openQuestions.length || latest.coordination?.status === "completed";
+          accept.disabled = !available || busy || running || !!feedback.value.trim() || latest?.status !== "founder-review" || !!latest?.contract?.openQuestions?.length;
+          run.textContent = running ? "Agent working…" : "Run Maya";
         }
         function textElement(tag, text, parent = evidence) {
           const el = document.createElement(tag);
@@ -137,7 +142,7 @@
           available = true;
           latest = revisions.at(-1) || null;
           state.textContent = latest
-            ? "Revision " + latest.revision + " · " + latest.status
+            ? "Revision " + latest.revision + " · " + latest.status + (latest.coordination ? " · coordination " + latest.coordination.status : "")
             : "Ready for supervised discovery";
           renderActivity(executionEvidence);
           evidence.replaceChildren();
@@ -170,13 +175,56 @@
                 (agent.inputTokens ?? "unknown") + " input / " +
                 (agent.outputTokens ?? "unknown") + " output tokens (reported)", card);
             }
+            if (r.coordination) renderCoordination(r, card, executionEvidence);
             if (r.attempts?.length) textElement("p",
               r.attempts.length + " original failed attempt(s) preserved; recovery is recorded separately.", card);
-            evidence.append(card);
+            if (r === latest) evidence.append(card);
+            else {
+              const history = document.createElement("details");
+              textElement("summary", "Revision " + r.revision + " · " + r.status, history);
+              history.append(card);
+              evidence.append(history);
+            }
           }
           updateButtons();
-          if (latest?.status === "running" && dialog.open && panel.isConnected) {
+          if ((latest?.status === "running" || ["running", "waiting-for-contract"].includes(latest?.coordination?.status)) && dialog.open && panel.isConnected) {
             timer = setTimeout(() => loadEvidence().catch(showError), 2500);
+          }
+        }
+        function renderCoordination(r, card, journal) {
+          const c = r.coordination;
+          textElement("h4", "Supervised coordination · " + c.status, card);
+          textElement("p", "Read-only draft architecture and QA test design. No code changed or tests executed.", card);
+          if (c.approvalState) textElement("small", "Contract state at start: " + c.approvalState, card);
+          if (c.error) textElement("p", c.error, card);
+          for (const stage of c.stages || []) {
+            const section = document.createElement("section");
+            textElement("strong", (stage.agent || stage.role) + " — " + stage.label + " · " + stage.status, section);
+            textElement("p", "Requested model: " + (stage.requestedModel || "not yet routed") +
+              " · input " + stage.inputArtifactHash.slice(0, 12) +
+              (stage.artifactHash ? " · output " + stage.artifactHash.slice(0, 12) : ""), section);
+            const receipt = journal?.events?.some(e => e.type === "handoff.received" &&
+              e.executionId === stage.executionId && e.sourceExecutionId === stage.sourceExecutionId &&
+              e.artifactHash === stage.inputArtifactHash);
+            textElement("p", receipt ? "Matching artifact receipt verified" :
+              "Matching artifact receipt not yet visible in journal", section);
+            if (stage.error) textElement("p", stage.error, section);
+            if (stage.artifact) {
+              const details = document.createElement("details");
+              textElement("summary", "View " + (stage.agent || stage.role) + "'s artifact", details);
+              textElement("p", stage.artifact.summary, details);
+              for (const [label, items] of [
+                ["Acceptance-criterion coverage", stage.artifact.coverage.map(x => x.criterionId + ": " + x.approach)],
+                ["Deliverables (planned)", stage.artifact.deliverables], ["Risks and gaps", stage.artifact.risks]
+              ]) {
+                textElement("strong", label, details);
+                const ul = document.createElement("ul");
+                for (const item of items) textElement("li", item, ul);
+                details.append(ul);
+              }
+              section.append(details);
+            }
+            card.append(section);
           }
         }
         function renderQuestions(r, card) {
@@ -252,10 +300,11 @@
             return;
           }
           const events = journal.events;
+          const executionIds = [latest?.executionId, ...(latest?.coordination?.stages || []).map(s => s.executionId)];
           const latestEvents = events.filter(e => e.revision === latest?.revision &&
-            (e.executionId === latest?.executionId || !e.executionId));
+            (executionIds.includes(e.executionId) || !e.executionId));
           const count = (type, outcome) => latestEvents.filter(e => e.type === type && (!outcome || e.outcome === outcome)).length;
-          const offered = latestEvents.find(e => e.type === "handoff.offered");
+          const offered = latestEvents.find(e => e.type === "handoff.offered" && e.toRole === "founder");
           const ack = offered && latestEvents.some(e => e.type === "handoff.acknowledged" &&
             e.artifactHash === offered.artifactHash && e.executionId === offered.executionId);
           textElement("p", "Latest revision · " + count("model.request") + " model requests · " +
@@ -264,23 +313,25 @@
           textElement("p", offered ? "Maya → Founder: " + (ack ? "acknowledged (matching artifact)" : "awaiting acknowledgement")
             : "No logged handoff for this revision. No downstream agent receipt verified.", activity);
           const detail = document.createElement("details");
-          detail.open = latest?.status === "running";
+          detail.open = latest?.status === "running" || latest?.coordination?.status === "running";
           textElement("summary", "Execution timeline · " + journal.total + " events" + (journal.truncated ? " (latest 250 shown)" : ""), detail);
           const list = document.createElement("ol");
           list.style.cssText = "max-height:300px;overflow:auto;overflow-wrap:anywhere";
-          const roleLabel = { "maya-ai-pm": "Maya", founder: "Founder", studio: "Studio" };
+          const roleLabel = { "maya-ai-pm": "Maya", "arjun-cpto": "Arjun", "quinn-qa": "Quinn", founder: "Founder", studio: "Studio" };
           const kind = {
             "revision.saved": "Correction saved", "run.started": "Run started", "route.selected": "Agent and engine selected",
             "context.prepared": "Context prepared", "model.request": "Model request initiated",
             "model.headers": "Provider HTTP response", "model.result": "Model response parsed",
             "tool.request": "Tool requested", "tool.result": "Tool result", "artifact.rejected": "Incomplete artifact rejected", "artifact.recovered": "Saved response recovered locally", "artifact.saved": "Contract saved",
-            "handoff.offered": "Handoff offered", "handoff.acknowledged": "Handoff acknowledged",
+            "handoff.offered": "Handoff offered", "handoff.acknowledged": "Handoff acknowledged", "handoff.received": "Matching agent receipt",
+            "coordination.requested": "Coordination requested", "coordination.started": "Coordination started", "coordination.blocked": "Coordination blocked", "coordination.completed": "Coordination completed", "coordination.failed": "Coordination failed",
+            "stage.started": "Agent stage started", "stage.completed": "Agent stage completed", "stage.failed": "Agent stage failed", "stage.interrupted": "Agent stage interrupted",
             "run.completed": "Run completed", "run.failed": "Run failed", "run.interrupted": "Run interrupted"
           };
           for (const e of [...events].reverse()) {
             const fields = [new Date(e.at).toLocaleTimeString(), "r" + e.revision, roleLabel[e.actor] || e.actor || "Studio",
               kind[e.type] || e.type, e.requestedModel, e.reportedModel && "reported " + e.reportedModel,
-              e.round && "round " + e.round, e.phase, e.httpStatus && "HTTP " + e.httpStatus, e.tool, e.outcome,
+              e.stage, e.round && "round " + e.round, e.phase, e.httpStatus && "HTTP " + e.httpStatus, e.tool, e.outcome,
               e.artifactHash && "artifact " + e.artifactHash.slice(0, 12),
               e.baseArtifactHash && "base " + e.baseArtifactHash.slice(0, 12),
               Number.isFinite(e.sourceFiles) && e.sourceFiles + " context files",
@@ -294,7 +345,7 @@
           detail.append(list);
           activity.append(detail);
         }
-        async function send(action) {
+        async function send(action, chain = false) {
           busy = true;
           updateButtons();
           try {
@@ -303,7 +354,7 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ requestId: task.requestId, action,
                 revision: latest?.revision ?? null,
-                ...(action === "save" ? { feedback: feedback.value } : {}) })
+                ...(action === "save" ? { feedback: feedback.value } : {}), ...(chain ? { coordinate: true } : {}) })
             });
             const result = await response.json();
             if (!response.ok) throw new Error(result.error || "Pilot action failed");
@@ -311,6 +362,8 @@
             status.textContent = action === "save" ? "Correction saved locally; no model called."
               : action === "accept" ? "Contract accepted locally. No code, release or merge approved."
               : action === "recover" ? "Saved contract recovered. Review founder decisions; no model called."
+              : action === "coordinate" ? "Supervised Arjun and Quinn planning started."
+              : chain ? "Maya started; Arjun and Quinn will follow only if a valid contract resolves the decisions."
               : "Maya started. This panel updates automatically.";
             await loadEvidence();
           } catch (error) {
@@ -324,7 +377,7 @@
         textElement("p", "Supervised discovery only. Corrections remain local until Run Maya sends them to the configured NVIDIA model. No code changes, reviewer verdict, or delivery is implied.", panel);
         panel.append(feedback, controls, activity, evidence);
         item.append(panel);
-        save.disabled = run.disabled = accept.disabled = recover.disabled = true;
+        save.disabled = run.disabled = runChain.disabled = coordinate.disabled = accept.disabled = recover.disabled = true;
         recover.hidden = true;
         loadEvidence().catch(showError);
       }

@@ -55,14 +55,36 @@ successful chaining step similarly is not a receipt.
 For live multi-agent coordination, the canonical worker must emit a producer
 handoff and a separate consumer receipt with the same work-item ID, immutable
 artifact digest/commit, producing and receiving agent/run IDs and timestamps.
-Only that matched pair should be labelled confirmed coordination. The local
-pilot proves only the Maya-to-founder handoff, not Arjun, Quinn, Dev or Rex
-delivery. The canonical worker integration remains disabled until approved
+Only that matched pair should be labelled confirmed coordination. The supervised local pilot now supports **Maya → Arjun → Quinn** with a
+separate execution ID per receiving role, source execution ID, input/output
+artifact digests, actual provider request/response events, and a validated
+receipt for every acceptance criterion. The incoming artifact and role profile
+are passed to the model; completion requires an observed HTTP 200, a parsed
+response, matching hashes and exactly one coverage entry per criterion.
+Receipts establish correlated artifact exchange, not correctness or access
+to private model reasoning. If validation fails, the chain stops. A restarted
+preview marks active work interrupted; retry only reuses stages with matching
+persisted receipts and output evidence.
+
+The Founder Inbox button **Run Maya, then Arjun and Quinn** explicitly
+requests this sequence. New discovery must finish with no open founder
+questions before draft planning starts; the final contract still needs founder
+acceptance. **Run Arjun and Quinn (draft plans)** allows explicit continuation
+from a valid latest contract. Actual model output is stored in private revision
+history at `$STUDIO_HOME/founder-pilot/studio-pilot-001.json`; metadata is in the
+journal above. Latest revision is shown first, older revisions are expandable.
+Arjun produces engineering tasks and Quinn produces test designs, not code
+changes or executed tests. Their roles can use the same underlying model.
+
+The local synthetic pilot is not evidence that all agents work, nor does it
+unify canonical GitHub worker logs. The canonical workflow has separate run,
+job and artifact logs; matched downstream receipts on that workflow remain
+unverified. The canonical worker remains disabled in Studio until approved
 and demonstrated end-to-end. Studio does not deploy or merge automatically.
 
 ## Validation
 
-`node --test test/founder-pilot.test.mjs test/execution-journal.test.mjs`
+`node --test test/founder-pilot.test.mjs test/execution-journal.test.mjs test/coordination-pilot.test.mjs`
 covers metadata-only logging, read/blocked tools, durable revision state and
 matched acknowledgement, and the distinction between active workflow and
 verified receiving-agent receipt. Tests use stand-in model responses; a live

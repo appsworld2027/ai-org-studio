@@ -8,7 +8,7 @@ const TYPES = new Set([
   "revision.saved", "run.started", "route.selected", "context.prepared",
   "model.request", "model.headers", "model.result", "tool.request",
   "tool.result", "artifact.rejected", "artifact.recovered", "artifact.saved", "handoff.offered", "handoff.acknowledged",
-  "run.completed", "run.failed", "run.interrupted"
+  "run.completed", "run.failed", "run.interrupted", "coordination.requested", "coordination.started", "coordination.blocked", "coordination.completed", "coordination.failed", "stage.started", "stage.completed", "stage.failed", "stage.interrupted", "handoff.received"
 ]);
 const ROLES = new Set(["maya-ai-pm", "founder", "arjun-cpto", "quinn-qa", "dev-coder", "rex-reviewer", "studio"]);
 const TOOLS = new Set(["read_file", "list_files", "search", "write_file", "edit_file", "run_command", "ask_user", "other"]);
@@ -26,7 +26,7 @@ export function failureKind(error) {
   if (/^429\b/.test(message)) return "provider_rate_limit";
   if (/^(401|403)\b/.test(message)) return "provider_auth";
   if (/^[45]\d\d\b/.test(message)) return "provider_http";
-  if (/structured contract|missing required fields|invalid founder decision|final response/i.test(message)) return "invalid_artifact";
+  if (/structured contract|missing required fields|invalid founder decision|structured planning artifact|Planning artifact lacks|final response/i.test(message)) return "invalid_artifact";
   return "execution_error";
 }
 
@@ -38,12 +38,13 @@ export function createExecutionJournal(dir) {
         !uint(fields.revision) || fields.revision < 1) throw new Error("Invalid execution event");
     const event = { version: 1, source: "studio-local-pilot", eventId: randomUUID(),
       at: new Date().toISOString(), type, requestId: fields.requestId, revision: fields.revision };
-    for (const k of ["executionId"]) if (UUID.test(fields[k] || "")) event[k] = fields[k];
+    for (const k of ["executionId", "sourceExecutionId"]) if (UUID.test(fields[k] || "")) event[k] = fields[k];
     for (const k of ["actor", "fromRole", "toRole"]) if (ROLES.has(fields[k])) event[k] = fields[k];
     for (const k of ["requestedModel", "reportedModel"]) {
       if (MODELS.has(fields[k])) event[k] = fields[k];
       else if (k === "reportedModel" && fields[k] != null) event[k] = "other-unverified";
     }
+    if (["ai:discovery", "ai:plan", "ai:tests"].includes(fields.stage)) event.stage = fields.stage;
     if (fields.engine === "free") event.engine = "free";
     if (["explore", "finalize"].includes(fields.phase)) event.phase = fields.phase;
     if (TOOLS.has(fields.tool)) event.tool = fields.tool;
