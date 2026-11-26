@@ -18,7 +18,7 @@ export const DEPRECATED_CANDIDATES = [
   "openrouter:deepseek/deepseek-v4.1-flash-1017:free"
 ];
 export const PROBE_VERSION=2;
-export const PROBE_ROUTES=[...NEW_CANDIDATES,LEGACY_REVIEWER,LEGACY_BUILDER];
+export const PROBE_ROUTES=[...new Set([...NEW_CANDIDATES,LEGACY_REVIEWER,LEGACY_BUILDER])];
 export function splitRoute(route){
   const i=route.indexOf(":");
   return {provider:route.slice(0,i),model:route.slice(i+1)};
