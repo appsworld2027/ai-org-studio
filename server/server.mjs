@@ -12,7 +12,7 @@ import { dirname, join, resolve, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import pty from "node-pty";
-import { parseBacklog, buildBoard, feedFrom, appTarget } from "./status.mjs";
+import { parseBacklog, buildBoard, feedFrom, appTarget, rosterFrom } from "./status.mjs";
 import { makeLedger, summarize } from "./usage.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
@@ -141,7 +141,10 @@ async function loadBoard(p) {
   }
   const wr = runs?.workflow_runs || [], agentRuns = wr.filter((r) => /AI agents/i.test(r.name || "")).slice(0, 8), jobs = {};
   await Promise.all(agentRuns.map(async (r) => { try { jobs[r.id] = ((await ghJson(`${R}/actions/runs/${r.id}/jobs`))?.jobs || []).flatMap((j) => j.steps || []); } catch { /* tool stays Unknown */ } }));
-  const b = buildBoard({ backlog, issues, runs: wr, previews, jobs });
+  const checks = {};
+  await Promise.all(issues.filter((i) => i.pull_request && i.head?.sha && i.labels.some((l) => String(l.name).startsWith("ai:"))).slice(0, 8).map(async (i) => { try { checks[i.head.sha] = ((await ghJson(`${R}/commits/${i.head.sha}/check-runs?per_page=30`))?.check_runs || []).map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion })); } catch { /* tests stay unknown */ } }));
+  const b = buildBoard({ backlog, issues, runs: wr, previews, jobs, checks });
+  b.roster = rosterFrom({ rows: b.rows, working: b.working, comments: comments || [] });
   return { ...b, aiOrg: issues.some((i) => i.labels.some((l) => String(l.name).startsWith("ai:"))) || backlog.length > 0, feed: feedFrom(comments), app: appTarget({ productionUrl: p.productionUrl, demo: b.demo }), updatedAt: new Date().toISOString() };
 }
 async function board(p) {

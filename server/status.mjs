@@ -41,6 +41,21 @@ export function toolFromSteps(steps = []) {
   return "Unknown";
 }
 
+export const ROSTER = [["Maya", "AI Product Manager"], ["Arjun", "AI CPTO"], ["Iris", "Product Designer"], ["Kiran", "Project Manager A"], ["Leela", "Project Manager B"],
+  ["Dev", "Coding Specialist"], ["Tara", "Database Specialist"], ["Ravi", "Integration Specialist"], ["Quinn", "QA Specialist"], ["Rex", "Code Reviewer"], ["Sam", "Release & DevOps"]];
+
+// One row per AI Org agent: what it is doing now, on which feature and tool, and its last visible action.
+export function rosterFrom({ rows = [], working = [], comments = [], now = Date.now() }) {
+  return ROSTER.map(([name, role]) => {
+    const w = working.find((x) => (x.who || "").startsWith(name));
+    const row = rows.find((r) => (r.kind === "agent" || r.kind === "loop") && (r.who || "").startsWith(name));
+    const c = comments.find((x) => new RegExp(`^\\**\\[${name}\\s+[—-]`).test((x.body || "").trim()));
+    const last = c ? { at: c.created_at, url: c.html_url, via: c.user?.login === "github-actions[bot]" ? "GitHub Actions" : "Studio / chat",
+      text: (c.body || "").replace(/^\**\[[^\]]+\]\**/, "").replace(/<!--[\s\S]*?-->/g, "").replace(/[#*`>|]/g, " ").replace(/\s+/g, " ").trim().slice(0, 110) } : null;
+    return { name, role, state: w ? "working" : row ? "assigned" : "idle", feature: w?.what || row?.title || "", tool: w?.tool || "", minutes: w?.minutes ?? null, url: w?.url || "", last };
+  });
+}
+
 export const slugOf = (s = "") => (s.match(/\[([a-z0-9-]+)\]\s*$/) || s.match(/^ai\/(?:contract|build|fix)-([a-z0-9-]+?)(?:-\d+)?$/) || [])[1] || null;
 
 export function parseBacklog(md = "") {
@@ -62,7 +77,7 @@ export function stageOf(labels = []) {
 
 // Builds the board: one row per backlog feature plus any loop item not on the backlog.
 // issues: GitHub issues+PRs (REST shape); runs: workflow runs; previews: { [branch]: url }.
-export function buildBoard({ backlog = [], issues = [], runs = [], previews = {}, jobs = {}, now = Date.now() }) {
+export function buildBoard({ backlog = [], issues = [], runs = [], previews = {}, jobs = {}, checks = {}, now = Date.now() }) {
   const rows = new Map();
   for (const b of backlog) rows.set(b.slug, { slug: b.slug, title: b.title, ref: b.ref, stage: b.done ? "shipped" : "idea", who: b.done ? "Shipped" : "Queued", kind: b.done ? "done" : "queued", items: [] });
   const loopItems = issues.filter((i) => (i.labels || []).some((l) => String(l.name || l).startsWith("ai:")));
@@ -103,6 +118,13 @@ export function buildBoard({ backlog = [], issues = [], runs = [], previews = {}
     const url = previews[i.branch] || previews[`ai/contract-${row.slug}`];
     if (url) demo = { feature: row.title, url, number: i.number };
   }
+  // Tests and deployment per feature: check runs on its pull request, and its preview link.
+  for (const row of rows.values()) {
+    const pr = row.items.find((i) => i.isPR && i.commit);
+    const cs = pr ? checks[pr.commit] || [] : [];
+    row.tests = pr && cs.length ? { total: cs.length, passed: cs.filter((c) => c.conclusion === "success").length, failed: cs.filter((c) => ["failure", "cancelled", "timed_out"].includes(c.conclusion)).length, running: cs.filter((c) => c.status !== "completed").length, url: pr.url } : null;
+    row.deploy = row.items.map((i) => previews[i.branch]).find(Boolean) || previews[`ai/contract-${row.slug}`] || null;
+  }
   const list = [...rows.values()];
   const waiting = list.filter((r) => r.kind === "founder");
   const next = backlog.find((b) => !b.done && !list.some((r) => r.slug === b.slug && r.kind !== "queued"));
@@ -116,9 +138,10 @@ export function buildBoard({ backlog = [], issues = [], runs = [], previews = {}
     ongoing: list.filter((row) => ["agent", "loop", "founder"].includes(row.kind)).length,
   };
   // Recently finished agent runs: who ran on which tool and how it ended.
-  const recent = runs.filter((r) => r.status === "completed" && /AI agents/i.test(r.name || "")).slice(0, 8).map((r) => ({
+  const recent = runs.filter((r) => r.status === "completed" && /AI agents/i.test(r.name || "") && !(r.event === "schedule" && toolFromSteps(jobs[r.id]) === "Unknown")).slice(0, 8).map((r) => ({
     title: r.display_title || r.name, event: r.event, conclusion: r.conclusion, tool: toolFromSteps(jobs[r.id]), at: r.updated_at || r.created_at, url: r.html_url }));
-  return { overview, decisions, quality, recent, stages: STAGES, rows: list, working, waiting, demo, next: next ? { slug: next.slug, title: next.title } : null };
+  const idleChecks = runs.filter((r) => r.status === "completed" && r.event === "schedule" && /AI agents/i.test(r.name || "") && toolFromSteps(jobs[r.id]) === "Unknown").length;
+  return { overview, decisions, quality, recent, idleChecks, stages: STAGES, rows: list, working, waiting, demo, next: next ? { slug: next.slug, title: next.title } : null };
 }
 
 // Feed lines from recent comments, newest first, in plain language.

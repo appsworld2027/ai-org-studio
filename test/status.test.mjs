@@ -117,3 +117,23 @@ test("toolFromSteps names the engine that actually ran, else Unknown", () => {
   assert.equal(toolFromSteps([{ name: "Run agent with Codex (experimental)", status: "in_progress" }]), "Codex");
   assert.equal(toolFromSteps([]), "Unknown");
 });
+
+import { rosterFrom } from "../server/status.mjs";
+test("rosterFrom: shows who works on what, who is idle, and the last tagged action", () => {
+  const rows = [{ kind: "agent", who: "Dev, builder", title: "Fees overdue" }, { kind: "done", who: "Shipped", title: "Old" }];
+  const working = [{ who: "Dev, builder", what: "Fees overdue", minutes: 7, tool: "Free engine (NVIDIA NIM)", url: "https://r" }];
+  const comments = [{ body: "**[Quinn — QA]** All 6 tests passed", created_at: "2026-11-26T08:00:00Z", html_url: "https://c", user: { login: "github-actions[bot]" } }];
+  const r = rosterFrom({ rows, working, comments });
+  const by = (n) => r.find((x) => x.name === n);
+  assert.deepEqual([by("Dev").state, by("Dev").feature, by("Dev").tool], ["working", "Fees overdue", "Free engine (NVIDIA NIM)"]);
+  assert.equal(by("Maya").state, "idle");
+  assert.equal(by("Quinn").last.via, "GitHub Actions"); assert.match(by("Quinn").last.text, /All 6 tests passed/);
+  assert.equal(r.length, 11);
+});
+test("buildBoard: tests and deployment per feature", () => {
+  const issues = [{ number: 9, title: "Fees [fees]", html_url: "https://i", labels: [{ name: "ai:review" }], pull_request: {}, branch: "ai/build-fees", head: { sha: "abc" } }];
+  const b = buildBoard({ issues, previews: { "ai/build-fees": "https://pp.vercel.app" }, checks: { abc: [{ name: "q", status: "completed", conclusion: "success" }, { name: "a", status: "completed", conclusion: "failure" }] } });
+  const row = b.rows[0];
+  assert.deepEqual([row.tests.passed, row.tests.total, row.tests.failed], [1, 2, 1]);
+  assert.equal(row.deploy, "https://pp.vercel.app");
+});
