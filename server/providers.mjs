@@ -15,7 +15,8 @@ export const PROVIDERS = {
   },
   groq: {
     name: "Groq (free tier)", base: "https://api.groq.com/openai/v1", needsKey: true, free: true,
-    keyHelp: "Free key: console.groq.com → API Keys.", models: [],
+    keyHelp: "Free key: console.groq.com → API Keys.",
+    models: ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"],
   },
   gemini: {
     name: "Google Gemini (free tier)", base: "https://generativelanguage.googleapis.com/v1beta/openai", needsKey: true, free: true,
