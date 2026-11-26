@@ -13,7 +13,7 @@ export const modelAllowed = (id, model) => providerAllowed(id) && validModel(mod
   (id === "openrouter" ? model.endsWith(":free") : id === "groq" ? GROQ_FREE_MODELS.has(model) : true);
 export const BLOCKED = "Blocked: paid model APIs are disabled by founder policy. Choose an approved free-tier model.";
 
-// Variables that switch Claude Code or Codex from your plan to a separately billed API.
+// Provider API keys are never inherited by spawned CLI processes; model providers are accessed through the dedicated key store.
 export const PAID_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
   "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "AWS_BEARER_TOKEN_BEDROCK", "AZURE_OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "GROQ_API_KEY"];
 export function planEnv(env = process.env) {
