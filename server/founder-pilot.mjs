@@ -114,11 +114,11 @@ export function createFounderPilot({ dir, inbox, orgDir, keyFile, root = ROOT, r
   const workers = new Map();
 
   // Shared validation & lookup helper
-  function getWorker(id, checkInbox = false) {
+  function getWorker(id) {
     if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{8,100}$/.test(id)) {
       throw new Error("Invalid requestId");
     }
-    if (checkInbox && !inbox.list().some(t => t.requestId === id)) {
+    if (!inbox.list().some(t => t.requestId === id)) {
       throw new Error("requestId not found in inbox");
     }
     let worker = workers.get(id);
@@ -133,7 +133,7 @@ export function createFounderPilot({ dir, inbox, orgDir, keyFile, root = ROOT, r
     // Synchronous run that delegates to the appropriate worker
     run(input) {
       const { requestId } = input;
-      const worker = getWorker(requestId, true);
+      const worker = getWorker(requestId);
       return structuredClone(worker.run(input));
     },
 
@@ -145,10 +145,15 @@ export function createFounderPilot({ dir, inbox, orgDir, keyFile, root = ROOT, r
 
     // Synchronous evidence filtered by requestId
     evidence(id = PILOT_ID) {
-      const worker = getWorker(id);
-      const all = worker.evidence();
+      getWorker(id);
+      const all = createExecutionJournal(dir).read(Number.MAX_SAFE_INTEGER);
       const events = all.events.filter(e => e.requestId === id);
-      return { ...all, events };
+      return {
+        events: events.slice(-250),
+        total: events.length,
+        invalidLines: all.invalidLines,
+        truncated: events.length > 250
+      };
     },
   };
 }
@@ -175,12 +180,12 @@ function createTaskPilot(config, taskId) {
     });
   function history(id) {
     if (id !== PILOT_ID) throw new Error("Outside pilot scope");
+    if (active.has(id)) return sharedRevisions;
     if (!existsSync(file)) {
       sharedRevisions = [];
-      return [];
+      return sharedRevisions;
     }
     const loaded = JSON.parse(readFileSync(file, "utf8"));
-    // Ensure we keep a live reference for the active task
     sharedRevisions = loaded;
     let recovered = false;
     for (const r of sharedRevisions) {

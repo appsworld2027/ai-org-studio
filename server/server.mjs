@@ -108,7 +108,7 @@ function rememberPublicUrl(origin) {
 // ---------- static files (whitelist only) ----------
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const STATIC = {
-  "/": "public/index.html", "/app.js": "public/app.js", "/chat.js": "public/chat.js", "/echat.js": "public/echat.js", "/styles.css": "public/styles.css",
+  "/": "public/index.html", "/app.js": "public/app.js", "/chat.js": "public/chat.js", "/echat.js": "public/echat.js", "/styles.css": "public/styles.css", "/founder-inbox.js": "public/founder-inbox.js",
   "/vendor/xterm.js": "node_modules/@xterm/xterm/lib/xterm.js", "/vendor/xterm.css": "node_modules/@xterm/xterm/css/xterm.css",
   "/vendor/addon-fit.js": "node_modules/@xterm/addon-fit/lib/addon-fit.js", "/vendor/addon-web-links.js": "node_modules/@xterm/addon-web-links/lib/addon-web-links.js",
 };
