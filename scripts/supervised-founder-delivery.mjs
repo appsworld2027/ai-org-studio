@@ -11,6 +11,7 @@ import { createExecutionJournal, artifactDigest, failureKind } from "../server/e
 import { BUILD_UNITS, sourceRange } from "./founder-build-units.mjs";
 import { parseDeliveryResponse } from "./delivery-response.mjs";
 import { createDeliveryRateGuard } from "./delivery-rate-limit.mjs";
+import { uiEditSlots } from "./founder-ui-edit-slots.mjs";
 import { pilotModelProfile, splitRoute, fromOrgRoute, orgRoute, modelMatches, modelFamily, stageRoute, routeFamily, ENDPOINTS } from "../server/pilot-model-profile.mjs";
 
 const ID = "studio-pilot-001", REV = 2;
@@ -103,7 +104,8 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
     const patch = directSource?.kind==="patch";
     const receiptFormat = 'Return a JSON object with exactly these required fields: inputArtifactHash (the exact string '+previous.hash+
       '), verdict ("COMPLETE" for implemented source, "APPROVE" for a successful review, or "CHANGES" for incomplete work), and summary (your own brief factual explanation; no placeholder).';
-    const responseFormat = patch
+    const editFormat = "Return ONLY a JSON object mapping every provided editSlots id to its replacement JavaScript string. Include all and only the listed ids. Preserve indentation. Each value replaces only the exact old string for that slot. No extra code, no new functions, no markdown required. Use JSON escaping for quotes and newlines. Do not include sourceRange or adjoining context.";
+    const responseFormat = directSource?.slots ? editFormat : patch
       ? "Return ONLY one fenced javascript code block containing the exact replacement for sourceRange. No JSON, receipt, hash, prose, ellipses or whole-file rewrite."
       : receiptFormat+(directSource?" Then a single fenced javascript code block with the complete runnable test source. No other prose.":" No prose outside the JSON.");
     const initialHashes = Object.fromEntries(paths.map(p=>[p,pathHash(p)]));
@@ -128,7 +130,7 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
       maxRounds:rounds,maxTokens:directSource?.kind==="patch"?6000:directSource?3500:5000,
       directGeneration:directSource?.kind==="patch",
       ...(directSource?.kind==="patch"&&(model==="moonshotai/kimi-k3.1-pro"||providerId==="groq"&&model.startsWith("openai/gpt-oss"))?{effort:"low"}:{}),signal:AbortSignal.timeout(directSource?180000:900000),
-      finalInstruction:patch
+      finalInstruction:directSource?.slots ? editFormat : patch
         ? "Return only the fenced JavaScript replacement. No receipt, explanation, file header, or unchanged code outside the range."
         :directSource
         ?"Return the one-line JSON receipt followed by the exact requested fenced JavaScript source, not a description. No tools."
@@ -376,9 +378,10 @@ async function authorBuild(locked){
         previousExecution=oldUnit.executionId; print("REUSED "+unit.id);continue;
       }
     }
-    const pos=input.indexOf(range);
+    const pos=input.indexOf(range), slots=uiEditSlots(unit.id,range);
     const bundle={contractArtifactHash:expected,lockedTestHash:locked,id:unit.id,path:unit.path,beforeHash,
       requirement:unit.requirement,sourceRange:range,
+      ...(slots?{editSlots:slots}:{}),
       precedingContext:input.slice(Math.max(0,pos-350),pos),
       followingContext:input.slice(pos+range.length,pos+range.length+750),
       ...(unit.id==="BUILD-01"?{existingInterfaces:{
@@ -393,8 +396,8 @@ async function authorBuild(locked){
     writeFileSync(join(runDir,"build-checkpoints",unit.id+"-input.json"),JSON.stringify(bundle),{mode:0o600,flag:"wx"});
     log("artifact.saved",upstream,{artifactHash:hash,buildUnit:unit.id});
     const generate=(repair="")=>runRole({stage:"ai:build",role:"dev-coder",freeModel:buildModel,previous:{role:"studio",executionId:upstream.executionId,hash,artifact:bundle},
-      paths:[],rounds:1,directSource:{kind:"patch",id:unit.id,target:unit.path,old:range,beforeHash},
-      brief:"Implement only "+unit.id+" according to the incoming sourceRange and requirement. Return the COMPLETE REPLACEMENT for that range, not the entire file or an edit command. Preserve matching indentation and surrounding braces. The runner will apply it exactly, check complete file syntax, fingerprint and checkpoint it. Do not modify tests, claim test execution, or add unrelated features. The precedingContext and followingContext are READ-ONLY adjoining text, not part of the replacement. Keep all existing public signatures and private helper behavior." +repair});
+      paths:[],rounds:1,directSource:{kind:"patch",id:unit.id,target:unit.path,old:range,beforeHash,slots},
+      brief:slots ? ("Implement only "+unit.id+" using the narrowly scoped editSlots in the incoming bundle. Every slot has an exact old source string and a specific task. Return ONLY a JSON object with each slot id and its replacement string, keeping other source untouched. Do not reproduce the full source range. No test changes or test claims."+repair) : "Implement only "+unit.id+" according to the incoming sourceRange and requirement. Return the COMPLETE REPLACEMENT for that range, not the entire file or an edit command. Preserve matching indentation and surrounding braces. The runner will apply it exactly, check complete file syntax, fingerprint and checkpoint it. Do not modify tests, claim test execution, or add unrelated features. The precedingContext and followingContext are READ-ONLY adjoining text, not part of the replacement. Keep all existing public signatures and private helper behavior." +repair});
     const generateWithRepair=async()=>{
       try{return await generate();}
       catch(error){

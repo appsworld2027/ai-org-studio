@@ -33,3 +33,18 @@ test("criterion accepts pretty-printed receipt followed by runnable source; reje
   assert.equal(parseDeliveryResponse(JSON.stringify(p,null,2)+"\n"+framed(source),hash,{id:"AC-01"}).receipt.source,source);
   assert.equal(parseDeliveryResponse(JSON.stringify(p)+"\n"+framed(code),hash,{id:"AC-01"}).receipt,null);
 });
+
+test("structured UI edit slots preserve untouched source and reject full-file replies",()=>{
+  const direct={...patch,id:"BUILD-07",target:"public/founder-inbox.js",
+    old:"  const first = true;\n  preserve();\n  const second = false;\n",
+    slots:[{id:"a",old:"  const first = true;"},{id:"b",old:"  const second = false;"}]};
+  const map={a:"  const first = false;",b:"  const second = true;"};
+  const parsed=parseDeliveryResponse(JSON.stringify(map),hash,direct);
+  assert.equal(parsed.receipt.source,"  const first = false;\n  preserve();\n  const second = true;\n");
+  assert.equal(parsed.receipt.editCount,2);
+  for(const bad of [{a:map.a},{...map,extra:"other()"},{...map,b:direct.slots[1].old},
+      {...map,b:"x\n".repeat(13)}]){
+    assert.deepEqual(parseDeliveryResponse(JSON.stringify(bad),hash,direct).issues,["invalid_edit_slots"]);
+  }
+  assert.equal(parseDeliveryResponse(framed(code),hash,direct).receipt,null);
+});

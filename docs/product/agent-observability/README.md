@@ -289,3 +289,19 @@ run budget stop safely; they may indicate a longer quota reset. Metadata-only
 exposing headers, keys or request bodies. No payment or model switch is enabled
 by the rate guard. The existing same-builder checkpoint and independent review
 requirements remain unchanged. Completed BUILD-01 can be reused unchanged.
+
+### Bounded UI statements (BUILD-07 / BUILD-08)
+
+The supervised Groq run completed six checkpointed build units. BUILD-07
+failed because the model regenerated the larger panel, duplicated
+`loadEvidence` and prematurely closed its surrounding block. Syntax checks
+prevented either rejected response from modifying the candidate.
+
+The existing eight-unit plan stays unchanged (compatible completed units
+remain reusable). For the two UI units only, Studio now supplies named,
+unique, exact statement slots with a narrow task for each. Dev authors the
+replacement strings as a JSON object. Studio rejects missing or extra slots,
+oversized edits, ambiguity and overlap, preserves all unedited source bytes,
+and still checks the entire resulting file syntax before checkpointing.
+This is runtime validation, not human-authored feature code. Locked tests,
+provider identity checks, rate guard and independent reviewers stay in force.

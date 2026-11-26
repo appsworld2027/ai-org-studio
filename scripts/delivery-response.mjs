@@ -5,6 +5,34 @@ const reject = issue => ({ receipt: null, issues: [issue] });
 export function parseDeliveryResponse(text, inputHash, direct = false) {
   if (typeof text !== "string" || !text.trim()) return reject("missing_source");
   const raw = text.trim();
+  if (direct?.kind === "patch" && direct.slots) {
+    let edits;
+    try { edits=JSON.parse(raw.replace(/^\x60\x60\x60(?:json)?\s*/i,"").replace(/\s*\x60\x60\x60$/,"")); }
+    catch { return reject("invalid_json"); }
+    const slots=direct.slots;
+    if (!edits || typeof edits!=="object" || Array.isArray(edits) ||
+        Object.keys(edits).length!==slots.length || slots.some(s=>!Object.hasOwn(edits,s.id)))
+      return reject("invalid_edit_slots");
+    const ranges=[];
+    for(const {id,old} of slots){
+      const replacement=edits[id];
+      if(typeof replacement!=="string"||!replacement.trim()||replacement===old||
+         replacement.length>1200||replacement.split("\n").length>12||
+         replacement.endsWith("\n"))return reject("invalid_edit_slots");
+      const pos=direct.old.indexOf(old);
+      if(pos<0||pos!==direct.old.lastIndexOf(old))return reject("invalid_edit_slots");
+      ranges.push({pos,end:pos+old.length,replacement});
+    }
+    ranges.sort((a,b)=>b.pos-a.pos);
+    let source=direct.old, prev=source.length;
+    for(const r of ranges){
+      if(r.end>prev)return reject("invalid_edit_slots");
+      source=source.slice(0,r.pos)+r.replacement+source.slice(r.end);prev=r.pos;
+    }
+    return {receipt:{inputArtifactHash:inputHash,verdict:"COMPLETE",
+      summary:"Runtime applied "+slots.length+" model-authored bounded edits for "+direct.id+". Syntax and tests are separate gates.",
+      receiptOrigin:"studio-runtime",editCount:slots.length,source},issues:[]};
+  }
   if (direct?.kind === "patch") {
     const match = raw.match(fence);
     if (!match || /(?:^|\n)\x60\x60\x60/.test(match[1])) return reject("invalid_source_frame");
