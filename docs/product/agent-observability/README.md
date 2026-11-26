@@ -101,3 +101,24 @@ validation labels and the required output template. If that also fails, stop.
 Explicit coordination retry reuses only verified completed stages and logs
 `stage.reused`; it does not rerun discovery or completed planning work.
 Queued founder corrections never authorize unattended model execution.
+
+## Supervised delivery trial (isolated local candidate)
+
+The command `scripts/supervised-founder-delivery.mjs` can be run only with
+the exact founder-accepted revision 2 contract fingerprint and both matched
+planning receipts. It exports committed Studio source to a private new
+directory; it never changes the active worktree, pushes, merges or deploys.
+It uses Studio's existing tool loop and the AI Org router/role profiles.
+Quinn writes one locked Node acceptance spec, the deterministic runner checks
+a feature-related red baseline, Dev can edit only allowlisted product files,
+the runner verifies tests remain locked and executes the candidate tests,
+and Quinn and Rex judge the actual evidence with separate reported model
+identity from Dev. A failure or CHANGES verdict stops, retaining files and
+logs for diagnosis. No unbounded retries. This trial is not the canonical
+GitHub Actions worker or the full browser/production release gate.
+
+Each candidate directory contains `state.json`, a metadata-only
+`execution-events.jsonl`, test logs and the isolated `candidate/` tree.
+The Node acceptance subprocess gets a minimal environment and scoped file
+permissions, no shell/child process authorization; this is not a network
+sandbox. Do not import unreviewed candidate changes into a live preview.

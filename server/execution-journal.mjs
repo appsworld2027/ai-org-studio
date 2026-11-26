@@ -44,7 +44,7 @@ export function createExecutionJournal(dir) {
       if (MODELS.has(fields[k])) event[k] = fields[k];
       else if (k === "reportedModel" && fields[k] != null) event[k] = "other-unverified";
     }
-    if (["ai:discovery", "ai:plan", "ai:tests"].includes(fields.stage)) event.stage = fields.stage;
+    if (["ai:discovery", "ai:plan", "ai:tests", "ai:build", "ai:qa", "ai:review"].includes(fields.stage)) event.stage = fields.stage;
     if (fields.engine === "free") event.engine = "free";
     if (["explore", "finalize"].includes(fields.phase)) event.phase = fields.phase;
     if (TOOLS.has(fields.tool)) event.tool = fields.tool;
