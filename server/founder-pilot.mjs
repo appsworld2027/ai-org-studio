@@ -109,24 +109,81 @@ export function discoveryContext(source) {
   return { text: snippets.join("\n\n"), sourceFiles };
 }
 
-export function createFounderPilot({
-  dir, inbox, orgDir, keyFile, root = ROOT, runner = runTurn
-}) {
+export function createFounderPilot({ dir, inbox, orgDir, keyFile, root = ROOT, runner = runTurn }) {
+  // Cache workers per requestId
+  const workers = new Map();
+
+  // Shared validation & lookup helper
+  function getWorker(id, checkInbox = false) {
+    if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{8,100}$/.test(id)) {
+      throw new Error("Invalid requestId");
+    }
+    if (checkInbox && !inbox.list().some(t => t.requestId === id)) {
+      throw new Error("requestId not found in inbox");
+    }
+    let worker = workers.get(id);
+    if (!worker) {
+      worker = createTaskPilot({ dir, inbox, orgDir, keyFile, root, runner }, id);
+      workers.set(id, worker);
+    }
+    return worker;
+  }
+
+  return {
+    // Synchronous run that delegates to the appropriate worker
+    run(input) {
+      const { requestId } = input;
+      const worker = getWorker(requestId, true);
+      return structuredClone(worker.run(input));
+    },
+
+    // Synchronous history lookup
+    history(id) {
+      const worker = getWorker(id);
+      return structuredClone(worker.history(id));
+    },
+
+    // Synchronous evidence filtered by requestId
+    evidence(id = PILOT_ID) {
+      const worker = getWorker(id);
+      const all = worker.evidence();
+      const events = all.events.filter(e => e.requestId === id);
+      return { ...all, events };
+    },
+  };
+}
+function createTaskPilot(config, taskId) {
+  const {
+    dir,
+    inbox,
+    orgDir,
+    keyFile,
+    root = ROOT,
+    runner = runTurn,
+  } = config;
+  const PILOT_ID = taskId;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const active = new Set();
   const file = join(dir, PILOT_ID + ".json");
   const journal = createExecutionJournal(dir);
-  const event = (type, record, fields = {}) => journal.append(type, {
-    requestId: PILOT_ID, revision: record.revision, executionId: record.executionId,
-    ...fields
-  });
-
+  const event = (type, record, fields = {}) =>
+    journal.append(type, {
+      requestId: PILOT_ID,
+      revision: record.revision,
+      executionId: record.executionId,
+      ...fields,
+    });
   function history(id) {
     if (id !== PILOT_ID) throw new Error("Outside pilot scope");
-    if (!existsSync(file)) return [];
-    const revisions = JSON.parse(readFileSync(file, "utf8"));
+    if (!existsSync(file)) {
+      sharedRevisions = [];
+      return [];
+    }
+    const loaded = JSON.parse(readFileSync(file, "utf8"));
+    // Ensure we keep a live reference for the active task
+    sharedRevisions = loaded;
     let recovered = false;
-    for (const r of revisions) {
+    for (const r of sharedRevisions) {
       // Pre-upgrade responses remain available as evidence, not as valid contracts.
       if (!r.contract && r.agents?.length && !r.attempts) {
         r.attempts = [{ agents: r.agents, error: r.error || "Legacy output not validated" }];
@@ -137,11 +194,21 @@ export function createFounderPilot({
       if (["running", "waiting-for-contract"].includes(r.coordination?.status) && !active.has(id)) {
         r.coordination.status = "interrupted";
         r.coordination.error = "Preview restarted before coordination finished";
-        for (const stage of r.coordination.stages || []) if (stage.status === "running") {
-          stage.status = "interrupted";
-          event("stage.interrupted", r, { executionId: stage.executionId, sourceExecutionId: stage.sourceExecutionId,
-            actor: stage.role, stage: stage.stage, errorKind: "interrupted" });
-        }
+        for (const stage of r.coordination.stages || [])
+          if (stage.status === "running") {
+            stage.status = "interrupted";
+            event(
+              "stage.interrupted",
+              r,
+              {
+                executionId: stage.executionId,
+                sourceExecutionId: stage.sourceExecutionId,
+                actor: stage.role,
+                stage: stage.stage,
+                errorKind: "interrupted",
+              }
+            );
+          }
         event("coordination.failed", r, { actor: "studio", errorKind: "interrupted" });
         recovered = true;
       }
@@ -154,16 +221,20 @@ export function createFounderPilot({
         }
       }
     }
-    if (recovered) save(revisions);
-    return revisions;
+    if (recovered) save(sharedRevisions);
+    return sharedRevisions;
   }
 
   function save(revisions) {
+    // Keep the live shared reference in sync
+    sharedRevisions = revisions;
     const temp = file + "." + randomUUID();
     writeFileSync(temp, JSON.stringify(revisions, null, 2), { mode: 0o600, flag: "wx" });
     renameSync(temp, file);
   }
 
+  // Shared live revisions array used by active runs
+  let sharedRevisions = [];
   async function execute(task, revisions, record) {
     let source, output = "", inputTokens = null, outputTokens = null;
     let agent, model, role;
@@ -186,14 +257,42 @@ export function createFounderPilot({
       const decisions = playbook.match(/## Phase 2[^\n]*\n([\s\S]*?)(?=\n## |$)/)?.[1] || "";
       const quality = playbook.match(/## Quality bar[^\n]*\n([\s\S]*?)(?=\n## |$)/)?.[1] || "";
       const context = discoveryContext(source);
-      const base = revisions.slice(0, -1).reverse().find(r => r.contract);
-      const corrections = revisions.filter(r => r.revision > (base?.revision || 0) && r.feedback)
-        .map(r => "Revision " + r.revision + ": " + r.feedback).join("\n");
-      if (corrections.length > 12000) throw new Error("Too much pending feedback for this pilot; consolidate it first");
-      event("context.prepared", record, { actor: role,
-        baseRevision: base?.revision, baseArtifactHash: base?.contract ? artifactDigest(base.contract) : undefined,
-        correctionCount: revisions.filter(r => r.revision > (base?.revision || 0) && r.feedback).length,
-        contextChars: context.text.length, sourceFiles: context.sourceFiles });
+      // Determine the most recent accepted contract baseline up to the current revision.
+      // Prefer an earlier revision that has a contract; if none, fall back to the latest
+      // earlier revision that has a valid (non‑null) contract artifact.
+      const base = revisions
+        .filter(r => r.revision <= record.revision)           // only up to current revision
+        .reverse()
+        .find(r => r.contract) || null;
+
+      // Gather corrections that belong to the current revision scope only.
+      // These are revisions later than the chosen base (if any) but not beyond the
+      // current revision, and that contain feedback.
+      const corrections = revisions
+        .filter(r =>
+          r.revision > (base?.revision ?? 0) &&
+          r.revision <= record.revision &&
+          r.feedback)
+        .map(r => `Revision ${r.revision}: ${r.feedback}`)
+        .join("\n");
+
+      // Guard against excessively large feedback payloads.
+      if (corrections.length > 12000) {
+        throw new Error("Too much pending feedback for this pilot; consolidate it first");
+      }
+
+      // Emit context preparation event with accurate revision tracking.
+      event("context.prepared", record, {
+        actor: role,
+        baseRevision: base?.revision,
+        baseArtifactHash: base?.contract ? artifactDigest(base.contract) : undefined,
+        correctionCount: revisions.filter(r =>
+          r.revision > (base?.revision ?? 0) &&
+          r.revision <= record.revision &&
+          r.feedback).length,
+        contextChars: context.text.length,
+        sourceFiles: context.sourceFiles
+      });
       const messages = [{ role: "user", content: [
         "Founder objective: " + task.title + "\n" + task.description,
         base ? "Base contract: " + JSON.stringify(base.contract) : "",
@@ -425,16 +524,33 @@ export function createFounderPilot({
     return record;
   }
 
-  function run({ requestId, action, revision, feedback = "", coordinate = false } = {}) {
-    if (requestId !== PILOT_ID) throw new Error("Only the synthetic pilot is enabled");
-    if (!["save", "run", "accept", "recover", "coordinate"].includes(action)) throw new Error("Choose save, run, accept, recover, or coordinate explicitly");
-    if (typeof coordinate !== "boolean" || (coordinate && action !== "run")) throw new Error("Invalid supervised coordination request");
-    if (active.has(requestId)) throw new Error("A supervised agent is already working");
-    const task = inbox.list().find(t => t.requestId === requestId);
-    if (!task) throw new Error("Founder task not found");
-    const revisions = history(requestId);
-    let record = revisions.at(-1);
-    if ((record?.revision ?? null) !== (revision ?? null)) throw new Error("Revision changed; refresh first");
+function run({ requestId, action, revision, feedback = "", coordinate = false } = {}) {
+  if (requestId !== PILOT_ID) throw new Error("Only the synthetic pilot is enabled");
+  if (!["save", "run", "accept", "recover", "coordinate"].includes(action))
+    throw new Error("Choose save, run, accept, recover, or coordinate explicitly");
+  if (typeof coordinate !== "boolean" || (coordinate && action !== "run"))
+    throw new Error("Invalid supervised coordination request");
+  // Allow a save operation even if an agent is currently active; block all other actions.
+  if (active.has(requestId) && action !== "save") throw new Error("A supervised agent is already working");
+  const task = inbox.list().find(t => t.requestId === requestId);
+  if (!task) throw new Error("Founder task not found");
+  const revisions = history(requestId);
+  let record = revisions.at(-1);
+
+  // Idempotent save: if the latest revision is queued, feedback matches, and the supplied
+  // revision equals the parent of that queued revision, return the existing record.
+  if (action === "save") {
+    if (
+      record?.status === "queued" &&
+      feedback === record.feedback &&
+      revision === record.parentRevision
+    ) {
+      return record;
+    }
+  }
+
+  if ((record?.revision ?? null) !== (revision ?? null))
+    throw new Error("Revision changed; refresh first");
     if (action === "coordinate") {
       if (feedback !== "" || !record) throw new Error("Coordination requires an existing contract");
       return startCoordination(revisions, record);
@@ -491,23 +607,63 @@ export function createFounderPilot({
       }
       return record;
     }
-    if (action === "save") {
-      if (typeof feedback !== "string" || !feedback.trim() || feedback.length > 2000) {
-        throw new Error("Enter a correction of 1–2000 characters");
-      }
-      if (record?.status === "queued" && record.feedback === feedback.trim()) return record;
-      record = { journalVersion: 1, revision: (record?.revision || 0) + 1, parentRevision: record?.revision ?? null,
-        feedback: feedback.trim(), status: "queued", agents: [], createdAt: new Date().toISOString() };
-      revisions.push(record);
-      save(revisions);
-      try { event("revision.saved", record, { actor: "founder", parentRevision: record.parentRevision }); }
-      catch {
-        record.journalError = "Correction saved, but execution journal is unavailable";
-        save(revisions);
-        throw new Error(record.journalError);
-      }
-      return record;
-    }
+if (action === "save") {
+  // Validate feedback length (1-2000 characters)
+  if (typeof feedback !== "string" || !feedback.trim() || feedback.length > 2000) {
+    throw new Error("Enter a correction of 1–2000 characters");
+  }
+
+  const trimmed = feedback.trim();
+
+  // Idempotent: if the latest queued revision already has this feedback, return it
+  if (record?.status === "queued" && record.feedback === trimmed) return record;
+
+  // Determine new revision numbers
+  const newRevision = (record?.revision ?? 0) + 1;
+  const parentRevision = record?.revision ?? null;
+
+  // Build the new queued revision record
+  const newRecord = {
+    journalVersion: 1,
+    revision: newRevision,
+    parentRevision,
+    feedback: trimmed,
+    status: "queued",
+    agents: [],
+    createdAt: new Date().toISOString(),
+    // Preserve immutable base contract info if a prior accepted contract exists
+    ...(record?.status === "contract-accepted"
+      ? {
+          baseRevision: record.revision,
+          baseArtifactHash: record.artifactHash,
+          baseContract: JSON.parse(JSON.stringify(record.contract)), // deep immutable copy
+        }
+      : {
+          baseRevision: null,
+          baseArtifactHash: null,
+          baseContract: null,
+        }),
+  };
+
+  // Append and persist the new revision
+  revisions.push(newRecord);
+  save(revisions);
+
+  // Emit journal event, handling possible journal failure
+  try {
+    event("revision.saved", newRecord, {
+      actor: "founder",
+      parentRevision,
+    });
+  } catch {
+    newRecord.journalError =
+      "Correction saved, but execution journal is unavailable";
+    save(revisions);
+    throw new Error(newRecord.journalError);
+  }
+
+  return newRecord;
+}
     if (action === "accept") {
       if (record?.status !== "founder-review" || !record.contract || record.contract.openQuestions.length) {
         throw new Error("Only a complete latest contract without unresolved questions can be accepted");

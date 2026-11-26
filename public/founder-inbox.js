@@ -78,7 +78,7 @@
 
       item.append(name, detail, state);
 
-      if (task.requestId === "studio-pilot-001") {
+      {
         const panel = document.createElement("section");
         const feedback = document.createElement("textarea");
         feedback.placeholder = "What should Maya correct? (Saved before any model call)";
@@ -88,7 +88,7 @@
         const controls = document.createElement("div");
         const evidence = document.createElement("div");
         const activity = document.createElement("section");
-        let latest = null, busy = false, available = false, timer;
+        let latest = null, busy = false, available = false, timer, anyRunning = false;
 
         function control(label, action) {
           const button = document.createElement("button");
@@ -109,14 +109,13 @@
         feedback.oninput = () => updateButtons();
         function showError(error) { status.textContent = error.message; }
         function updateButtons() {
-          const running = latest?.status === "running" ||
-            ["running", "waiting-for-contract"].includes(latest?.coordination?.status);
+          const running = anyRunning || latest?.status === "running" || latest?.status === "reviewing" || ["running", "waiting-for-contract"].includes(latest?.coordination?.status);
           const recoverable = latest?.status === "failed" &&
             latest.error === "Maya's contract is missing required fields" &&
             !!latest.attempts?.at(-1)?.output;
           recover.hidden = !recoverable;
-          recover.disabled = !available || busy || !recoverable;
-          save.disabled = !available || busy || running || !feedback.value.trim();
+          recover.disabled = !available || busy || !recoverable || running;
+          save.disabled = !available || busy || !feedback.value.trim();
           run.disabled = !available || busy || running || !!feedback.value.trim() || !!(latest && !["queued", "failed", "interrupted"].includes(latest.status));
           runChain.disabled = run.disabled;
           coordinate.disabled = !available || busy || running || !latest?.contract || !!latest.contract.openQuestions.length || latest.coordination?.status === "completed";
@@ -131,7 +130,7 @@
         }
         async function loadEvidence() {
           clearTimeout(timer);
-          const response = await fetch("/api/founder-pilot");
+          const response = await fetch("/api/founder-pilot?requestId=" + encodeURIComponent(task.requestId));
           if (!response.ok) {
             available = false;
             updateButtons();
@@ -139,16 +138,22 @@
             return;
           }
           const { revisions, executionEvidence } = await response.json();
+          if (!dialog.open || !panel.isConnected) { return; }
           available = true;
           latest = revisions.at(-1) || null;
+          anyRunning = revisions.some(r => r.status === "running" || r.status === "reviewing" || (r.coordination && ["running", "waiting-for-contract"].includes(r.coordination.status)));
           state.textContent = latest
             ? "Revision " + latest.revision + " · " + latest.status + (latest.coordination ? " · coordination " + latest.coordination.status : "")
             : "Ready for supervised discovery";
           renderActivity(executionEvidence);
           evidence.replaceChildren();
-          for (const r of [...revisions].reverse()) {
+          for (const r of (revisions.length ? [revisions[revisions.length-1], ...revisions.slice(0, -1)] : [])) {
             const card = document.createElement("section");
             textElement("h4", "Revision " + r.revision + " — " + r.status, card);
+            if (r.createdAt) textElement("p", "Created: " + r.createdAt, card);
+            if (r.startedAt) textElement("p", "Started: " + r.startedAt, card);
+            if (r.completedAt) textElement("p", "Completed: " + r.completedAt, card);
+            if (r.acceptedAt) textElement("p", "Accepted: " + r.acceptedAt, card);
             if (r.feedback) textElement("p", "Founder correction: " + r.feedback, card);
             if (r.step) textElement("p", r.step, card);
             if (r.error) textElement("p", r.error, card);
@@ -187,7 +192,7 @@
             }
           }
           updateButtons();
-          if ((latest?.status === "running" || ["running", "waiting-for-contract"].includes(latest?.coordination?.status)) && dialog.open && panel.isConnected) {
+          if (anyRunning && dialog.open && panel.isConnected) {
             timer = setTimeout(() => loadEvidence().catch(showError), 2500);
           }
         }

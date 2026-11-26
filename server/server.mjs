@@ -402,10 +402,11 @@ const server = http.createServer(async (req, res) => {
         });
       }
       try {
-        if (req.method === "GET") {
+if (req.method === "GET") {
+          const requestId = new URL(req.url, `http://${req.headers.host}`).searchParams.get("requestId") || "studio-pilot-001";
           return json(res, 200, {
-            revisions: pilot.history("studio-pilot-001"),
-            executionEvidence: pilot.evidence()
+            revisions: pilot.history(requestId),
+            executionEvidence: pilot.evidence(requestId)
           });
         }
         if (req.method === "POST") {
