@@ -9,25 +9,37 @@ const STAGES = [
   { stage: "ai:tests", role: "quinn-qa", label: "Acceptance test design",
     brief: "Independently design tests for the exact product contract and engineering plan. Each coverage approach must specify a scenario and expected result. Deliverables are test cases and negative cases, not test results. Identify gaps and do not claim tests ran." }
 ];
-const nonempty = x => typeof x === "string" && x.trim().length > 0;
+const nonempty = x => typeof x === "string" && x.trim().length > 0 && !/^REPLACE\b/i.test(x.trim());
 const list = x => Array.isArray(x) && x.length > 0 && x.length <= 30 && x.every(nonempty);
 
 export function criteriaFor(contract) {
   return contract.acceptanceCriteria.map((text, i) => ({ id: "AC-" + String(i + 1).padStart(2, "0"), text }));
 }
 
+// Diagnostics contain only fixed labels, never model text, in the event journal.
 export function parsePlanningArtifact(output, inputHash, contractHash, criteria) {
+  const reject = issues => {
+    const error = new Error("Planning artifact validation failed: " + issues.join(", "));
+    error.validationIssues = issues;
+    throw error;
+  };
   let p;
   try {
     p = JSON.parse(output.trim().replace(/^\x60\x60\x60(?:json)?\s*/i, "").replace(/\s*\x60\x60\x60$/, ""));
-  } catch { throw new Error("Agent did not deliver a complete structured planning artifact"); }
-  if (!p || p.inputArtifactHash !== inputHash || p.contractArtifactHash !== contractHash ||
-      !nonempty(p.summary) || !list(p.deliverables) || !list(p.risks) ||
-      !Array.isArray(p.coverage) || p.coverage.length !== criteria.length ||
-      !p.coverage.every(c => c && criteria.some(a => a.id === c.criterionId) && nonempty(c.approach)) ||
-      new Set(p.coverage.map(c => c.criterionId)).size !== criteria.length) {
-    throw new Error("Planning artifact lacks a matching handoff or complete acceptance-criterion coverage");
+  } catch { reject(["invalid_json"]); }
+  const issues = [];
+  if (p?.inputArtifactHash !== inputHash) issues.push("input_hash_mismatch");
+  if (p?.contractArtifactHash !== contractHash) issues.push("contract_hash_mismatch");
+  if (!nonempty(p?.summary)) issues.push("missing_summary");
+  if (!list(p?.deliverables)) issues.push("invalid_deliverables");
+  if (!list(p?.risks)) issues.push("invalid_risks");
+  if (!Array.isArray(p?.coverage) || p.coverage.length !== criteria.length) issues.push("coverage_count");
+  if (Array.isArray(p?.coverage)) {
+    if (!p.coverage.every(c => c && criteria.some(a => a.id === c.criterionId)) ||
+        new Set(p.coverage.map(c => c?.criterionId)).size !== criteria.length) issues.push("coverage_ids");
+    if (!p.coverage.every(c => nonempty(c?.approach))) issues.push("coverage_approach");
   }
+  if (issues.length) reject(issues);
   return { inputArtifactHash: p.inputArtifactHash, contractArtifactHash: p.contractArtifactHash,
     summary: p.summary, coverage: p.coverage.map(c => ({ criterionId: c.criterionId, approach: c.approach })),
     deliverables: p.deliverables, risks: p.risks };
@@ -42,8 +54,11 @@ export async function runPlanningChain({ record, persist, log, invoke, verified 
   try {
     for (const spec of STAGES) {
       const existing = c.stages.find(s => s.stage === spec.stage && s.status === "completed" &&
-        s.inputArtifactHash === previous.hash && s.artifactHash === artifactDigest(s.artifact) && verified(s));
+        s.sourceExecutionId === previous.executionId && s.inputArtifactHash === previous.hash &&
+        s.artifact && s.artifactHash === artifactDigest(s.artifact) && verified(s));
       if (existing) {
+        log("stage.reused", existing, { actor: "studio", stage: existing.stage,
+          sourceExecutionId: existing.sourceExecutionId, artifactHash: existing.artifactHash });
         previous = { artifact: existing.artifact, hash: existing.artifactHash, role: existing.role, executionId: existing.executionId };
         continue;
       }
@@ -59,9 +74,21 @@ export async function runPlanningChain({ record, persist, log, invoke, verified 
       try {
         emit("stage.started");
         emit("handoff.offered", { actor: "studio", fromRole: previous.role, toRole: spec.role, artifactHash: previous.hash });
+        const recordRejected = (text, error) => {
+          const raw = typeof text === "string" ? text : "";
+          stage.validationIssues = error.validationIssues || ["invalid_json"];
+          (stage.rejectedAttempts ||= []).push({
+            at: new Date().toISOString(), validationIssues: stage.validationIssues,
+            output: raw.slice(0, 20000), outputHash: artifactDigest(raw),
+            truncated: raw.length > 20000
+          });
+          persist();
+          emit("artifact.rejected", { outcome: "error", errorKind: "invalid_artifact",
+            validationIssues: stage.validationIssues, resultChars: raw.length });
+        };
         const validator = text => {
           try { parsePlanningArtifact(text, previous.hash, contractHash, criteria); return true; }
-          catch { return false; }
+          catch (error) { recordRejected(text, error); return false; }
         };
         const result = await invoke({ spec, contract, contractHash, criteria, previous, stage, validator,
           observe(e) {
@@ -79,12 +106,15 @@ export async function runPlanningChain({ record, persist, log, invoke, verified 
           context(fields) { emit("context.prepared", { baseArtifactHash: previous.hash, ...fields }); }
         });
         if (!providerOk || !resultObserved) throw new Error("No observed provider response for this agent");
-        const artifact = parsePlanningArtifact(result.output, previous.hash, contractHash, criteria);
-        stage.artifact = artifact;
-        stage.artifactHash = artifactDigest(artifact);
         stage.reportedModel = result.reportedModel ?? null;
         stage.inputTokens = result.inputTokens ?? null;
         stage.outputTokens = result.outputTokens ?? null;
+        let artifact;
+        try { artifact = parsePlanningArtifact(result.output, previous.hash, contractHash, criteria); }
+        catch (error) { recordRejected(result.output, error); throw error; }
+        delete stage.validationIssues;
+        stage.artifact = artifact;
+        stage.artifactHash = artifactDigest(artifact);
         stage.completedAt = new Date().toISOString();
         stage.status = "completed";
         persist();

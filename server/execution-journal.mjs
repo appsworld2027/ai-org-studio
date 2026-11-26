@@ -8,7 +8,7 @@ const TYPES = new Set([
   "revision.saved", "run.started", "route.selected", "context.prepared",
   "model.request", "model.headers", "model.result", "tool.request",
   "tool.result", "artifact.rejected", "artifact.recovered", "artifact.saved", "handoff.offered", "handoff.acknowledged",
-  "run.completed", "run.failed", "run.interrupted", "coordination.requested", "coordination.started", "coordination.blocked", "coordination.completed", "coordination.failed", "stage.started", "stage.completed", "stage.failed", "stage.interrupted", "handoff.received"
+  "run.completed", "run.failed", "run.interrupted", "coordination.requested", "coordination.started", "coordination.blocked", "coordination.completed", "coordination.failed", "stage.started", "stage.reused", "stage.completed", "stage.failed", "stage.interrupted", "handoff.received"
 ]);
 const ROLES = new Set(["maya-ai-pm", "founder", "arjun-cpto", "quinn-qa", "dev-coder", "rex-reviewer", "studio"]);
 const TOOLS = new Set(["read_file", "list_files", "search", "write_file", "edit_file", "run_command", "ask_user", "other"]);
@@ -26,7 +26,7 @@ export function failureKind(error) {
   if (/^429\b/.test(message)) return "provider_rate_limit";
   if (/^(401|403)\b/.test(message)) return "provider_auth";
   if (/^[45]\d\d\b/.test(message)) return "provider_http";
-  if (/structured contract|missing required fields|invalid founder decision|structured planning artifact|Planning artifact lacks|final response/i.test(message)) return "invalid_artifact";
+  if (/structured contract|missing required fields|invalid founder decision|structured planning artifact|Planning artifact validation failed|Planning artifact lacks|final response/i.test(message)) return "invalid_artifact";
   return "execution_error";
 }
 
@@ -51,6 +51,11 @@ export function createExecutionJournal(dir) {
     if (FINISH.has(fields.finish)) event.finish = fields.finish;
     if (OUTCOMES.has(fields.outcome)) event.outcome = fields.outcome;
     if (ERRORS.has(fields.errorKind)) event.errorKind = fields.errorKind;
+    if (Array.isArray(fields.validationIssues)) {
+      const allowed = new Set(["invalid_json", "input_hash_mismatch", "contract_hash_mismatch",
+        "missing_summary", "invalid_deliverables", "invalid_risks", "coverage_count", "coverage_ids", "coverage_approach"]);
+      event.validationIssues = [...new Set(fields.validationIssues.filter(x => allowed.has(x)))];
+    }
     if (SHA.test(fields.artifactHash || "")) event.artifactHash = fields.artifactHash;
     if (SHA.test(fields.baseArtifactHash || "")) event.baseArtifactHash = fields.baseArtifactHash;
     for (const k of ["parentRevision", "baseRevision", "round", "toolIndex", "toolRequests", "httpStatus",

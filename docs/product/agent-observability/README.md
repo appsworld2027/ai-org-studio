@@ -89,3 +89,15 @@ covers metadata-only logging, read/blocked tools, durable revision state and
 matched acknowledgement, and the distinction between active workflow and
 verified receiving-agent receipt. Tests use stand-in model responses; a live
 preview test is still needed to prove provider connectivity and instrumentation.
+
+## Rejected planning responses and recovery
+
+Schema failures now record fixed validation labels (missing or mismatched
+hashes, missing fields, invalid JSON, wrong/missing criterion IDs or approaches).
+The private revision stores the bounded rejected model response, its digest and
+any truncation marker; never put raw artifacts into the metadata journal.
+A single reserved final round may repair an invalid response using the exact
+validation labels and the required output template. If that also fails, stop.
+Explicit coordination retry reuses only verified completed stages and logs
+`stage.reused`; it does not rerun discovery or completed planning work.
+Queued founder corrections never authorize unattended model execution.

@@ -312,12 +312,21 @@ export function createFounderPilot({
       source = snapshot(root, orgDir, chosen.role);
       const role = readFileSync(join(source, "org/agents", chosen.role + ".md"), "utf8");
       const excerpts = discoveryContext(source);
+      const template = {
+        inputArtifactHash: previous.hash, contractArtifactHash: contractHash,
+        summary: "REPLACE with a concise role-specific summary",
+        coverage: criteria.map(c => ({ criterionId: c.id, approach: "REPLACE with concrete scenario and expected result or implementation approach" })),
+        deliverables: ["REPLACE with actual deliverable"], risks: ["REPLACE with actual risk or gap"]
+      };
       const prompt = [
         "Exact source artifact SHA-256: " + previous.hash,
         "Exact accepted-decision draft contract SHA-256: " + contractHash,
         "Incoming artifact (read this exact JSON): " + JSON.stringify(previous.artifact),
         "Product contract (exact JSON): " + JSON.stringify(contract),
         "Stable local acceptance-criterion IDs and text: " + JSON.stringify(criteria),
+        "Required JSON shape with hashes and criterion IDs already filled in: " + JSON.stringify(template),
+        "COPY the exact field names, both hash values, and each criterionId from the template; replace only the placeholder text. Do not use the AC1/AC2 labels inside the contract as IDs. Keep each approach under 80 words. Include every criterion once.",
+        "Founder policy: saving feedback never starts a model. Queued feedback requires explicit supervised Run authorization after prior work finishes. Identify and test any conflict in the incoming plan. Include task isolation, double-click/idempotency and blocked or failed acceptance in negative cases.",
         "Selected committed implementation excerpts (not proof of execution): " + excerpts.text,
         spec.brief
       ].join("\n\n");
@@ -325,9 +334,16 @@ export function createFounderPilot({
       const messages = [{ role: "user", content: prompt }];
       await runner({
         messages, provider: { ...PROVIDERS.nvidia, id: "nvidia", key }, model, root: source,
-        maxRounds: 2, maxTokens: 1900, allowedTools: READ_TOOLS, auto: false, approve: async () => false,
-        signal: AbortSignal.timeout(180000), validateFinal: validator,
-        finalInstruction: "Return the complete role-specific planning JSON now. No further tools or code changes.",
+        maxRounds: 2, maxTokens: 2200, allowedTools: READ_TOOLS, auto: false, approve: async () => false,
+        signal: AbortSignal.timeout(180000),
+        validateFinal(text) {
+          const valid = validator(text);
+          if (!valid) messages.push({ role: "user", content:
+            "Repair your previous response. Validation failed: " + stage.validationIssues.join(", ") +
+            ". Use the exact JSON shape and IDs supplied in the original request. Return JSON only; do not repeat the error." });
+          return valid;
+        },
+        finalInstruction: "Return the complete role-specific planning JSON now. Keep exact hashes and IDs from the supplied template. No further tools or code changes.",
         systemPrompt: "You are " + agent.name + " (" + chosen.role + "), the actual AI Org role. " +
           "This explicitly supervised synthetic-data test is read-only and creates a DRAFT planning artifact. " +
           "The role profile below defines your expertise; ignore any operational instructions to edit, push, run tests or ship. " +
@@ -376,6 +392,8 @@ export function createFounderPilot({
     record.coordination.contractArtifactHash = digest;
     record.coordination.approvalState = record.status === "contract-accepted" ? "contract-accepted" : "draft-founder-review";
     delete record.coordination.error;
+    delete record.coordination.completedAt;
+    record.coordination.currentRole = null;
     active.add(PILOT_ID);
     try {
       save(revisions);
@@ -391,7 +409,8 @@ export function createFounderPilot({
     void runPlanningChain({
       record, invoke: invokePlanning, persist: () => save(revisions), log,
       verified(stage) {
-        const es = journal.read(100000).events.filter(e => e.executionId === stage.executionId && e.revision === record.revision);
+        const es = journal.read(100000).events.filter(e => e.executionId === stage.executionId &&
+          e.revision === record.revision && e.sourceExecutionId === stage.sourceExecutionId && e.actor === stage.role);
         return es.some(e => e.type === "stage.completed" && e.artifactHash === stage.artifactHash) &&
           es.some(e => e.type === "handoff.received" && e.artifactHash === stage.inputArtifactHash);
       }

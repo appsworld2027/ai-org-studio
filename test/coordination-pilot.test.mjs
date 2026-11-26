@@ -94,3 +94,36 @@ test("wrong digest or missing provider response stops the chain without a manufa
     assert.ok(!events.some(e=>["handoff.received","stage.completed"].includes(e.type)));
   }
 });
+
+test("recovery preserves failed evidence and reuses Arjun, retrying only Quinn",async()=>{
+  const record={contract,executionId:randomUUID(),coordination:{status:"running",stages:[]}};
+  const events=[], calls=[];
+  const opts = {record,persist(){},log:(type,stage,fields)=>events.push({type,executionId:stage.executionId,...fields}),
+    verified:s=>events.some(e=>e.type==="stage.completed" && e.executionId===s.executionId && e.artifactHash===s.artifactHash) &&
+      events.some(e=>e.type==="handoff.received" && e.executionId===s.executionId && e.artifactHash===s.inputArtifactHash)};
+  const model = async ({spec,previous,observe,route,validator}, fail=false) => {
+    calls.push(spec.role);
+    route("nvidia/nemotron-3-ultra-550b-a55b",spec.role);
+    observe({type:"model.headers",httpStatus:200});
+    observe({type:"model.result"});
+    const artifact=output(previous.hash,artifactDigest(contract));
+    if(fail && spec.role==="quinn-qa"){
+      artifact.coverage[1].criterionId="AC2";
+      assert.equal(validator(JSON.stringify(artifact)),false);
+    }
+    return {output:JSON.stringify(artifact)};
+  };
+  await runPlanningChain({...opts,invoke:args=>model(args,true)});
+  assert.equal(record.coordination.status,"failed");
+  const [arjun,failed]=record.coordination.stages;
+  assert.deepEqual(failed.validationIssues,["coverage_ids"]);
+  assert.ok(failed.rejectedAttempts[0].output.includes("AC2"));
+  assert.ok(events.some(e=>e.type==="artifact.rejected" && e.validationIssues.includes("coverage_ids")));
+  record.coordination.status="running";
+  await runPlanningChain({...opts,invoke:args=>model(args)});
+  assert.equal(record.coordination.status,"completed");
+  assert.deepEqual(calls,["arjun-cpto","quinn-qa","quinn-qa"]);
+  assert.equal(record.coordination.stages[1].status,"failed");
+  assert.equal(record.coordination.stages[2].sourceExecutionId,arjun.executionId);
+  assert.ok(events.some(e=>e.type==="stage.reused" && e.executionId===arjun.executionId));
+});
