@@ -14,6 +14,7 @@ import { WebSocketServer } from "ws";
 import pty from "node-pty";
 import { parseBacklog, buildBoard, feedFrom, appTarget, rosterFrom } from "./status.mjs";
 import { makeLedger, summarize } from "./usage.mjs";
+import { makeWorkerUsage } from "./worker-usage.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
 import { runTurn } from "./agent.mjs";
@@ -101,6 +102,7 @@ const readBody = (req, limit = 1 << 20) => new Promise((ok, fail) => { let d = "
 const run = (cmd, args, opts = {}) => new Promise((ok, fail) => execFile(cmd, args, { timeout: 120000, maxBuffer: 32 << 20, ...opts }, (e, out, err) => e ? fail(new Error((err || e.message).toString().trim().split("\n").slice(-1)[0])) : ok(out)));
 const gh = (args, timeout = 20000) => run(GH, args, { timeout });
 const ghJson = async (path) => JSON.parse(await gh(["api", path]) || "null");
+const workerUsage = makeWorkerUsage({ gh, ghJson });
 
 // ---------- products ----------
 const products = () => store.products.list();
@@ -423,7 +425,8 @@ const server = http.createServer(async (req, res) => {
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/usage$/)) && req.method === "GET") {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
       const days = Math.min(90, Math.max(1, Number(new URL(req.url, "http://x").searchParams.get("days")) || 7));
-      return json(res, 200, { days, ...summarize(ledger.entries(p.id), { since: Date.now() - days * 864e5 }) });
+      const { entries, ...workers } = await workerUsage(p);
+      return json(res, 200, { days, workers, ...summarize([...ledger.entries(p.id), ...entries], { since: Date.now() - days * 864e5 }) });
     }
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/team$/))) {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });

@@ -355,13 +355,16 @@
       const coverage = `${total.measuredTokenRecords} of ${total.turns} records have both token counts`;
       const headline = total.turns
         ? `Input ${fmt(total.input)} · output ${fmt(total.output)} · ${coverage}`
-        : "No Studio usage records in this period";
+        : "No usage records in this period";
       $("#founderUsage").textContent = headline;
-      $("#usageNote").textContent = `Last ${d.days} days · ${headline} · reported cost ${usd(total.cost)} (${total.measuredCostRecords}/${total.turns} records). ${d.note}`;
+      const workers = d.workers;
+      const workerCoverage = !workers.available ? "GitHub worker reports could not be checked."
+        : workers.attempted ? `Loaded ${workers.reports} of ${workers.attempted} recent NVIDIA worker reports.` : "No recent NVIDIA worker reports available.";
+      $("#usageNote").textContent = `Last ${d.days} days · ${headline} · reported cost ${usd(total.cost)} (${total.measuredCostRecords}/${total.turns} records). ${d.note} ${workerCoverage}`;
       const tokens = (r) => (r.input ?? 0) + (r.output ?? 0);
       const max = Math.max(1, ...d.rows.map(tokens));
       t.replaceChildren(...d.rows.map((r) => {
-        const source = { provider: "Provider reported", runtime: "Runtime reported", unverified: "Historical model, unverified", unknown: "Model identity unavailable" }[r.modelSource];
+        const source = { provider: "Provider reported", adapter: "Adapter reported", runtime: "Runtime reported", unverified: "Historical model, unverified", unknown: "Model identity unavailable" }[r.modelSource];
         const counter = (name, value) => el("div", {}, el("dt", { text: name }), el("dd", { text: value }));
         return el("article", { class: "usage-card" },
           el("strong", { text: r.model === "unknown" ? "Unknown model" : r.model }),
@@ -373,7 +376,7 @@
       $("#usageErr").textContent = "";
     } catch (e) {
       if (id !== product?.id) return;
-      $("#founderUsage").textContent = "Studio consumption could not load.";
+      $("#founderUsage").textContent = "Consumption could not load.";
       $("#usageErr").textContent = `Consumption could not load: ${e.message}`;
     }
   }
@@ -658,7 +661,7 @@
     pickEngine(engine);
     clearInterval(pollTimer); poll(); pollTimer = setInterval(poll, cfg.boardRefreshMs);
     $("#usage").replaceChildren(); $("#usageNote").textContent = ""; $("#usageErr").textContent = "";
-    $("#founderUsage").textContent = "Studio consumption is loading.";
+    $("#founderUsage").textContent = "Consumption is loading.";
     loadTeam(); loadUsage(); $("#changesDiff").hidden = true; loadChanges();
   }
   async function reloadConfig(selectId) {

@@ -34,5 +34,5 @@ export function summarize(entries, { since = 0 } = {}) {
     rows.set(k, r);
   }
   return { rows: [...rows.values()].sort((a, b) => (b.output ?? 0) + (b.input ?? 0) - ((a.output ?? 0) + (a.input ?? 0))), total,
-    note: "Studio records only. Reported cost is engine telemetry and may differ from billed spend. GitHub worker and external chat totals are unavailable here." };
+    note: "Includes Studio records and available recent NVIDIA worker reports for this product. Reported cost may differ from billed spend. External chat totals are unavailable." };
 }

@@ -454,6 +454,8 @@ try {
     const usage = await page.locator('.usage-card:has-text("test/served-model")').innerText();
     assert(/Provider reported/.test(usage) && /Requested test\/model-a/.test(usage), "reported and requested models are distinguishable");
     assert(/Cache\s+\d+/.test(usage) && /Reasoning\s+Unknown/.test(usage), "measured cache and absent reasoning are distinguishable");
+    const worker = await page.locator('.usage-card:has-text("fixture/worker-model")').innerText();
+    assert(/Maya/.test(worker) && /Adapter reported/.test(worker) && /Input\s+32/.test(worker), "worker usage is attributed to its agent and adapter model");
   });
   await check("ST-12", "GitHub down → clear message, rest keeps working; recovers", async () => {
     writeFileSync(failFlag, "1");
