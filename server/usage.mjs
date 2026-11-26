@@ -5,6 +5,7 @@ const num = (v) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 
 
 export function makeEntry(e = {}) {
   return { at: e.at || Date.now(), product: String(e.product || ""), engine: String(e.engine || "unknown"), model: String(e.model || "unknown"),
+    requestedModel: String(e.requestedModel || ""), modelSource: e.modelSource || "unverified", reasoning: num(e.reasoning),
     role: String(e.role || "Studio chat"), input: num(e.input), output: num(e.output), cache: num(e.cache), cost: num(e.cost), ms: num(e.ms) };
 }
 export function makeLedger(store, file = "usage.json") {
@@ -15,13 +16,23 @@ export function makeLedger(store, file = "usage.json") {
 }
 const add = (a, b) => (b == null ? a : (a ?? 0) + b);
 export function summarize(entries, { since = 0 } = {}) {
-  const rows = new Map(); const total = { turns: 0, input: null, output: null, cache: null, cost: null, unknownTurns: 0 };
+  const rows = new Map();
+  const empty = () => ({ turns: 0, input: null, output: null, cache: null, reasoning: null, cost: null, unknownTurns: 0, measuredTokenRecords: 0, measuredCostRecords: 0 });
+  const total = empty();
   for (const e of entries.filter((x) => x.at >= since)) {
-    const k = `${e.engine}|${e.model}|${e.role}`;
-    const r = rows.get(k) || { engine: e.engine, model: e.model, role: e.role, turns: 0, input: null, output: null, cache: null, cost: null, unknownTurns: 0 };
-    for (const t of [r, total]) { t.turns++; t.input = add(t.input, e.input); t.output = add(t.output, e.output); t.cache = add(t.cache, e.cache); t.cost = add(t.cost, e.cost); if (e.input == null && e.output == null) t.unknownTurns++; }
+    const modelSource = e.modelSource || "unverified";
+    const requestedModel = e.requestedModel || "";
+    const k = JSON.stringify([e.engine, e.model, e.role, modelSource, requestedModel]);
+    const r = rows.get(k) || { engine: e.engine, model: e.model, role: e.role, modelSource, requestedModel, ...empty() };
+    for (const t of [r, total]) {
+      t.turns++;
+      for (const field of ["input", "output", "cache", "reasoning", "cost"]) t[field] = add(t[field], e[field]);
+      if (e.input == null && e.output == null) t.unknownTurns++;
+      if (e.input != null && e.output != null) t.measuredTokenRecords++;
+      if (e.cost != null) t.measuredCostRecords++;
+    }
     rows.set(k, r);
   }
   return { rows: [...rows.values()].sort((a, b) => (b.output ?? 0) + (b.input ?? 0) - ((a.output ?? 0) + (a.input ?? 0))), total,
-    note: "Measured from what each engine reported. Unknown means the engine did not report it; claude.ai and ChatGPT plan usage is not billed per token, so cost is shown only when the engine reports it." };
+    note: "Includes Studio records and available recent NVIDIA worker reports for this product. Reported cost may differ from billed spend. External chat totals are unavailable." };
 }

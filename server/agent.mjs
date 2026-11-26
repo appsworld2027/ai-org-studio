@@ -112,7 +112,7 @@ export async function readStream(body, onText) {
       let j; try { j = JSON.parse(data); } catch { continue; }
       if (typeof j.model === "string" && j.model) reportedModel = reportedModel && reportedModel !== j.model ? "multiple" : j.model;
       const counts=j.usage||j.x_groq?.usage;
-      if (counts) usage = { input: counts.prompt_tokens, output: counts.completion_tokens };
+      if (counts) usage = { input: counts.prompt_tokens, output: counts.completion_tokens, ...(counts.prompt_tokens_details?.cached_tokens != null ? {cache: counts.prompt_tokens_details.cached_tokens} : {}), ...(counts.completion_tokens_details?.reasoning_tokens != null ? {reasoning: counts.completion_tokens_details.reasoning_tokens} : {}) };
       const ch = j.choices?.[0]; if (!ch) continue;
       const d = ch.delta || ch.message || {};
       if (d.content) { text += d.content; onText?.(d.content); }
@@ -148,6 +148,7 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
   const appSchemas = apps.map((a) => ({ type: "function", function: { name: a.name, description: `[${a.app}] ${a.description}`, parameters: a.schema?.type === "object" ? a.schema : { type: "object", properties: {} } } }));
   let extra = effortFields(provider.id, effort);
   const routeFields = freeOnly ? freeRequestFields(provider.id, model) : {};
+  let requestUsage = ["openai", "openrouter", "nvidia"].includes(provider.id);
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) return emit({ t: "stopped" });
     // Reserve the last request for an actual answer when the caller opts in.
@@ -167,18 +168,27 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
       const response = await fetchImpl(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,
       headers: { "Content-Type": "application/json", ...(provider.key ? { Authorization: `Bearer ${provider.key}` } : {}), ...(provider.extraHeaders || {}) },
-      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...roundMessages], ...(roundTools.length ? { tools: roundTools, tool_choice: "auto" } : {}), ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra, ...generationFields, ...routeFields, ...(maxTokens ? {[freeOnly&&provider.id==="groq"?"max_completion_tokens":"max_tokens"]:maxTokens} : {}) }),
+      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...roundMessages], ...(roundTools.length ? { tools: roundTools, tool_choice: "auto" } : {}), ...(requestUsage ? { stream_options: { include_usage: true } } : {}), ...extra, ...generationFields, ...routeFields, ...(maxTokens ? {[freeOnly&&provider.id==="groq"?"max_completion_tokens":"max_tokens"]:maxTokens} : {}) }),
     });
       observe?.({ type: "model.headers", round: round + 1, phase, httpStatus: response.status,
         durationMs: Date.now() - started });
       return response;
     };
     let res = await call();
-    // Some models refuse a thinking level they do not support: retry once without it and say so.
-    if (!res.ok && res.status === 400 && Object.keys(extra).length) {
-      const body = (await res.text()).slice(0, 300);
-      if (/reason|effort|think/i.test(body)) { extra = {}; emit({ t: "note", message: `This model does not take a thinking level; continuing without “${effort}”.` }); res = await call(); }
-      else res = { ok: false, status: 400, text: async () => body };
+    // Compatibility retries apply only to rejected requests, before a reply is streamed.
+    while (!res.ok && [400, 422].includes(res.status) && (requestUsage || Object.keys(extra).length)) {
+      const { status } = res;
+      const body = (await res.text()).slice(0, 400);
+      if (requestUsage && /stream_options|include_usage/i.test(body)) {
+        requestUsage = false;
+      } else if (status === 400 && Object.keys(extra).length && /reason|effort|think/i.test(body)) {
+        extra = {};
+        emit({ t: "note", message: `This model does not take a thinking level; continuing without “${effort}”.` });
+      } else {
+        res = { ok: false, status, text: async () => body };
+        break;
+      }
+      res = await call();
     }
     if (!res.ok) {
       const body = (await res.text()).slice(0, 400);
@@ -189,7 +199,7 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
     const { text, calls, usage, finish, reportedModel, reasoningChars } = await readStream(res.body, (d) => emit({ t: "delta", d }));
     observe?.({ type: "model.result", round: round + 1, phase, durationMs: Date.now() - started,
       toolRequests: calls.length, finish, reportedModel, inputTokens: usage?.input, outputTokens: usage?.output, responseChars: text.length, reasoningChars });
-    emit({ t: "usage", models: [{ model, input: usage?.input, output: usage?.output }] });
+    emit({ t: "usage", models: [{ model: reportedModel || model, requestedModel: model, ...usage }] });
     messages.push({ role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args || "{}" } })) } : {}) });
     if (!calls.length) {
       // A text-only tool request or malformed artifact is not a successful

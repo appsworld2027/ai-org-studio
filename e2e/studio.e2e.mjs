@@ -49,7 +49,8 @@ const model = http.createServer((req, res) => {
       : toolsSeen === 1 ? [{ tool_calls: [{ index: 0, id: "t2", function: { name: "write_file", arguments: '{"path":"docs/idea.md","content":"# Idea\\nDark mode"}' } }] }]
       : [{ content: "I read the README" }, { content: " and saved **docs/idea.md**. <img src=x onerror=alert(1)>" }];
     res.writeHead(200, { "Content-Type": "text/event-stream" });
-    for (const d of chunks) res.write(`data: ${JSON.stringify({ choices: [{ delta: d }] })}\n\n`);
+    for (const d of chunks) res.write(`data: ${JSON.stringify({ model: "test/served-model", choices: [{ delta: d }] })}\n\n`);
+    res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 23, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 5 } } })}\n\n`);
     res.end("data: [DONE]\n\n");
   });
 }).listen(modelPort, "127.0.0.1");
@@ -440,7 +441,7 @@ try {
     for (let i = 0; i < 40 && !JSON.parse(readFileSync(join(home, "team.json")))["parent-plus"]?.overrides?.["maya-ai-pm"]; i++) await page.waitForTimeout(150);
     const saved = JSON.parse(readFileSync(join(home, "team.json"))); assert(saved["parent-plus"].overrides["maya-ai-pm"] === "free:mistral", "override saved");
   });
-  await check("ST-10", "Founder dashboard shows the live board from GitHub", async () => {
+  await check("ST-10", "Agents tab shows the live board from GitHub", async () => {
     await page.click("#tab-agents");
     await page.waitForSelector("#tracks .trk:not(.head)", { timeout: 8000 });
     const rows = await page.$$eval("#tracks .trk:not(.head) .name", (n) => n.map((x) => x.innerText));
@@ -449,6 +450,12 @@ try {
     assert((await page.$$("#tracks .st.agent")).length >= 1, "animated 'agent working' cell");
     assert((await page.$$("#feed a")).length >= 3, "feed");
     assert(await page.isHidden("#noAiOrg"), "AI Org detected");
+    const modelCard = page.locator('.usage-card:has-text("test/served-model")').filter({ hasText: "Requested test/model-a" });
+    const usage = await modelCard.innerText();
+    assert(/Provider reported/.test(usage) && /Requested test\/model-a/.test(usage), "reported and requested models are distinguishable");
+    assert(/Cache\s+\d+/.test(usage) && /Reasoning\s+Unknown/.test(usage), "measured cache and absent reasoning are distinguishable");
+    const worker = await page.locator('.usage-card:has-text("fixture/worker-model")').innerText();
+    assert(/Maya/.test(worker) && /Adapter reported/.test(worker) && /Input\s+32/.test(worker), "worker usage is attributed to its agent and adapter model");
   });
   await check("ST-12", "GitHub down → clear message, rest keeps working; recovers", async () => {
     writeFileSync(failFlag, "1");
