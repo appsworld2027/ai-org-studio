@@ -422,7 +422,7 @@
   async function loadGarage() {
     const d = await api(`/api/products/${product.id}/garage`).catch(() => ({ ready: false, files: [] }));
     $("#garageEmpty").hidden = d.ready; $("#garageList").hidden = !d.ready || !d.files.length;
-    $("#garageStatus").textContent = d.ready ? `${d.files.length} file${d.files.length === 1 ? "" : "s"} · private repo ${d.repo || "studio-garage"} / ${d.folder} · saved to GitHub after every AI reply` : "";
+    $("#garageStatus").textContent = d.ready ? `${d.files.length} file${d.files.length === 1 ? "" : "s"} · ${d.repo || "studio-garage"} / ${d.folder} · GitHub sync requires verified private visibility` : "";
     $("#garageList").replaceChildren(...d.files.map((f) => { const b = el("button", { type: "button", class: "chfile", "data-path": f.path }, el("span", { class: `chs ${f.path === "MEMORY.md" ? "new" : ""}`, text: f.path.split("/")[0].replace(/\.md$/, "") === f.path ? "file" : f.path.split("/")[0] }), el("span", { class: "chp", text: f.path }), el("span", { class: "chnum muted", text: f.modified.slice(0, 10) }));
       b.onclick = () => showGarageFile(f.path); return b; }));
   }
