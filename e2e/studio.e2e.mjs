@@ -123,7 +123,7 @@ try {
     await page.waitForSelector(".eng[data-eng=claude]");
     assert((await page.$eval("#productPick", (s) => s.selectedOptions[0].textContent)) === "Parent Plus", "product shown");
     for (const n of ["Claude Code", "Codex", "Other models"]) assert(await page.isVisible(`.eng:has-text("${n}")`), `engine ${n}`);
-    for (const t of ["Real app", "Prototype", "Founder dashboard", "Changes"]) assert(await page.isVisible(`.rtab:has-text("${t}")`), `tab ${t}`);
+    for (const t of ["Real app", "Prototype", "Agents", "Changes"]) assert(await page.isVisible(`.rtab:has-text("${t}")`), `tab ${t}`);
     assert(cookie && cookie.httpOnly && cookie.sameSite === "Strict", "HttpOnly SameSite=Strict cookie");
     assert(!page.url().includes("k="), "key removed from the address bar");
   });
