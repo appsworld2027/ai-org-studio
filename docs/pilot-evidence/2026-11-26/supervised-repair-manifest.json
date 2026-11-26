@@ -1,0 +1,13 @@
+{
+  "authorship": "ChatGPT-supervised deterministic correction",
+  "beforeHash": "41ca7311b4488e7efafaf6f7296f089afd6ff036e0e8d5a3cd9834dfd816bdbb",
+  "afterHash": "02b32fc71804268364115b55a682b4224add46923417c289ca21291ebdbf8ae1",
+  "contractHash": "a27d7a4498313f13acdcc0b9bb3daee71891da37338906eb5c78581d94e089a1",
+  "lockedTestHash": "666b870f7eb1a64080e8ef4952c304451f7e22f4a48fc8d3a3175b53e24e69ba",
+  "modelCalls": 0,
+  "repairs": [
+    "BUILD-10",
+    "BUILD-11"
+  ],
+  "sourceRun": "repaired-delivery-20261126-172729"
+}

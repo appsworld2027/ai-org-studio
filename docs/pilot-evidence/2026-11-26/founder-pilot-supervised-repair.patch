@@ -1,0 +1,41 @@
+diff --git a/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-164028/candidate/server/founder-pilot.mjs b/tmp/founder-suite-revision-20261126/candidate/server/founder-pilot.mjs
+index bc7a21f..81019f5 100644
+--- a/home/ankit_mittal_mds02/studio-integration-preview/delivery-r2-20261126-164028/candidate/server/founder-pilot.mjs
++++ b/tmp/founder-suite-revision-20261126/candidate/server/founder-pilot.mjs
+@@ -136,18 +136,23 @@ export function createFounderPilot({ dir, inbox, orgDir, keyFile, root = ROOT, r
+       if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{8,100}$/.test(id)) {
+         throw new Error("Invalid id");
+       }
+-      const worker = workers.get(id);
++      if (!inbox.list().some(t => t.requestId === id)) throw new Error("requestId not found in inbox");
++      let worker = workers.get(id);
+       if (!worker) {
+-        throw new Error("No such worker");
++        worker = createTaskPilot({ dir, inbox, orgDir, keyFile, root, runner }, id);
++        workers.set(id, worker);
+       }
+       return structuredClone(worker.history(id));
+     },
+ 
+     // Synchronous evidence filtered by requestId
+     evidence(id = PILOT_ID) {
+-      const worker = workers.get(id);
++      if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{8,100}$/.test(id) ||
++          !inbox.list().some(t => t.requestId === id)) throw new Error("Invalid requestId");
++      let worker = workers.get(id);
+       if (!worker) {
+-        throw new Error("No such worker");
++        worker = createTaskPilot({ dir, inbox, orgDir, keyFile, root, runner }, id);
++        workers.set(id, worker);
+       }
+       const all = worker.evidence();
+       const events = all.events.filter(e => e.requestId === id);
+@@ -180,6 +185,8 @@ function createTaskPilot(config, taskId) {
+     });
+   function history(id) {
+     if (id !== PILOT_ID) throw new Error("Outside pilot scope");
++    // Active execution and queued saves must share this same array instance.
++    if (active.has(id)) return sharedRevisions;
+     if (!existsSync(file)) {
+       sharedRevisions = [];
+       return [];

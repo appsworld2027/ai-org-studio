@@ -31,3 +31,17 @@ test("Claude result message yields per-model usage", () => {
   const u = out.find((e) => e.t === "usage");
   assert.deepEqual(u.models, [{ model: "claude-opus", input: 10, output: 5, cache: 3, cost: 0.1 }]);
 });
+
+
+test("model provenance and metric coverage survive aggregation of historical and partial records", () => {
+  const s = summarize([
+    makeEntry({ engine: "other", model: "served", requestedModel: "alias", modelSource: "provider", input: 12, output: 0, reasoning: 0 }),
+    makeEntry({ engine: "other", model: "served", input: 4 }),
+    makeEntry({ engine: "other", requestedModel: "alias", modelSource: "unknown", output: 5 }),
+  ]);
+  assert.equal(s.rows.length, 3);
+  assert.equal(s.total.measuredTokenRecords, 1);
+  assert.equal(s.total.measuredCostRecords, 0);
+  assert.equal(s.total.reasoning, 0);
+  assert.equal(s.rows.find((row) => row.modelSource === "unknown").model, "unknown");
+});

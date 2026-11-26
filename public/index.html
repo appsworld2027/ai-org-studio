@@ -122,6 +122,7 @@
     <div class="rtabs" role="tablist" aria-label="Right panel">
       <button class="rtab" role="tab" id="tab-app" aria-controls="pane-app" data-pane="app">Real app</button>
       <button class="rtab" role="tab" id="tab-proto" aria-controls="pane-proto" data-pane="proto">Prototype</button>
+      <button class="rtab" role="tab" id="tab-feedback" aria-controls="pane-feedback" data-pane="feedback">Feedback <span class="badge" id="feedbackBadge" hidden></span></button>
       <button class="rtab" role="tab" id="tab-agents" aria-controls="pane-agents" data-pane="agents">Agents <span class="badge" id="workingBadge" hidden></span></button>
       <button class="rtab" role="tab" id="tab-changes" aria-controls="pane-changes" data-pane="changes">Changes <span class="badge" id="changesBadge" hidden></span></button>
       <button class="rtab" role="tab" id="tab-garage" aria-controls="pane-garage" data-pane="garage">Garage</button>
@@ -153,12 +154,65 @@
       </div>
     </div>
 
+    <div class="pane feedback" id="pane-feedback" role="tabpanel" aria-labelledby="tab-feedback">
+      <div class="statusline" id="feedbackStatus" role="status"></div>
+
+      <!-- Inbox: features waiting for founder review -->
+      <section id="feedbackInbox" hidden>
+        <h3>Waiting for your review</h3>
+        <div class="feedback-list" id="feedbackInboxList"></div>
+        <div class="empty left-align" id="feedbackInboxEmpty" hidden>
+          <h3>Nothing waiting for review</h3>
+          <p>When a feature is delivered (labeled <code>ai:delivery</code>), it appears here with a preview link and QA evidence.</p>
+        </div>
+      </section>
+
+      <!-- Deliveries: all delivered features with status -->
+      <section id="feedbackDeliveries" hidden>
+        <h3>All deliveries</h3>
+        <div class="feedback-list" id="feedbackDeliveriesList"></div>
+        <div class="empty left-align" id="feedbackDeliveriesEmpty" hidden>
+          <h3>No deliveries yet</h3>
+          <p>Features delivered by the AI Org will appear here.</p>
+        </div>
+      </section>
+
+      <!-- Fixes: correction work in progress -->
+      <section id="feedbackFixes" hidden>
+        <h3>Corrections in progress</h3>
+        <div class="feedback-list" id="feedbackFixesList"></div>
+        <div class="empty left-align" id="feedbackFixesEmpty" hidden>
+          <h3>No corrections in progress</h3>
+          <p>When you request changes, the AI Org creates a fix task. Track it here.</p>
+        </div>
+      </section>
+
+      <!-- Conflicts: contradictory feedback detection -->
+      <section id="feedbackConflicts" hidden>
+        <h3>Conflicting feedback detected</h3>
+        <div class="feedback-list" id="feedbackConflictsList"></div>
+      </section>
+
+      <!-- Usage: model consumption -->
+      <section id="feedbackUsage" hidden>
+        <h3>Model usage (feedback workflow)</h3>
+        <div class="tracks team" id="feedbackUsageTable"></div>
+        <p class="small muted" id="feedbackUsageNote"></p>
+      </section>
+
+      <!-- Detail view (shown when clicking a delivery/fix) -->
+      <div class="feedback-detail" id="feedbackDetail" hidden>
+        <button class="ghost small" id="feedbackDetailBack">← Back</button>
+        <div id="feedbackDetailContent"></div>
+      </div>
+    </div>
+
     <div class="pane garage" id="pane-garage" role="tabpanel" aria-labelledby="tab-garage">
       <div class="statusline" id="garageStatus" role="status"></div>
       <div class="glayout"><div class="chlist" id="garageList"></div><div class="chdiff" id="garageView" hidden></div></div>
       <div class="empty left-align" id="garageEmpty" hidden>
         <h3>The Garage is not set up yet</h3>
-        <p>The Garage is a private GitHub repository where every AI saves notes, research, plans, reports, mockups and screenshots, plus the shared memory that every AI reads before it starts. The next Studio update script creates it for you.</p>
+        <p>The Garage is where each AI saves notes, research, plans, reports, mockups and screenshots, plus the shared memory that every AI reads before it starts. The next Studio update script creates it for you.</p>
       </div>
     </div>
 
@@ -179,7 +233,7 @@
         <p>The board fills in once the product uses the AI Org loop (a backlog file and <code>ai:</code> labels). Ask the AI on the left: “Set this product up with the AI Org.”</p>
       </div>
       <section class="founder-brief" aria-labelledby="hOverview">
-        <h3 id="hOverview">Daily Founder Brief</h3>
+        <h3 id="hOverview">Founder dashboard</h3>
         <div class="founder-attention">
           <span>Founder attention required</span>
           <strong id="founderDecisions">Unavailable</strong>
@@ -193,8 +247,8 @@
         </details>
         <details>
           <summary>Resource and session evidence</summary>
-          <p>Actual model, reasoning effort, token usage, quota, spend and session health are unavailable from the GitHub board.</p>
-          <p>Open Garage for shared memory and Team for proposed model assignments.</p>
+          <p id="founderUsage">Consumption is loading.</p>
+          <p>Open Garage for handovers or <a href="https://github.com/appsworld2027/parent-plus-ai-org/blob/main/standards/FOUNDER_RESPONSE.md" target="_blank" rel="noopener">open the shared founder response standard</a> for an external AI session.</p>
         </details>
       </section>
       <section aria-labelledby="hWorking">
@@ -215,9 +269,9 @@
         <div class="legend"><span><i class="k-done"></i>done</span><span><i class="k-agent"></i>an agent is working</span><span><i class="k-founder"></i>waiting for you</span><span><i class="k-loop"></i>automatic checks</span><span><i class="k-blocked"></i>blocked</span><span><i class="k-none"></i>not started</span></div>
       </section>
       <section aria-labelledby="hUsage">
-        <h3 id="hUsage">Agent consumption (measured, by model)</h3>
+        <h3 id="hUsage">Agent and model consumption</h3>
         <p class="small muted" id="usageNote"></p>
-        <div class="tracks team" id="usage" role="table" aria-label="Usage by model"></div>
+        <div class="usage-cards" id="usage" aria-label="Usage by model"></div>
         <p class="small err" id="usageErr"></p>
       </section>
       <section aria-labelledby="hTeam">
@@ -303,5 +357,6 @@
 <script src="/chat.js"></script>
 <script src="/echat.js"></script>
 <script src="/app.js"></script>
+<script src="/founder-inbox.js" defer></script>
 </body>
 </html>

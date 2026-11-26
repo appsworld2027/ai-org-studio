@@ -343,16 +343,43 @@
   // ---------- consumption: measured tokens by model (unknown stays "Unknown") ----------
   const fmt = (n) => (n == null ? "Unknown" : n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
   async function loadUsage() {
-    const t = $("#usage"); if (!t) return;
+    const t = $("#usage");
+    const id = product?.id;
+    if (!t || !id) return;
     try {
-      const d = await api(`/api/products/${product.id}/usage?days=7`);
-      $("#usageNote").textContent = `Last ${d.days} days · ${d.total.turns} turns · input ${fmt(d.total.input)} · output ${fmt(d.total.output)} · cost ${d.total.cost == null ? "Unknown" : "$" + d.total.cost.toFixed(2)}. ${d.note}`;
-      t.replaceChildren(el("div", { class: "trk head", role: "row" }, ...["Model", "Used by", "Turns", "Input / Output", "Cost"].map((h) => el("div", { role: "columnheader", text: h }))));
-      for (const r of d.rows) t.append(el("div", { class: "trk", role: "row" }, el("div", { role: "rowheader" }, el("b", { text: r.model }), el("br"), el("small", { text: r.engine })), el("div", { role: "cell", text: r.role }),
-        el("div", { role: "cell", text: String(r.turns) }), el("div", { role: "cell", text: `${fmt(r.input)} / ${fmt(r.output)}` }), el("div", { role: "cell", text: r.cost == null ? "Unknown" : "$" + r.cost.toFixed(2) })));
-      if (!d.rows.length) t.append(el("div", { class: "trk", role: "row" }, el("div", { role: "cell", text: "No usage recorded yet. It appears after your next chat turn." })));
+      const d = await api(`/api/products/${id}/usage?days=7`);
+      if (id !== product?.id) return;
+      const { total } = d;
+      const usd = (n) => n == null ? "Unknown" : new Intl.NumberFormat(undefined, {
+        style: "currency", currency: "USD", maximumFractionDigits: 6,
+      }).format(n);
+      const coverage = `${total.measuredTokenRecords} of ${total.turns} records have both token counts`;
+      const headline = total.turns
+        ? `Input ${fmt(total.input)} · output ${fmt(total.output)} · ${coverage}`
+        : "No usage records in this period";
+      $("#founderUsage").textContent = headline;
+      const workers = d.workers;
+      const workerCoverage = !workers.available ? "GitHub worker reports could not be checked."
+        : workers.attempted ? `Loaded ${workers.reports} of ${workers.attempted} recent NVIDIA worker reports.` : "No recent NVIDIA worker reports available.";
+      $("#usageNote").textContent = `Last ${d.days} days · ${headline} · reported cost ${usd(total.cost)} (${total.measuredCostRecords}/${total.turns} records). ${d.note} ${workerCoverage}`;
+      const tokens = (r) => (r.input ?? 0) + (r.output ?? 0);
+      const max = Math.max(1, ...d.rows.map(tokens));
+      t.replaceChildren(...d.rows.map((r) => {
+        const source = { provider: "Provider reported", adapter: "Adapter reported", runtime: "Runtime reported", unverified: "Historical model, unverified", unknown: "Model identity unavailable" }[r.modelSource];
+        const counter = (name, value) => el("div", {}, el("dt", { text: name }), el("dd", { text: value }));
+        return el("article", { class: "usage-card" },
+          el("strong", { text: r.model === "unknown" ? "Unknown model" : r.model }),
+          el("small", { text: `${r.role} · ${r.engine} · ${source}${r.requestedModel && r.requestedModel !== r.model ? ` · Requested ${r.requestedModel}` : ""}` }),
+          ...(r.input != null || r.output != null ? [el("meter", { min: "0", max: String(max), value: String(tokens(r)), "aria-label": "Reported input and output tokens relative to the highest row" })] : []),
+          el("dl", {}, counter("Input", fmt(r.input)), counter("Output", fmt(r.output)), counter("Cache", fmt(r.cache)),
+            counter("Reasoning", fmt(r.reasoning)), counter("Reported cost", usd(r.cost)), counter("Token coverage", `${r.measuredTokenRecords}/${r.turns} records`)));
+      }));
       $("#usageErr").textContent = "";
-    } catch (e) { $("#usageErr").textContent = `Consumption could not load: ${e.message}`; }
+    } catch (e) {
+      if (id !== product?.id) return;
+      $("#founderUsage").textContent = "Consumption could not load.";
+      $("#usageErr").textContent = `Consumption could not load: ${e.message}`;
+    }
   }
 
   // ---------- team: which AI each agent uses ----------
@@ -414,7 +441,7 @@
 
   // ---------- right tabs ----------
   let tab = store.get("studio.tab", "");
-  const TABS = ["app", "proto", "agents", "changes", "garage"];
+  const TABS = ["app", "proto", "feedback", "agents", "changes", "garage"];
   // Pop out: the app in its own Chrome window (a named window, reused), so F12 DevTools shows only the app.
   $("#openTab").addEventListener("click", (e) => { if (!["app", "proto"].includes(tab)) return; e.preventDefault(); window.open($("#openTab").href, "studio-app", "popup,width=430,height=900"); });
   $("#btnReload").onclick = () => { const f = tab === "proto" ? $("#protoFrame") : $("#appFrame"); const s = f.getAttribute("src"); if (s) { f.src = "about:blank"; setTimeout(() => (f.src = s), 50); } };
@@ -422,7 +449,7 @@
   async function loadGarage() {
     const d = await api(`/api/products/${product.id}/garage`).catch(() => ({ ready: false, files: [] }));
     $("#garageEmpty").hidden = d.ready; $("#garageList").hidden = !d.ready || !d.files.length;
-    $("#garageStatus").textContent = d.ready ? `${d.files.length} file${d.files.length === 1 ? "" : "s"} · private repo ${d.repo || "studio-garage"} / ${d.folder} · saved to GitHub after every AI reply` : "";
+    $("#garageStatus").textContent = d.ready ? `${d.files.length} file${d.files.length === 1 ? "" : "s"} · ${d.repo || "studio-garage"} / ${d.folder} · GitHub sync requires verified private visibility` : "";
     $("#garageList").replaceChildren(...d.files.map((f) => { const b = el("button", { type: "button", class: "chfile", "data-path": f.path }, el("span", { class: `chs ${f.path === "MEMORY.md" ? "new" : ""}`, text: f.path.split("/")[0].replace(/\.md$/, "") === f.path ? "file" : f.path.split("/")[0] }), el("span", { class: "chp", text: f.path }), el("span", { class: "chnum muted", text: f.modified.slice(0, 10) }));
       b.onclick = () => showGarageFile(f.path); return b; }));
   }
@@ -503,7 +530,8 @@
     for (const t of TABS) { $(`#tab-${t}`).setAttribute("aria-selected", String(t === p)); $(`#pane-${t}`).classList.toggle("show", t === p); }
     if (p === "changes") loadChanges();
     if (p === "garage") loadGarage();
-    const href = p === "app" ? lastAppUrl : p === "proto" ? $("#protoFrame").getAttribute("src") : ["changes", "garage"].includes(p) ? "" : `https://github.com/${product.repo}/issues?q=is%3Aopen+label%3Aai%3A*`;
+    if (p === "feedback") loadFeedback();
+    const href = p === "app" ? lastAppUrl : p === "proto" ? $("#protoFrame").getAttribute("src") : ["changes", "garage", "feedback"].includes(p) ? "" : `https://github.com/${product.repo}/issues?q=is%3Aopen+label%3Aai%3A*`;
     $("#openTab").hidden = !href; if (href) $("#openTab").href = href;
     $("#openTab").textContent = p === "agents" ? "Open on GitHub" : "Pop out";
     $("#btnAppLink").hidden = p !== "app";
@@ -548,7 +576,7 @@
   $("#btnRescan").onclick = async () => { await api(`/api/products/${product.id}`, { method: "PATCH", body: JSON.stringify({ rescan: true }) }); await reloadConfig(product.id); };
 
   // ---------- agents board ----------
-  const KIND = { agent: "an agent is working", founder: "waiting for you", loop: "automatic checks", blocked: "blocked", done: "done", queued: "not started" };
+  const KIND = { agent: "assigned (execution unverified)", founder: "waiting for you", loop: "automatic checks", blocked: "blocked", done: "done", queued: "not started" };
   const initials = (who) => /^(An?|The)\b|AI Org|loop/i.test(who) ? "AI" : /^QA/.test(who) ? "QA" : who.charAt(0).toUpperCase();
   const ago = (iso) => { const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 1 ? "now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(iso).toLocaleDateString(); };
   function renderBoard(b) {
@@ -570,21 +598,41 @@
     const ro = $("#roster"); if (ro) {
       ro.replaceChildren(el("div", { class: "trk head", role: "row" }, ...["Agent", "Status", "Feature", "Tool", "Last action"].map((h) => el("div", { role: "columnheader", text: h }))));
       for (const a of b.roster || []) ro.append(el("div", { class: "trk", role: "row" }, el("div", { role: "rowheader" }, el("b", { text: a.name }), el("br"), el("small", { text: a.role })),
-        el("div", { role: "cell", text: a.state === "working" ? `Working · ${a.minutes} min` : a.state === "assigned" ? "Assigned, starting" : "Idle" }),
+        el("div", { role: "cell", text: a.state === "working" ? `Workflow linked · ${a.minutes} min (role unverified)` : a.state === "assigned" ? "Assigned, run not verified" : "No assigned work" }),
         el("div", { role: "cell", text: a.feature || "—" }), el("div", { role: "cell", text: a.tool || (a.state === "idle" ? "—" : "Unknown") }),
         el("div", { role: "cell" }, a.last ? el("a", { href: a.last.url, target: "_blank", rel: "noopener", text: `${ago(a.last.at)} · ${a.last.via} · ${a.last.text}` }) : el("small", { text: "No recent action" }))));
     }
     const run = $("#running"); run.replaceChildren();
     if (b.idleChecks) run.append(el("div", { class: "idle", text: `Hourly check ran ${b.idleChecks} time(s) with nothing to do.` }));
-    if (!b.working.length) run.append(el("div", { class: "idle", text: b.next ? `No agents working. Next on the backlog: ${b.next.title}.` : "No agents working right now." }));
+    if (!b.working.length) run.append(el("div", { class: "idle", text: b.next ? `No active workflow matched. Next on the backlog: ${b.next.title}.` : "No active workflow matched in this snapshot." }));
     for (const w of b.working) {
       const cls = /QA lab/.test(w.who) ? "av qa" : /loop/i.test(w.who) ? "av loop" : "av";
       run.append(el("a", { class: "runner", href: w.url, target: "_blank", rel: "noopener" }, el("span", { class: cls, text: initials(w.who) }),
-        el("span", {}, el("b", { text: w.who }), el("small", { text: `${w.what} · ${w.minutes} min · on ${w.tool || "Unknown"}` }))));
+        el("span", {}, el("b", { text: w.who + " (workflow attribution)" }), el("small", { text: `${w.what} · ${w.minutes} min · on ${w.tool || "Unknown"}` }))));
     }
     for (const s of b.sessions || []) run.append(el("div", { class: "runner" }, el("span", { class: "av", text: "ST" }), el("span", {}, el("b", { text: s.busy ? "Studio chat (working)" : "Studio chat (open)" }), el("small", { text: `${s.title} · on ${s.tool} · ${s.model}` }))));
-    const rec = $("#recentRuns"); if (rec) rec.replaceChildren(...(b.recent || []).map((r) => el("li", {}, el("a", { href: r.url, target: "_blank", rel: "noopener", text: `${r.title} · ${r.conclusion || "?"} · on ${r.tool}` }))));
-    const badge = $("#workingBadge"); badge.hidden = !b.working.length; badge.textContent = `${b.working.length} working`;
+    const rec = $("#recentRuns");
+    if (rec) {
+      rec.replaceChildren();
+      rec.append(el("li", { text: "Execution evidence from GitHub workflow jobs. Stage labels and workflow titles are assignments, not proof of agent execution or completed handoffs." }));
+      if (!(b.workflowEvidence || []).length) rec.append(el("li", { text: "No relevant workflow evidence available in this snapshot." }));
+      for (const r of b.workflowEvidence || []) {
+        const detail = el("details", {}, el("summary", { text: r.title + " · " + r.status + (r.conclusion ? " · " + r.conclusion : "") }),
+          el("a", { href: r.url, target: "_blank", rel: "noopener", text: "Open run #" + r.runId + (r.attempt ? " attempt " + r.attempt : "") }),
+          el("p", { text: (r.commit ? "Commit " + r.commit.slice(0, 8) + " · " : "") + (r.engineActive ? "Agent engine step is active" : "No active engine step verified") }),
+          el("p", { text: "Handover check: " + (r.handoverCheck || "not observed") + " · Downstream artifact receipt: unverified" }));
+        if (!r.jobsAvailable) detail.append(el("p", { text: "Job details unavailable; cannot verify agent activity." }));
+        else {
+          const jobs = el("ul");
+          for (const j of r.jobs) jobs.append(el("li", { text: j.name + " · " + j.status + (j.conclusion ? " · " + j.conclusion : "") }));
+          for (const step of r.steps) jobs.append(el("li", {}, el("a", { href: step.url, target: "_blank", rel: "noopener", text: step.job + ": " + step.name + " · " + step.status + (step.conclusion ? " · " + step.conclusion : "") })));
+          if (!r.steps.length) jobs.append(el("li", { text: "No agent-related steps reported." }));
+          detail.append(jobs);
+        }
+        rec.append(el("li", {}, detail));
+      }
+    }
+    const badge = $("#workingBadge"); badge.hidden = !b.working.length; badge.textContent = `${b.working.length} active workflow links`;
     $("#waitingWrap").hidden = !b.decisions.length && !b.demo;
     $("#waiting").replaceChildren(...b.decisions.map((item) => el("div", { class: "wait" },
       el("a", { href: item.url, target: "_blank", rel: "noopener", text: item.title }),
@@ -611,7 +659,294 @@
     if (focus) { $("#focusTitle").textContent = focus.title; const p = $("#focusStage"); p.className = `stagepill ${focus.kind}`; p.textContent = focus.kind === "founder" ? "Waiting for your OK" : `${b.stages.find((s) => s.id === focus.stage)?.name || ""}: ${focus.who}`; }
     setApp(b.app);
   }
+
+  // ---------- Feedback Workflow ----------
+  const FEEDBACK_STATES = {
+    delivered: "Delivered — waiting for review",
+    feedback_given: "Feedback sent — AI Org working",
+    fix_in_progress: "Fix in progress — Dev coding",
+    qa_in_progress: "QA in progress — Quinn testing",
+    review_in_progress: "Review in progress — Rex reviewing",
+    ready_for_test: "Ready for your test",
+    accepted: "Accepted — shipping",
+    shipped: "Shipped",
+    blocked: "Blocked — needs decision"
+  };
+
+  function renderStateBadge(state) {
+    const colors = {
+      delivered: "st-loop",
+      feedback_given: "st-agent",
+      fix_in_progress: "st-agent",
+      qa_in_progress: "st-agent",
+      review_in_progress: "st-agent",
+      ready_for_test: "st-founder",
+      accepted: "st-done",
+      shipped: "st-done",
+      blocked: "st-blocked"
+    };
+    return el("span", { class: `st ${colors[state] || "st-none"}`, text: FEEDBACK_STATES[state] || state });
+  }
+
+  function renderFeedbackItem(item, type) {
+    const isInbox = type === "inbox";
+    const row = el("div", { class: "feedback-item", "data-id": item.id, "data-type": item.type || "issue" });
+
+    const left = el("div", { class: "fb-left" });
+    left.append(el("b", { text: item.title }));
+    left.append(el("small", { text: item.slug ? `[${item.slug}]` : "" }));
+    if (item.previewUrl) {
+      left.append(el("a", { class: "linkish small", href: item.previewUrl, target: "_blank", rel: "noopener", text: "Preview" }));
+    }
+    left.append(el("a", { class: "linkish small", href: item.url, target: "_blank", rel: "noopener", text: "GitHub" }));
+
+    const right = el("div", { class: "fb-right" });
+    right.append(renderStateBadge(item.state));
+
+    // QA summary
+    if (item.qa && item.qa.status !== "unknown") {
+      const qaBadge = el("span", { class: `st ${item.qa.status === "passed" ? "st-done" : "st-blocked"}`, text: `QA: ${item.qa.status}` });
+      right.append(qaBadge);
+    }
+
+    // Review verdict
+    if (item.review && item.review.verdict !== "pending") {
+      const reviewBadge = el("span", { class: `st ${item.review.verdict === "approve" ? "st-done" : "st-blocked"}`, text: `Review: ${item.review.verdict}` });
+      right.append(reviewBadge);
+    }
+
+    // Founder feedback already given
+    if (item.founderFeedback) {
+      const fb = el("span", { class: "st st-agent", text: `You: /${item.founderFeedback.type} ${item.founderFeedback.text.slice(0, 40)}` });
+      right.append(fb);
+    }
+
+    row.append(left);
+    row.append(right);
+
+    row.onclick = (e) => {
+      if (e.target.tagName === "A") return;
+      showFeedbackDetail(item.id, item.type || "issue");
+    };
+
+    return row;
+  }
+
+  async function loadFeedback() {
+    try {
+      const [inboxRes, deliveriesRes, fixesRes, conflictsRes, usageRes] = await Promise.all([
+        api(`/api/products/${product.id}/feedback/inbox`),
+        api(`/api/products/${product.id}/feedback/deliveries`),
+        api(`/api/products/${product.id}/feedback/fixes`),
+        api(`/api/products/${product.id}/feedback/conflicts`),
+        api(`/api/products/${product.id}/feedback/usage`),
+      ]);
+
+      // Inbox
+      const inboxList = $("#feedbackInboxList");
+      inboxList.replaceChildren();
+      if (inboxRes.inbox?.length) {
+        $("#feedbackInbox").hidden = false;
+        $("#feedbackInboxEmpty").hidden = true;
+        for (const item of inboxRes.inbox) inboxList.append(renderFeedbackItem(item, "inbox"));
+        $("#feedbackBadge").hidden = false;
+        $("#feedbackBadge").textContent = String(inboxRes.inbox.length);
+      } else {
+        $("#feedbackInbox").hidden = true;
+        $("#feedbackInboxEmpty").hidden = false;
+        $("#feedbackBadge").hidden = true;
+      }
+
+      // Deliveries
+      const delList = $("#feedbackDeliveriesList");
+      delList.replaceChildren();
+      $("#feedbackDeliveries").hidden = false;
+      if (deliveriesRes.deliveries?.length) {
+        $("#feedbackDeliveriesEmpty").hidden = true;
+        for (const item of deliveriesRes.deliveries) delList.append(renderFeedbackItem(item, "delivery"));
+      } else {
+        $("#feedbackDeliveriesEmpty").hidden = false;
+      }
+
+      // Fixes
+      const fixList = $("#feedbackFixesList");
+      fixList.replaceChildren();
+      if (fixesRes.fixes?.length) {
+        $("#feedbackFixes").hidden = false;
+        $("#feedbackFixesEmpty").hidden = true;
+        for (const item of fixesRes.fixes) fixList.append(renderFeedbackItem(item, "fix"));
+      } else {
+        $("#feedbackFixes").hidden = true;
+        $("#feedbackFixesEmpty").hidden = false;
+      }
+
+      // Conflicts
+      if (conflictsRes.conflicts?.length) {
+        $("#feedbackConflicts").hidden = false;
+        const confList = $("#feedbackConflictsList");
+        confList.replaceChildren();
+        for (const c of conflictsRes.conflicts) {
+          const row = el("div", { class: "feedback-item conflict" });
+          row.append(el("b", { text: `Conflict in ${c.title} [${c.slug}]` }));
+          row.append(el("small", { text: c.feedbacks.map(f => `/${f.type} ${f.text}`).join("; ") }));
+          confList.append(row);
+        }
+      } else {
+        $("#feedbackConflicts").hidden = true;
+      }
+
+      // Usage
+      if (usageRes.agents?.length) {
+        $("#feedbackUsage").hidden = false;
+        const t = $("#feedbackUsageTable");
+        t.replaceChildren(el("div", { class: "trk head", role: "row" }, ...["Agent", "Model", "Tokens In", "Tokens Out", "Cost"].map(h => el("div", { role: "columnheader", text: h }))));
+        for (const a of usageRes.agents) {
+          t.append(el("div", { class: "trk", role: "row" },
+            el("div", { role: "rowheader" }, el("b", { text: a.name }), el("small", { text: a.role })),
+            el("div", { role: "cell", text: a.model || "—" }),
+            el("div", { role: "cell", text: a.tokensIn || "—" }),
+            el("div", { role: "cell", text: a.tokensOut || "—" }),
+            el("div", { role: "cell", text: a.cost ? `$${a.cost.toFixed(4)}` : "—" })
+          ));
+        }
+      }
+
+    } catch (e) {
+      console.error("Feedback load error:", e);
+      $("#feedbackStatus").className = "statusline err";
+      $("#feedbackStatus").textContent = `Failed to load feedback: ${e.message}`;
+    }
+  }
+
+  async function showFeedbackDetail(id, type) {
+    $("#feedbackInbox").hidden = true;
+    $("#feedbackDeliveries").hidden = true;
+    $("#feedbackFixes").hidden = true;
+    $("#feedbackConflicts").hidden = true;
+    $("#feedbackUsage").hidden = true;
+    $("#feedbackDetail").hidden = false;
+    $("#feedbackDetailContent").replaceChildren(el("div", { class: "idle", text: "Loading…" }));
+
+    try {
+      let detail;
+      if (type === "fix") {
+        detail = await api(`/api/products/${product.id}/feedback/fixes/${id}`);
+      } else {
+        detail = await api(`/api/products/${product.id}/feedback/deliveries/${id}`);
+      }
+
+      if (detail.error) throw new Error(detail.error);
+
+      const content = $("#feedbackDetailContent");
+      content.replaceChildren();
+
+      // Header
+      const header = el("div", { class: "fb-detail-header" });
+      header.append(el("b", { text: detail.title }));
+      if (detail.slug) header.append(el("small", { text: `[${detail.slug}]` }));
+      header.append(renderStateBadge(detail.state));
+      content.append(header);
+
+      // Actions for deliveries
+      if (type !== "fix" && [FEEDBACK_STATES.delivered, FEEDBACK_STATES.feedback_given].includes(detail.state)) {
+        const actions = el("div", { class: "fb-actions" });
+        actions.append(el("button", { class: "primary small", text: "Accept", onclick: () => submitFeedback(id, "approve", "") }));
+        actions.append(el("button", { class: "ghost small", text: "Request changes", onclick: () => promptFeedback(id, "changes") }));
+        actions.append(el("button", { class: "ghost small", text: "Discuss", onclick: () => promptFeedback(id, "discuss") }));
+        content.append(actions);
+      }
+
+      // Preview link
+      if (detail.previewUrl) {
+        content.append(el("a", { class: "primary", href: detail.previewUrl, target: "_blank", rel: "noopener", text: "Open preview to test" }));
+      }
+
+      // QA section
+      if (detail.qa) {
+        const qa = el("details", { open: true });
+        qa.append(el("summary", { text: `QA: ${detail.qa.status}` }));
+        qa.append(el("pre", { text: detail.qa.summary }));
+        if (detail.qa.details?.length) {
+          qa.append(el("small", { text: detail.qa.details.map(d => `${d.at}: ${d.text}`).join("\n") }));
+        }
+        content.append(qa);
+      }
+
+      // Review section
+      if (detail.review) {
+        const rev = el("details", { open: true });
+        rev.append(el("summary", { text: `Review: ${detail.review.verdict}` }));
+        rev.append(el("pre", { text: detail.review.summary }));
+        content.append(rev);
+      }
+
+      // Fix progress (for fix detail)
+      if (detail.task) {
+        content.append(el("h4", { text: "Fix task" }));
+        content.append(el("pre", { text: detail.task.text || detail.task.raw }));
+      }
+      if (detail.devProgress?.length) {
+        content.append(el("h4", { text: "Dev progress" }));
+        for (const d of detail.devProgress) {
+          content.append(el("pre", { class: "small", text: d.text || d.raw }));
+        }
+      }
+      if (detail.qaResults?.length) {
+        content.append(el("h4", { text: "QA results" }));
+        for (const q of detail.qaResults) {
+          content.append(el("pre", { class: "small", text: q.text || q.raw }));
+        }
+      }
+      if (detail.review?.length) {
+        content.append(el("h4", { text: "Review" }));
+        for (const r of detail.review) {
+          content.append(el("pre", { class: "small", text: r.text || r.raw }));
+        }
+      }
+
+      // All comments timeline
+      if (detail.allComments?.length) {
+        const timeline = el("details");
+        timeline.append(el("summary", { text: "All comments" }));
+        for (const c of detail.allComments) {
+          timeline.append(el("div", { class: "small" }, el("time", { text: new Date(c.at).toLocaleString() }), " ", el("b", { text: c.by || "?" }), ": ", c.body.slice(0, 200)));
+        }
+        content.append(timeline);
+      }
+
+    } catch (e) {
+      $("#feedbackDetailContent").replaceChildren(el("div", { class: "err", text: `Failed to load: ${e.message}` }));
+    }
+  }
+
+  $("#feedbackDetailBack").onclick = () => {
+    $("#feedbackDetail").hidden = true;
+    loadFeedback();
+  };
+
+  function promptFeedback(deliveryId, type) {
+    const text = prompt(`Enter your ${type === "changes" ? "correction" : "discussion"} notes:`);
+    if (text !== null) submitFeedback(deliveryId, type, text);
+  }
+
+  async function submitFeedback(deliveryId, type, text) {
+    try {
+      const res = await api(`/api/products/${product.id}/feedback/submit`, {
+        method: "POST",
+        body: JSON.stringify({ deliveryId, type, text })
+      });
+      if (res.ok) {
+        alert(res.message || "Feedback submitted");
+        loadFeedback();
+      } else {
+        alert(`Failed: ${res.error}`);
+      }
+    } catch (e) {
+      alert(`Error: ${e.message}`);
+    }
+  }
   async function poll() {
+    if (tab === "agents") void loadUsage();
     const pid = product?.id; if (!pid) return;
     try {
       const r = await fetch(`/api/products/${pid}/board`, { cache: "no-store" }); const d = await r.json();
@@ -633,6 +968,8 @@
     showTab(tab || (product.productionUrl ? "app" : "proto"));
     pickEngine(engine);
     clearInterval(pollTimer); poll(); pollTimer = setInterval(poll, cfg.boardRefreshMs);
+    $("#usage").replaceChildren(); $("#usageNote").textContent = ""; $("#usageErr").textContent = "";
+    $("#founderUsage").textContent = "Consumption is loading.";
     loadTeam(); loadUsage(); $("#changesDiff").hidden = true; loadChanges();
   }
   async function reloadConfig(selectId) {

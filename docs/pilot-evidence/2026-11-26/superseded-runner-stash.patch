@@ -1,0 +1,32 @@
+diff --git a/scripts/supervised-founder-delivery.mjs b/scripts/supervised-founder-delivery.mjs
+index 6bf8541..fd643fe 100644
+--- a/scripts/supervised-founder-delivery.mjs
++++ b/scripts/supervised-founder-delivery.mjs
+@@ -102,7 +102,7 @@ async function runRole({stage: label, role, previous, paths, brief, requireIndep
+     const profile = readFileSync(join(orgDir,"org/agents",role+".md"),"utf8");
+     const patch = directSource?.kind==="patch";
+     const receiptFormat = 'Return a JSON object with exactly these required fields: inputArtifactHash (the exact string '+previous.hash+
+-      '), verdict ("COMPLETE" for implemented source, "APPROVE" for a successful review, or "CHANGES" for incomplete work), and summary (your own brief factual explanation; no placeholder).';
++      '), verdict ("COMPLETE" for implemented source, "APPROVE" for a successful review, or "CHANGES" for incomplete work), and summary (a specific factual explanation naming the actual work and evidence. Never copy template wording such as REPLACE with evidence, gaps and file names).';
+     const responseFormat = patch
+       ? "Return ONLY one fenced javascript code block containing the exact replacement for sourceRange. No JSON, receipt, hash, prose, ellipses or whole-file rewrite."
+       : receiptFormat+(directSource?" Then a single fenced javascript code block with the complete runnable test source. No other prose.":" No prose outside the JSON.");
+@@ -316,8 +316,16 @@ async function authorTests(){
+     writeFileSync(join(runDir,"fragments",id+"-input.json"),JSON.stringify(bundle),{mode:0o600,flag:"wx"});
+     log("artifact.saved",upstream,{artifactHash:bundleHash,criterionId:id});
+     const previous={role:"studio",executionId:upstream.executionId,hash:bundleHash,artifact:bundle};
+-    const piece=await runRole({stage:"ai:tests",role:"quinn-qa",previous,paths:[],rounds:1,directSource:{id},
+-      brief:"Write exactly one compact executable test() block titled "+id+" followed by a descriptive name. Use existing shared imports test, assert, fs helpers; fixture(t,{hold:false}) returns {pilot,config,dir,release,calls getter}; task IDs A/B are valid. act(pilot,requestId,action,revision=null,feedback) wraps pilot.run; waitFor(pilot,id,revision,status) waits asynchronously and returns record; pilot.history(id) returns revisions; pilot.evidence() returns journal. contract is the valid shared fixture contract. No imports, helper definitions, shell, real model calls, or browser. Do not copy the scaffold. Keep to 20-35 lines. Assert actual behavior. The exact incoming criterion and focus above govern, even if QA coverage suggests automatic scheduling. Return the exact receipt and test block."});
++    const generate=(repair="")=>runRole({stage:"ai:tests",role:"quinn-qa",previous,paths:[],rounds:1,directSource:{id},
++      brief:"Write exactly one compact executable test() block titled "+id+" followed by a descriptive name. Use existing shared imports test, assert, fs helpers; fixture(t,{hold:false}) returns {pilot,config,dir,release,calls getter}; task IDs A/B are valid. act(pilot,requestId,action,revision=null,feedback) wraps pilot.run; waitFor(pilot,id,revision,status) waits asynchronously and returns record; pilot.history(id) returns revisions; pilot.evidence() returns journal. contract is the valid shared fixture contract. No imports, helper definitions, shell, real model calls, or browser. Do not copy the scaffold. Keep to 20-35 lines. Assert actual behavior. The exact incoming criterion and focus above govern, even if QA coverage suggests automatic scheduling. Return the exact receipt and test block."+repair});
++    let piece;
++    try { piece=await generate(); }
++    catch(error){
++      const failed=state.stages.at(-1);
++      if(failed?.errorKind!=="invalid_artifact"||existsSync(join(runDir,rel)))throw error;
++      print("REPAIR "+id+" (one same-model receipt retry)");
++      piece=await generate("\nPrevious response failed validation: "+failed.error+". Provide an original, factual summary and complete runnable source; do not copy placeholder instructions.");
++    }
+     requireVerdict(piece,"COMPLETE");
+     state.fragments.push({id,executionId:piece.executionId,artifactHash:piece.hash,fileHash:piece.artifact.files[rel],originRun:runDir});save();
+   }

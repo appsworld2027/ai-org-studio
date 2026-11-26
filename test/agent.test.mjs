@@ -159,7 +159,7 @@ test("Claude Code stream → chat events: text, steps, approval, question, resul
   const { translate, controlResponse, userContent } = await import("../server/engines/claude.mjs");
   const st = { tools: {}, pendingReq: {} };
   const ev = (m) => translate(m, st);
-  assert.deepEqual(ev({ type: "system", subtype: "init", session_id: "s1", model: "opus" })[0], { t: "session", id: "s1", model: "opus" });
+  assert.deepEqual(ev({ type: "system", subtype: "init", session_id: "s1", model: "opus" })[0], { t: "session", id: "s1", model: "opus", reportedModel: "opus" });
   assert.equal(ev({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Hi" } } })[0].d, "Hi");
   const tool = ev({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/p/src/a.ts", old_string: "a\nb", new_string: "c" } }] } })[0];
   assert.equal(tool.title, "Edit src/a.ts"); assert.equal(tool.detail, "+1 −2"); assert.equal(tool.kind, "edit");
@@ -254,4 +254,71 @@ test("v2.1 Claude Code: modes, thinking, plan (TodoWrite), memory, plan approval
   assert.equal(s1.behavior, "allow"); assert.equal(s1.updatedPermissions[0].rules[0].ruleContent, "npm:*");
   assert.equal(controlResponse("r", { tool_name: "Edit", input: {} }, "session").response.response.updatedPermissions[0].mode, "acceptEdits");
   assert.equal(ev({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", utilization: 0.83 } })[0].usedPercent, 83);
+});
+
+test("tool-free direct Nemotron generation disables extended thinking and records counts only", async () => {
+  const events=[], requests=[], emitted=[];
+  const invoke = (model, directGeneration) => runTurn({
+    messages:[{role:"user",content:"Return source"}],provider:{id:"nvidia",base:"https://p.example/v1"},model,
+    root:tmp(),systemPrompt:"",emit:e=>emitted.push(e),observe:e=>events.push(e),
+    allowedTools:[],directGeneration,maxTokens:6000,maxRounds:1,
+    finalInstruction:"Return the requested source",
+    approve:async()=>false,fetchImpl:async(_url,opts)=>{
+      requests.push(JSON.parse(opts.body));
+      return {ok:true,status:200,body:sse({model,choices:[{delta:{reasoning_content:"PRIVATE_REASONING",content:"code"},finish_reason:"stop"}]})};
+    }
+  });
+  await invoke("nvidia/nemotron-3-ultra-550b-a55b",true);
+  assert.deepEqual(requests[0].chat_template_kwargs,{enable_thinking:false});
+  assert.equal(requests[0].max_tokens,6000);
+  const result=events.find(e=>e.type==="model.result");
+  assert.equal(result.responseChars,4);
+  assert.equal(result.reasoningChars,"PRIVATE_REASONING".length);
+  assert.equal(events.find(e=>e.type==="model.request").thinkingMode,"off");
+  assert.doesNotMatch(JSON.stringify({events,emitted}),/PRIVATE_REASONING/);
+  await invoke("nvidia/nemotron-3-ultra-550b-a55b",false);
+  await invoke("mistralai/mistral-large-4-1t-a52b",true);
+  assert.equal(requests[1].chat_template_kwargs,undefined);
+  assert.equal(requests[2].chat_template_kwargs,undefined);
+});
+
+test("supervised free OpenRouter and Groq requests use explicit cost and completion limits", async () => {
+  const requests=[];
+  const invoke=(id,model)=>runTurn({messages:[{role:"user",content:"Test"}],provider:{id,base:"https://p.example/v1"},
+    model,root:tmp(),systemPrompt:"",emit(){},allowedTools:[],maxRounds:1,maxTokens:6000,freeOnly:true,
+    approve:async()=>false,fetchImpl:async(_url,opts)=>{
+      requests.push(JSON.parse(opts.body));return {ok:true,status:200,body:sse({model,choices:[{delta:{content:"done"},finish_reason:"stop"}]})};
+    }});
+  await invoke("openrouter","deepseek/deepseek-v4.1-flash-1017:free");
+  assert.deepEqual(requests[0].provider.max_price,{prompt:0,completion:0,request:0});
+  assert.equal(requests[0].provider.allow_fallbacks,false);
+  await assert.rejects(invoke("openrouter","deepseek/deepseek-v4.1-flash-1017"),/explicit OpenRouter/);
+  await invoke("groq","openai/gpt-oss-120b");
+  assert.equal(requests[1].max_completion_tokens,6000);
+  assert.equal(requests[1].max_tokens,undefined);
+});
+
+
+test("NVIDIA streaming requests token usage and records the reported counts", async () => {
+  const events = [];
+  await runTurn({ messages: [], provider: { id: "nvidia", base: "https://p.example/v1" }, model: "requested",
+    systemPrompt: "", emit: (e) => events.push(e), fetchImpl: async (_url, init) => {
+      assert.deepEqual(JSON.parse(init.body).stream_options, { include_usage: true });
+      return new Response('data: {"model":"served","choices":[{"delta":{"content":"OK"}}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":2}}\n\n');
+    } });
+  assert.deepEqual(events.find((e) => e.t === "usage").models.map(({ model, input, output }) => ({ model, input, output })),
+    [{ model: "served", input: 8, output: 2 }]);
+});
+
+test("NVIDIA chat continues when streaming usage is explicitly rejected", async () => {
+  const requests = [], events = [];
+  await runTurn({ messages: [], provider: { id: "nvidia", base: "https://p.example/v1" }, model: "requested",
+    systemPrompt: "", emit: (e) => events.push(e), fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      return requests.length === 1 ? new Response("stream_options is not supported", { status: 422 })
+        : new Response('data: {"model":"served","choices":[{"delta":{"content":"OK"}}]}\n\n');
+    } });
+  assert.deepEqual(requests.map((r) => r.stream_options), [{ include_usage: true }, undefined]);
+  assert.equal(events.find((e) => e.t === "usage").models[0].input, undefined);
+  assert.equal(events.at(-1).t, "done");
 });

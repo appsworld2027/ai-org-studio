@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Only the synthetic Garage repository is verified private.
+if [ "$*" = "api --hostname github.com repos/example/studio-private-fixture --jq .visibility" ]; then
+  echo private
+  exit 0
+fi
 # Stand-in for the GitHub CLI during tests: serves the 23-Nov Parent Plus snapshot.
 F="$(cd "$(dirname "$0")/../../test/fixtures" && pwd)"
 [ -f "${FAKE_GH_FAIL:-/nonexistent}" ] && { echo "HTTP 503: GitHub unavailable" >&2; exit 1; }
@@ -8,10 +13,16 @@ fi
 if [ "$1 $2" = "repo clone" ]; then
   d="$4"; mkdir -p "$d/prototypes" && cd "$d" && git init -q -b main && echo '<h1>demo</h1>' > prototypes/home.html && git add -A && git -c user.email=t@t -c user.name=t commit -qm init && exit 0
 fi
+if [ "$1 $2 $3" = "run download 1201" ] && [ "$5" = "appsworld2027/Parent-plus-" ] && [ "$7" = "ai-org-usage-1" ]; then
+  node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({version:1,at:Date.now(),rows:[{model:"fixture/worker-model",role:"Maya",input:32,output:7}]}))' "$9/ai-org-usage.json"
+  exit $?
+fi
 [ "$1" = api ] || { echo "fake gh: unsupported $*" >&2; exit 2; }
 case "$2" in
   */issues\?state=open*) cat "$F/issues.json";;
   */pulls\?state=open*) cat "$F/pulls.json";;
+  repos/appsworld2027/Parent-plus-/actions/artifacts*) echo '{"artifacts":[{"name":"ai-org-usage-1","size_in_bytes":100,"workflow_run":{"id":1201}}]}';;
+  */actions/artifacts*) echo '{"artifacts":[]}';;
   */actions/runs*) cat "$F/runs.json";;
   */issues/comments*) cat "$F/comments.json";;
   */contents/docs/product/BACKLOG.md) cat "$F/backlog.json";;

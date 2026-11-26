@@ -361,6 +361,24 @@ details.custom .row input{margin-top:0}
 .glayout{display:grid;grid-template-columns:minmax(300px,44%) 1fr;gap:12px;align-items:start}
 .glayout .chp{white-space:normal;word-break:break-all}
 .pane.garage{padding:14px 18px;overflow:auto}
+
+.pane.feedback{padding:14px 18px;overflow:auto}
+.pane.feedback h3{margin:0 0 12px;font:600 16px var(--head)}
+.feedback-list{display:flex;flex-direction:column;gap:8px}
+.feedback-item{display:flex;gap:12px;align-items:flex-start;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:12px;cursor:pointer;transition:border-color .15s}
+.feedback-item:hover{border-color:var(--you)}
+.feedback-item.conflict{border-color:var(--blocked);background:#FCE8EE}
+.fb-left{flex:1;min-width:0}
+.fb-left b{display:block;font-size:14px;margin-bottom:4px}
+.fb-left small{color:var(--muted);font-size:12px}
+.fb-left a.linkish{margin-right:8px;font-size:12px}
+.fb-right{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex:none}
+.fb-detail-header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--rule)}
+.fb-detail-header b{font-size:16px}
+.fb-actions{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
+.fb-actions button{min-width:100px}
+.fb-actions .primary{background:var(--agent);border-color:var(--agent)}
+.fb-actions .primary:hover{background:#0B6B5A}
 .gmd{padding:10px 14px;font-size:14px} .gimg{max-width:100%;display:block}
 #dlgFlag textarea{width:100%;margin-top:4px;border:1px solid var(--rule);border-radius:7px;padding:6px 8px;font:14px var(--body)}
 .activity.offline{color:#9A5A06;background:#FBF4E6}
@@ -371,3 +389,11 @@ details.custom .row input{margin-top:0}
   .glayout{grid-template-columns:1fr}
   .echat .composer-row{gap:4px} .echat .composer-row .pill{max-width:16ch}
 }
+
+.usage-cards{display:grid;gap:8px}
+.usage-card{min-width:0;border:1px solid var(--rule);border-radius:10px;padding:12px}
+.usage-card strong,.usage-card small{display:block;overflow-wrap:anywhere}
+.usage-card small,.usage-card dt{color:var(--muted)}
+.usage-card meter{display:block;width:100%;height:9px;margin-top:10px}
+.usage-card dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(95px,1fr));gap:8px;margin:10px 0 0}
+.usage-card dd{margin:2px 0 0;font-weight:600}

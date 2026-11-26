@@ -12,12 +12,19 @@ import { dirname, join, resolve, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import pty from "node-pty";
-import { parseBacklog, buildBoard, feedFrom, appTarget, rosterFrom } from "./status.mjs";
+import { parseBacklog, buildBoard, feedFrom, appTarget, rosterFrom, isAgentEvidenceRun, workflowEvidenceFrom } from "./status.mjs";
 import { makeLedger, summarize } from "./usage.mjs";
+import { makeWorkerUsage } from "./worker-usage.mjs";
+import { feedbackInbox, feedbackDeliveries, feedbackDeliveryDetail, feedbackSubmit, feedbackFixes, feedbackFixDetail, feedbackConflicts, feedbackUsage } from "./feedback.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
 import { providerAllowed, modelAllowed, validProvider, validModel, planEnv, scrubPaidEnv, BLOCKED } from "./billing.mjs";
 import { runTurn } from "./agent.mjs";
+import { createFounderPilot } from "./founder-pilot.mjs";
+
+import { createFounderInbox } from "./founder-inbox.mjs";
+import { handleFounderInbox } from "./founder-inbox-http.mjs";
+
 import { makeConnectors, CATALOG } from "./connectors.mjs";
 import { openApps } from "./mcp-client.mjs";
 import { makeGarage } from "./garage.mjs";
@@ -30,7 +37,23 @@ import { ENGINE_MODELS, plan as teamPlanFor, parseAgent } from "./team.mjs";
 scrubPaidEnv();
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const store = makeStore();
-const garage = makeGarage({ dir: expand(process.env.STUDIO_GARAGE || "~/studio-garage"), repo: process.env.STUDIO_GARAGE_REPO || "", log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
+let localFounderPilot;
+function founderPilotInstance() {
+  if (process.env.STUDIO_LOCAL_PILOT !== "true") return null;
+
+  return localFounderPilot ||= createFounderPilot({
+    dir: join(store.dir, "founder-pilot"),
+    inbox: founderInbox,
+    orgDir: process.env.STUDIO_AI_ORG_DIR,
+    keyFile: process.env.STUDIO_PILOT_KEY_FILE
+  });
+}
+
+const founderInbox = createFounderInbox(
+  join(store.dir, "founder-inbox")
+);
+
+const garage = makeGarage({ dir: expand(process.env.STUDIO_GARAGE || "~/studio-garage"), repo: process.env.STUDIO_GARAGE_REPO || "", gh: process.env.STUDIO_GH || "gh", log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
 const connectors = makeConnectors({ dir: store.dir, root: resolve(dirname(fileURLToPath(import.meta.url)), ".."), log: (...a) => console.log(new Date().toISOString().slice(11, 19), ...a) });
 const settings = (() => { try { return JSON.parse(readFileSync(process.env.STUDIO_CONFIG || join(ROOT, "studio.config.json"), "utf8")); } catch { return {}; } })();
 const PORT = Number(process.env.STUDIO_PORT || settings.port || 8484);
@@ -87,7 +110,7 @@ function rememberPublicUrl(origin) {
 // ---------- static files (whitelist only) ----------
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const STATIC = {
-  "/": "public/index.html", "/app.js": "public/app.js", "/chat.js": "public/chat.js", "/echat.js": "public/echat.js", "/styles.css": "public/styles.css",
+  "/": "public/index.html", "/app.js": "public/app.js", "/chat.js": "public/chat.js", "/echat.js": "public/echat.js", "/styles.css": "public/styles.css", "/founder-inbox.js": "public/founder-inbox.js",
   "/vendor/xterm.js": "node_modules/@xterm/xterm/lib/xterm.js", "/vendor/xterm.css": "node_modules/@xterm/xterm/css/xterm.css",
   "/vendor/addon-fit.js": "node_modules/@xterm/addon-fit/lib/addon-fit.js", "/vendor/addon-web-links.js": "node_modules/@xterm/addon-web-links/lib/addon-web-links.js",
 };
@@ -103,6 +126,7 @@ const readBody = (req, limit = 1 << 20) => new Promise((ok, fail) => { let d = "
 const run = (cmd, args, opts = {}) => new Promise((ok, fail) => execFile(cmd, args, { timeout: 120000, maxBuffer: 32 << 20, ...opts }, (e, out, err) => e ? fail(new Error((err || e.message).toString().trim().split("\n").slice(-1)[0])) : ok(out)));
 const gh = (args, timeout = 20000) => run(GH, args, { timeout });
 const ghJson = async (path) => JSON.parse(await gh(["api", path]) || "null");
+const workerUsage = makeWorkerUsage({ gh, ghJson });
 
 // ---------- products ----------
 const products = () => store.products.list();
@@ -141,12 +165,13 @@ async function loadBoard(p) {
       }
     } catch { /* no preview yet */ }
   }
-  const wr = runs?.workflow_runs || [], agentRuns = wr.filter((r) => /AI agents/i.test(r.name || "")).slice(0, 8), jobs = {};
-  await Promise.all(agentRuns.map(async (r) => { try { jobs[r.id] = ((await ghJson(`${R}/actions/runs/${r.id}/jobs`))?.jobs || []).flatMap((j) => j.steps || []); } catch { /* tool stays Unknown */ } }));
+  const wr = runs?.workflow_runs || [], agentRuns = wr.filter(isAgentEvidenceRun).slice(0, 8), jobs = {}, jobDetails = {};
+  await Promise.all(agentRuns.map(async (r) => { try { jobDetails[r.id] = ((await ghJson(`${R}/actions/runs/${r.id}/jobs`))?.jobs || []); jobs[r.id] = jobDetails[r.id].flatMap((j) => j.steps || []); } catch { /* tool stays Unknown */ } }));
   const checks = {};
   await Promise.all(issues.filter((i) => i.pull_request && i.head?.sha && i.labels.some((l) => String(l.name).startsWith("ai:"))).slice(0, 8).map(async (i) => { try { checks[i.head.sha] = ((await ghJson(`${R}/commits/${i.head.sha}/check-runs?per_page=30`))?.check_runs || []).map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion })); } catch { /* tests stay unknown */ } }));
   const b = buildBoard({ backlog, issues, runs: wr, previews, jobs, checks });
   b.roster = rosterFrom({ rows: b.rows, working: b.working, comments: comments || [] });
+  b.workflowEvidence = workflowEvidenceFrom(wr, jobDetails);
   return { ...b, aiOrg: issues.some((i) => i.labels.some((l) => String(l.name).startsWith("ai:"))) || backlog.length > 0, feed: feedFrom(comments), app: appTarget({ productionUrl: p.productionUrl, demo: b.demo }), updatedAt: new Date().toISOString() };
 }
 async function board(p) {
@@ -260,7 +285,7 @@ async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
   const key = `${p.id}:${chatId}`; if (live.get(key)?.abort) throw new Error("Still working on the last message.");
   const L = live.get(key) || { pending: new Map(), clients: new Set() }; live.set(key, L);
   const ac = new AbortController(); L.abort = ac;
-  const emit = (e) => { if (e.t === "usage") { for (const u of e.models || []) { try { ledger.record({ product: p.id, engine: `free:${c.provider}`, model: u.model || c.model, input: u.input, output: u.output, role: "Studio chat" }); } catch { /* ledger is best effort */ } } return; } for (const ws of L.clients) if (ws.readyState === 1) ws.send(JSON.stringify(e)); wsEmit?.(e); };
+  const emit = (e) => { if (e.t === "usage") { for (const u of e.models || []) { try { ledger.record({ product: p.id, engine: `free:${c.provider}`, model: u.model, requestedModel: u.requestedModel, modelSource: u.model ? "provider" : "unknown", input: u.input, output: u.output, cache: u.cache, reasoning: u.reasoning, role: "Studio chat" }); } catch { /* ledger is best effort */ } } return; } for (const ws of L.clients) if (ws.readyState === 1) ws.send(JSON.stringify(e)); wsEmit?.(e); };
   c.messages.push({ role: "user", content: text });
   if (c.title === "New chat") c.title = text.replace(/\s+/g, " ").slice(0, 60);
   store.chats.save(p.id, c);
@@ -370,6 +395,42 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== "GET" && !originOk(req)) return json(res, 403, { error: "Blocked: request did not come from the Studio page." });
     if (STATIC[path]) { const f = join(ROOT, STATIC[path]); return send(res, 200, readFileSync(f), TYPES[extname(f)] || "application/octet-stream"); }
 
+
+
+    if (path === "/api/founder-pilot") {
+      const pilot = founderPilotInstance();
+      if (!pilot) {
+        return json(res, 403, {
+          error: "Local agent pilot disabled"
+        });
+      }
+      try {
+if (req.method === "GET") {
+          const requestId = new URL(req.url, `http://${req.headers.host}`).searchParams.get("requestId") || "studio-pilot-001";
+          return json(res, 200, {
+            revisions: pilot.history(requestId),
+            executionEvidence: pilot.evidence(requestId)
+          });
+        }
+        if (req.method === "POST") {
+          return json(res, 200, await pilot.run(
+            await readBody(req, 100000)
+          ));
+        }
+        return json(res, 405, {
+          error: "Method not allowed"
+        });
+      } catch (error) {
+        return json(res, 409, {
+          error: String(error.message).slice(0, 250)
+        });
+      }
+    }
+
+    if (path === "/api/founder-inbox") {
+      return await handleFounderInbox(req, res, founderInbox);
+    }
+
     if (path === "/api/config") return json(res, 200, {
       platform: platform(), workspace: WORKSPACE,
       products: products().map((p) => ({ id: p.id, name: p.name, repo: p.repo, productionUrl: p.productionUrl, prototypes: (p.prototypes || []).map((f) => f.split("/").pop()), ready: existsSync(p.dir) })),
@@ -427,7 +488,8 @@ const server = http.createServer(async (req, res) => {
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/usage$/)) && req.method === "GET") {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
       const days = Math.min(90, Math.max(1, Number(new URL(req.url, "http://x").searchParams.get("days")) || 7));
-      return json(res, 200, { days, ...summarize(ledger.entries(p.id), { since: Date.now() - days * 864e5 }) });
+      const { entries, ...workers } = await workerUsage(p);
+      return json(res, 200, { days, workers, ...summarize([...ledger.entries(p.id), ...entries], { since: Date.now() - days * 864e5 }) });
     }
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/team$/))) {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
@@ -438,6 +500,40 @@ const server = http.createServer(async (req, res) => {
         const all = store.readJson("team.json", {}); all[p.id] = { overrides: ov, availability: b.availability && typeof b.availability === "object" ? Object.fromEntries(Object.entries(b.availability).filter(([k]) => ENGINE_MODELS.some((x) => x.id === k)).map(([k, v]) => [k, !!v])) : all[p.id]?.availability };
         store.writeJson("team.json", all); return json(res, 200, await teamPlan(p));
       }
+    }
+    // ---------- Feedback Workflow ----------
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/inbox$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackInbox(p));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/deliveries$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackDeliveries(p));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/deliveries\/([0-9]+)$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackDeliveryDetail(p, Number(m[2])));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/submit$/)) && req.method === "POST") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      if (process.env.STUDIO_LEGACY_FEEDBACK_WRITES !== "true") return json(res, 403, { error: "GitHub feedback writes disabled; use Founder Inbox for local corrections." });
+    return json(res, 200, await feedbackSubmit(p, await readBody(req)));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/fixes$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackFixes(p));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/fixes\/([0-9]+)$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackFixDetail(p, Number(m[2])));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/conflicts$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackConflicts(p));
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/feedback\/usage$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      return json(res, 200, await feedbackUsage(p));
     }
     // ---------- Apps (connectors) ----------
     if (path === "/api/apps" && req.method === "GET") return json(res, 200, { apps: connectors.list() });

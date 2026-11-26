@@ -1,0 +1,28 @@
+{
+  "role": "rex-reviewer",
+  "requestedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+  "reportedModel": "nvidia/nemotron-3-ultra-550b-a55b",
+  "files": [
+    {
+      "path": "server/founder-pilot.mjs",
+      "sha256": "b12e6240c2c7f26866a953bd3f1743ec4b4bc06e3e016ecd332ca7395df0d74a"
+    },
+    {
+      "path": "server/server.mjs",
+      "sha256": "f6c4bcb48bb986b64dc26bae831cf0e5c16c565a3ce63d44128d67f6afe65f7d"
+    },
+    {
+      "path": "public/founder-inbox.js",
+      "sha256": "43b39ade6d980179ddf5265b54a129b1c04512649d495feb794c8a329856f24a"
+    },
+    {
+      "path": "test/founder-inbox-revisions-v2.test.mjs",
+      "sha256": "2aee85e60872aebf41350ce885b2899b7ac174b6008f9e8820587cfdc6b78ad6"
+    }
+  ],
+  "receipt": {
+    "inputArtifactHash": "fdaf6253a578f131aa7b9a9b8a22199517e1a2b665b6e28e23220d1a653a01bf",
+    "verdict": "APPROVE",
+    "summary": "All four acceptance criteria are satisfied by the supplied source diffs and test file. AC-01: save is isolated per requestId (tested with A and B), validates length (1–2000 chars), is idempotent (duplicate feedback returns same record), and never triggers a model call (calls=0). AC-02: explicit run produces founder-review, acceptance acknowledges exact contract with handoff.acknowledged event containing correct artifactHash, history preserves prior contract-accepted revision, and next save creates revision 2 with parentRevision=1. AC-03: save during running work queues next revision without auto-launch (save allowed while active, run blocked, model call count unchanged until gate released). AC-04: chronology, timestamps (createdAt), and task isolation survive restart (new pilot instance loads identical history and evidence filtered to requestId). Test quality: uses in-process fixtures, async waitFor polling, and exact assertions; no browser or external runtime claims. Isolation is explicit via per-requestId workers Map in createFounderPilot and history/evidence filtering. Authorization and UI updates: server GET /api/founder-pilot now accepts requestId query param and passes it to pilot.history/evidence; inbox JS fetches with requestId, tracks anyRunning across revisions, and renders timestamps. Journal evidence is present via event calls (revision.saved, context.prepared, stage.interrupted, coordination.failed, handoff.acknowledged) and evidence filtering by requestId. Queued revisions during active run are supported (save allowed while active, run blocked). No must-fix findings."
+  }
+}
