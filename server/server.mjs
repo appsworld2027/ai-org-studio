@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import pty from "node-pty";
 import { parseBacklog, buildBoard, feedFrom, appTarget } from "./status.mjs";
+import { makeLedger, summarize } from "./usage.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
 import { runTurn } from "./agent.mjs";
@@ -251,7 +252,7 @@ async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
   const key = `${p.id}:${chatId}`; if (live.get(key)?.abort) throw new Error("Still working on the last message.");
   const L = live.get(key) || { pending: new Map(), clients: new Set() }; live.set(key, L);
   const ac = new AbortController(); L.abort = ac;
-  const emit = (e) => { for (const ws of L.clients) if (ws.readyState === 1) ws.send(JSON.stringify(e)); wsEmit?.(e); };
+  const emit = (e) => { if (e.t === "usage") { for (const u of e.models || []) { try { ledger.record({ product: p.id, engine: `free:${c.provider}`, model: u.model || c.model, input: u.input, output: u.output, role: "Studio chat" }); } catch { /* ledger is best effort */ } } return; } for (const ws of L.clients) if (ws.readyState === 1) ws.send(JSON.stringify(e)); wsEmit?.(e); };
   c.messages.push({ role: "user", content: text });
   if (c.title === "New chat") c.title = text.replace(/\s+/g, " ").slice(0, 60);
   store.chats.save(p.id, c);
@@ -305,7 +306,8 @@ function trustFolder(dir, engine) {
     }
   } catch (e) { log(`could not mark ${dir} as trusted for ${engine}: ${e.message}`); }
 }
-const engineChats = makeEngineChats({ store, env: ENGINE_ENV, rulesFor: engineRules, bins: BINS, codexConfig: CODEX_CONFIG, log, trustFolder, apps: appsForEngines, extraDirs: garageDirs,
+const ledger = makeLedger(store);
+const engineChats = makeEngineChats({ store, onUsage: (e) => ledger.record(e), env: ENGINE_ENV, rulesFor: engineRules, bins: BINS, codexConfig: CODEX_CONFIG, log, trustFolder, apps: appsForEngines, extraDirs: garageDirs,
   beforeTurn: () => garage.pull(), afterTurn });
 // Sign-in status: asks the official programs; never reads their credential files.
 async function engineAccount(engine) {
@@ -412,6 +414,11 @@ const server = http.createServer(async (req, res) => {
         all[k] = { model, effort }; store.writeJson("terminal-prefs.json", all);
         return json(res, 200, { ok: true, note: "Restart the chat to use it (Continue last chat keeps the conversation)." });
       }
+    }
+    if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/usage$/)) && req.method === "GET") {
+      const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
+      const days = Math.min(90, Math.max(1, Number(new URL(req.url, "http://x").searchParams.get("days")) || 7));
+      return json(res, 200, { days, ...summarize(ledger.entries(p.id), { since: Date.now() - days * 864e5 }) });
     }
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/team$/))) {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });

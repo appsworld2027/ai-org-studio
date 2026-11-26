@@ -99,7 +99,7 @@ export async function runTool(root, name, args = {}, { shell = "bash", timeoutMs
 
 // Reads an OpenAI-compatible streamed response (Server-Sent Events) into text + tool calls.
 export async function readStream(body, onText) {
-  const dec = new TextDecoder(); let buf = "", text = "", finish = null; const calls = [];
+  const dec = new TextDecoder(); let buf = "", text = "", finish = null, usage = null; const calls = [];
   for await (const chunk of body) {
     buf += dec.decode(chunk, { stream: true });
     let i;
@@ -108,6 +108,7 @@ export async function readStream(body, onText) {
       if (!line.startsWith("data:")) continue;
       const data = line.slice(5).trim(); if (data === "[DONE]") continue;
       let j; try { j = JSON.parse(data); } catch { continue; }
+      if (j.usage) usage = { input: j.usage.prompt_tokens, output: j.usage.completion_tokens };
       const ch = j.choices?.[0]; if (!ch) continue;
       const d = ch.delta || ch.message || {};
       if (d.content) { text += d.content; onText?.(d.content); }
@@ -121,7 +122,7 @@ export async function readStream(body, onText) {
       if (ch.finish_reason) finish = ch.finish_reason;
     }
   }
-  return { text, calls: calls.filter(Boolean), finish };
+  return { text, calls: calls.filter(Boolean), finish, usage };
 }
 
 // One user turn: call the model, run tools (asking when needed), repeat until the model answers without tools.
@@ -143,7 +144,7 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
     const call = () => fetchImpl(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,
       headers: { "Content-Type": "application/json", ...(provider.key ? { Authorization: `Bearer ${provider.key}` } : {}), ...(provider.extraHeaders || {}) },
-      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...messages], tools: [...toolSchemas(), ...appSchemas], tool_choice: "auto", ...extra }),
+      body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: systemPrompt }, ...messages], tools: [...toolSchemas(), ...appSchemas], tool_choice: "auto", ...(["openai", "openrouter"].includes(provider.id) ? { stream_options: { include_usage: true } } : {}), ...extra }),
     });
     let res = await call();
     // Some models refuse a thinking level they do not support: retry once without it and say so.
@@ -158,7 +159,8 @@ export async function runTurn({ messages, provider, model, effort, root, systemP
       throw new Error(`${res.status} ${hint || body}`);
     }
     emit({ t: "assistant_start" });
-    const { text, calls } = await readStream(res.body, (d) => emit({ t: "delta", d }));
+    const { text, calls, usage } = await readStream(res.body, (d) => emit({ t: "delta", d }));
+    emit({ t: "usage", models: [{ model, input: usage?.input, output: usage?.output }] });
     messages.push({ role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args || "{}" } })) } : {}) });
     if (!calls.length) return emit({ t: "done" });
     for (const c of calls) {
