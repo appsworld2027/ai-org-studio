@@ -16,6 +16,7 @@ import { parseBacklog, buildBoard, feedFrom, appTarget, rosterFrom } from "./sta
 import { makeLedger, summarize } from "./usage.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
+import { providerAllowed, modelAllowed, planEnv, BLOCKED } from "./billing.mjs";
 import { runTurn } from "./agent.mjs";
 import { makeConnectors, CATALOG } from "./connectors.mjs";
 import { openApps } from "./mcp-client.mjs";
@@ -178,7 +179,7 @@ function startSession(p, engine, mode = "new") {
   if (old && !old.exited) { old.replaced = true; try { old.term.kill(); } catch { /* gone */ } }
   const term = pty.spawn("bash", ["-c", TERMINAL[engine].cmd], {
     name: "xterm-256color", cols: 100, rows: 30, cwd: existsSync(p.dir) ? p.dir : HOME,
-    env: { ...process.env, STUDIO: "1", STUDIO_MODE: mode, STUDIO_PRODUCT: p.name, STUDIO_REPO: p.repo, STUDIO_RULES: RULES, COLORTERM: "truecolor",
+    env: { ...planEnv(), STUDIO: "1", STUDIO_MODE: mode, STUDIO_PRODUCT: p.name, STUDIO_REPO: p.repo, STUDIO_RULES: RULES, COLORTERM: "truecolor",
       STUDIO_MODEL: /^[A-Za-z0-9._:\/-]{0,80}$/.test(pref.model || "") ? pref.model || "" : "", STUDIO_EFFORT: EFFORTS.includes(pref.effort) && pref.effort !== "default" ? pref.effort : "" },
   });
   const s = { term, buf: "", clients: old?.clients || new Set(), exited: false };
@@ -226,7 +227,7 @@ const execFileSyncSafe = (cmd, args) => { try { return require_execFileSync(cmd,
 
 // ---------- "Other models" chat (Studio-drawn) ----------
 const providerConf = (id) => {
-  const def = PROVIDERS[id]; if (!def) return null;
+  const def = PROVIDERS[id]; if (!def || !providerAllowed(id)) return null;
   const saved = store.keys.get(id) || {};
   const base = def.custom ? saved.base : def.base;
   if (!base) return null;
@@ -240,7 +241,7 @@ async function listModels(id) {
   const j = await r.json();
   // The Studio's agent needs tool use; drop models that say they cannot do it (OpenRouter publishes this per model).
   const usable = (j.data || j.models || []).filter((m) => !Array.isArray(m.supported_parameters) || m.supported_parameters.includes("tools"));
-  return sortModels(id, usable.map((m) => (m.id || m.name || "").replace(/^models\//, "")));
+  return sortModels(id, usable.map((m) => (m.id || m.name || "").replace(/^models\//, ""))).filter((m) => modelAllowed(id, m));
 }
 function systemPromptFor(p) {
   let rules = ""; try { rules = readFileSync(RULES, "utf8"); } catch { /* none */ }
@@ -252,6 +253,7 @@ const EFFORTS = ["default", "none", "minimal", "low", "medium", "high", "xhigh",
 async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
   const c = store.chats.get(p.id, chatId); if (!c) throw new Error("Chat not found");
   await garage.pull();
+  if (!modelAllowed(c.provider, c.model)) throw new Error(BLOCKED);
   const pc = providerConf(c.provider); if (!pc) throw new Error("This chat's provider is not set up. Open Keys.");
   if (PROVIDERS[c.provider].needsKey && !pc.key) throw new Error("Add your key for this provider under Keys.");
   const key = `${p.id}:${chatId}`; if (live.get(key)?.abort) throw new Error("Still working on the last message.");
@@ -280,7 +282,7 @@ async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
 // ---------- Claude Code / Codex chats (official programs in structured mode, the user's own login) ----------
 const TOOLS_BIN = join(HOME, ".ai-org-studio/tools/node_modules/.bin");
 // GH_NO_UPDATE_NOTIFIER: gh inside Codex's read-only sandbox must not try to write its update-check file.
-const ENGINE_ENV = { ...process.env, PATH: `${TOOLS_BIN}:${process.env.PATH}`, GH_NO_UPDATE_NOTIFIER: "1", GH_PROMPT_DISABLED: "1" };
+const ENGINE_ENV = { ...planEnv(), PATH: `${TOOLS_BIN}:${process.env.PATH}`, GH_NO_UPDATE_NOTIFIER: "1", GH_PROMPT_DISABLED: "1" };
 const BINS = { claude: process.env.STUDIO_CLAUDE_BIN || "claude", codex: process.env.STUDIO_CODEX_BIN || "codex" };
 const CODEX_CONFIG = (process.env.STUDIO_CODEX_CONFIG || "").split("\n").filter(Boolean);   // tests point Codex at a stand-in model server
 // Every chat starts with: the Studio rules + the Garage rules + the shared memory pack (same for every AI and login).
@@ -371,7 +373,7 @@ const server = http.createServer(async (req, res) => {
       platform: platform(), workspace: WORKSPACE,
       products: products().map((p) => ({ id: p.id, name: p.name, repo: p.repo, productionUrl: p.productionUrl, prototypes: (p.prototypes || []).map((f) => f.split("/").pop()), ready: existsSync(p.dir) })),
       terminals: Object.entries(TERMINAL).map(([id, e]) => ({ id, name: e.name })),
-      providers: publicProviders(store.keys.all()), boardRefreshMs: Number(process.env.STUDIO_POLL_MS || 30000),
+      providers: publicProviders(store.keys.all()).filter((x) => providerAllowed(x.id)), boardRefreshMs: Number(process.env.STUDIO_POLL_MS || 30000),
     });
     if (path === "/api/products" && req.method === "POST") {
       const b = await readBody(req); try { const p = await addProduct(b); return json(res, 200, { ok: true, id: p.id }); } catch (e) { return json(res, 400, { error: e.message }); }
@@ -400,6 +402,7 @@ const server = http.createServer(async (req, res) => {
     // provider keys: write-only from the browser; the key itself never comes back
     if ((m = path.match(/^\/api\/providers\/([a-z]+)$/)) && PROVIDERS[m[1]]) {
       const id = m[1];
+      if (req.method !== "DELETE" && !providerAllowed(id)) return json(res, 403, { error: BLOCKED });
       if (req.method === "PUT") {
         const b = await readBody(req, 8192);
         if (PROVIDERS[id].custom && b.base && !/^https?:\/\/\S+$/.test(b.base)) return json(res, 400, { error: "Address must start with http:// or https://" });
@@ -521,6 +524,7 @@ const server = http.createServer(async (req, res) => {
         const b = await readBody(req);
         if (b.engine === "claude" || b.engine === "codex") return json(res, 200, store.chats.create(p.id, { engine: b.engine, model: /^[A-Za-z0-9._:\/-]{0,80}$/.test(b.model || "") ? b.model || "" : "", effort: EFFORTS.includes(b.effort) ? b.effort : "", mode: MODES.includes(b.mode) ? b.mode : "ask" }));
         if (!PROVIDERS[b.provider] || !b.model) return json(res, 400, { error: "Pick a provider and model." });
+        if (!modelAllowed(b.provider, b.model)) return json(res, 403, { error: BLOCKED });
         return json(res, 200, store.chats.create(p.id, { provider: b.provider, model: String(b.model).slice(0, 200) }));
       }
     }
@@ -532,6 +536,7 @@ const server = http.createServer(async (req, res) => {
         const b = await readBody(req, 4096), c = store.chats.get(p.id, m[2]); if (!c) return json(res, 404, { error: "Chat not found" });
         if (live.get(`${p.id}:${c.id}`)?.abort) return json(res, 409, { error: "Wait until the current answer finishes." });
         if (!PROVIDERS[b.provider] || !b.model) return json(res, 400, { error: "Pick a provider and model." });
+        if (!modelAllowed(b.provider, b.model)) return json(res, 403, { error: BLOCKED });
         c.provider = b.provider; c.model = String(b.model).slice(0, 200); store.chats.save(p.id, c); return json(res, 200, { ok: true });
       }
     }
