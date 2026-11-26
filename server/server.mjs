@@ -253,10 +253,10 @@ const execFileSyncSafe = (cmd, args) => { try { return require_execFileSync(cmd,
 
 // ---------- "Other models" chat (Studio-drawn) ----------
 const providerConf = (id) => {
-  const def = PROVIDERS[id]; if (!def || !providerAllowed(id)) return null;
+  const def = PROVIDERS[id]; if (!def) return null;
   const saved = store.keys.get(id) || {};
   const base = def.custom ? saved.base : def.base;
-  if (!base) return null;
+  if (!base || !providerAllowed(id, process.env, base)) return null;
   return { id, base, key: saved.key || (def.needsKey ? null : undefined), extraHeaders: id === "openrouter" ? { "HTTP-Referer": "https://github.com/appsworld2027/ai-org-studio", "X-Title": "AI Org Studio" } : {} };
 };
 async function listModels(id) {
@@ -267,7 +267,7 @@ async function listModels(id) {
   const j = await r.json();
   // The Studio's agent needs tool use; drop models that say they cannot do it (OpenRouter publishes this per model).
   const usable = (j.data || j.models || []).filter((m) => !Array.isArray(m.supported_parameters) || m.supported_parameters.includes("tools"));
-  return sortModels(id, usable.map((m) => (m.id || m.name || "").replace(/^models\//, ""))).filter((m) => modelAllowed(id, m));
+  return sortModels(id, usable.map((m) => (m.id || m.name || "").replace(/^models\//, ""))).filter((m) => modelAllowed(id, m, process.env, pc.base));
 }
 function systemPromptFor(p) {
   let rules = ""; try { rules = readFileSync(RULES, "utf8"); } catch { /* none */ }
@@ -279,7 +279,7 @@ const EFFORTS = ["default", "none", "minimal", "low", "medium", "high", "xhigh",
 async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
   const c = store.chats.get(p.id, chatId); if (!c) throw new Error("Chat not found");
   await garage.pull();
-  if (!modelAllowed(c.provider, c.model)) throw new Error(BLOCKED);
+  if (!modelAllowed(c.provider, c.model, process.env, store.keys.get(c.provider)?.base)) throw new Error(BLOCKED);
   const pc = providerConf(c.provider); if (!pc) throw new Error("This chat's provider is not set up. Open Keys.");
   if (PROVIDERS[c.provider].needsKey && !pc.key) throw new Error("Add your key for this provider under Keys.");
   const key = `${p.id}:${chatId}`; if (live.get(key)?.abort) throw new Error("Still working on the last message.");
@@ -435,7 +435,7 @@ if (req.method === "GET") {
       platform: platform(), workspace: WORKSPACE,
       products: products().map((p) => ({ id: p.id, name: p.name, repo: p.repo, productionUrl: p.productionUrl, prototypes: (p.prototypes || []).map((f) => f.split("/").pop()), ready: existsSync(p.dir) })),
       terminals: Object.entries(TERMINAL).map(([id, e]) => ({ id, name: e.name })),
-      providers: publicProviders(store.keys.all()).filter((x) => providerAllowed(x.id)), boardRefreshMs: Number(process.env.STUDIO_POLL_MS || 30000),
+      providers: publicProviders(store.keys.all()).filter((x) => x.id === "custom" || providerAllowed(x.id, process.env, x.base)), boardRefreshMs: Number(process.env.STUDIO_POLL_MS || 30000),
     });
     if (path === "/api/products" && req.method === "POST") {
       const b = await readBody(req); try { const p = await addProduct(b); return json(res, 200, { ok: true, id: p.id }); } catch (e) { return json(res, 400, { error: e.message }); }
@@ -464,15 +464,20 @@ if (req.method === "GET") {
     // provider keys: write-only from the browser; the key itself never comes back
     if ((m = path.match(/^\/api\/providers\/([a-z]+)$/)) && PROVIDERS[m[1]]) {
       const id = m[1];
-      if (req.method !== "DELETE" && !providerAllowed(id)) return json(res, 403, { error: BLOCKED });
+      if (req.method === "DELETE") { store.keys.set(id, null); return json(res, 200, { ok: true }); }
       if (req.method === "PUT") {
         const b = await readBody(req, 8192);
+        const requestedBase = PROVIDERS[id].custom ? String(b.base || store.keys.get(id)?.base || "").trim() : PROVIDERS[id].base;
         if (PROVIDERS[id].custom && b.base && !/^https?:\/\/\S+$/.test(b.base)) return json(res, 400, { error: "Address must start with http:// or https://" });
-        store.keys.set(id, { key: String(b.key || "").trim() || store.keys.get(id)?.key || "", base: PROVIDERS[id].custom ? String(b.base || "").trim() : undefined });
+        if (!providerAllowed(id, process.env, requestedBase)) return json(res, 403, { error: BLOCKED + " Custom model servers must use a localhost or private-network endpoint." });
+        store.keys.set(id, { key: String(b.key || "").trim() || store.keys.get(id)?.key || "", base: PROVIDERS[id].custom ? requestedBase : undefined });
         try { const models = await listModels(id); return json(res, 200, { ok: true, models }); } catch (e) { return json(res, 200, { ok: true, models: PROVIDERS[id].models, warning: e.message }); }
       }
-      if (req.method === "DELETE") { store.keys.set(id, null); return json(res, 200, { ok: true }); }
-      if (path.endsWith(id) && req.method === "GET") { try { return json(res, 200, { models: await listModels(id) }); } catch (e) { return json(res, 200, { models: PROVIDERS[id].models, warning: e.message }); } }
+      if (path.endsWith(id) && req.method === "GET") {
+        const savedBase = PROVIDERS[id].custom ? store.keys.get(id)?.base : PROVIDERS[id].base;
+        if (!providerAllowed(id, process.env, savedBase)) return json(res, 403, { error: BLOCKED });
+        try { return json(res, 200, { models: await listModels(id) }); } catch (e) { return json(res, 200, { models: PROVIDERS[id].models, warning: e.message }); }
+      }
     }
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/terminal\/(claude|codex)$/))) {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
@@ -621,7 +626,7 @@ if (req.method === "GET") {
         const b = await readBody(req);
         if (b.engine === "claude" || b.engine === "codex") return json(res, 200, store.chats.create(p.id, { engine: b.engine, model: /^[A-Za-z0-9._:\/-]{0,80}$/.test(b.model || "") ? b.model || "" : "", effort: EFFORTS.includes(b.effort) ? b.effort : "", mode: MODES.includes(b.mode) ? b.mode : "ask" }));
         if (!validProvider(b.provider) || !validModel(b.model)) return json(res, 400, { error: "Pick a provider and model." });
-        if (!modelAllowed(b.provider, b.model)) return json(res, 403, { error: BLOCKED });
+        if (!modelAllowed(b.provider, b.model, process.env, store.keys.get(b.provider)?.base)) return json(res, 403, { error: BLOCKED });
         return json(res, 200, store.chats.create(p.id, { provider: b.provider, model: b.model }));
       }
     }
