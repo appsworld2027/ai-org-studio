@@ -132,3 +132,19 @@ hashes it before recording stage completion. A verbal COMPLETE receipt is
 insufficient. The builder similarly cannot complete without at least one
 actual authorized file change. The baseline and green test gates still apply.
 The failed first live attempt is retained; no product code was modified.
+
+### Output-limit recovery (live failure 2026-11-26)
+
+The single 8k-token test-generation request finished with provider
+`finish: length` in 256 seconds, then the reserved repair exhausted the
+shared 300-second deadline. Usage counts were not reported. Keep the existing
+Nemotron role route. Split acceptance authorship into one criterion per
+request, using deterministic fixture wiring, the exact criterion and matching
+QA plan excerpt plus fingerprint. Each request has its own bounded time and
+output budget. Preserve partial and rejected text privately, record explicit
+`output_limit` and criterion IDs in the metadata journal, syntax-check every
+fragment, and assemble the locked test suite only after all fragments exist.
+An explicit retry can reuse verified fragments from a stopped run via
+`STUDIO_DELIVERY_REUSE_DIR` if contract, QA artifact, fixture and source
+fingerprints match. The suite exercises backend behavior; full browser
+acceptance and regression gates are still required before founder testing.

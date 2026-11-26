@@ -14,7 +14,7 @@ const ROLES = new Set(["maya-ai-pm", "founder", "arjun-cpto", "quinn-qa", "dev-c
 const TOOLS = new Set(["read_file", "list_files", "search", "write_file", "edit_file", "run_command", "ask_user", "other"]);
 const FINISH = new Set(["stop", "length", "tool_calls", "content_filter", "function_call"]);
 const OUTCOMES = new Set(["ok", "blocked", "error"]);
-const ERRORS = new Set(["timeout", "provider_rate_limit", "provider_auth", "provider_http", "invalid_artifact", "interrupted", "execution_error"]);
+const ERRORS = new Set(["timeout", "provider_rate_limit", "provider_auth", "provider_http", "invalid_artifact", "output_limit", "interrupted", "execution_error"]);
 const MODELS = new Set(["nvidia/nemotron-3-ultra-550b-a55b", "mistralai/mistral-large-4-1t-a52b", "moonshotai/kimi-k3.1-pro"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA = /^[0-9a-f]{64}$/;
@@ -26,7 +26,8 @@ export function failureKind(error) {
   if (/^429\b/.test(message)) return "provider_rate_limit";
   if (/^(401|403)\b/.test(message)) return "provider_auth";
   if (/^[45]\d\d\b/.test(message)) return "provider_http";
-  if (/structured contract|missing required fields|invalid founder decision|structured planning artifact|Planning artifact validation failed|Planning artifact lacks|final response/i.test(message)) return "invalid_artifact";
+  if (/output limit reached/i.test(message)) return "output_limit";
+  if (/Invalid artifact|structured contract|missing required fields|invalid founder decision|structured planning artifact|Planning artifact validation failed|Planning artifact lacks|final response/i.test(message)) return "invalid_artifact";
   return "execution_error";
 }
 
@@ -44,6 +45,7 @@ export function createExecutionJournal(dir) {
       if (MODELS.has(fields[k])) event[k] = fields[k];
       else if (k === "reportedModel" && fields[k] != null) event[k] = "other-unverified";
     }
+    if (/^AC-\d{2}$/.test(fields.criterionId || "")) event.criterionId = fields.criterionId;
     if (["ai:discovery", "ai:plan", "ai:tests", "ai:build", "ai:qa", "ai:review"].includes(fields.stage)) event.stage = fields.stage;
     if (fields.engine === "free") event.engine = "free";
     if (["explore", "finalize"].includes(fields.phase)) event.phase = fields.phase;
