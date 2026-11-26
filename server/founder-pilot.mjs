@@ -45,6 +45,9 @@ export function createFounderPilot({
 
     const route = router.route({
       labels: [stage, "engine:free"],
+      freeModel: stage === "ai:review"
+        ? "nvidia_nim/moonshotai/kimi-k3.1-pro"
+        : "",
       engines: { free: true, codex: false, claude: false }
     });
 
@@ -57,7 +60,12 @@ export function createFounderPilot({
       /^nvidia_nim\//, ""
     );
 
-    if (!PROVIDERS.nvidia.models.includes(model)) {
+    const allowedModels = [
+      ...PROVIDERS.nvidia.models,
+      "moonshotai/kimi-k3.1-pro"
+    ];
+
+    if (!allowedModels.includes(model)) {
       throw new Error("Model outside pilot allowlist");
     }
 
@@ -85,7 +93,7 @@ export function createFounderPilot({
       `${PROVIDERS.nvidia.base}/chat/completions`,
       {
         method: "POST",
-        signal: AbortSignal.timeout(150000),
+        signal: AbortSignal.timeout(120000),
         headers: {
           Authorization: `Bearer ${key}`,
           "Content-Type": "application/json"
