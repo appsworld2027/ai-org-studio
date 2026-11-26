@@ -4,26 +4,18 @@ export const ENDPOINTS = {
   groq:"https://api.groq.com/openai/v1",
   openrouter:"https://openrouter.ai/api/v1"
 };
-export const LEGACY_BUILDER = "nvidia:nvidia/nemotron-3-ultra-550b-a55b";
-export const LEGACY_REVIEWER = "nvidia:mistralai/mistral-large-4-1t-a52b";
+export const LEGACY_BUILDER = "groq:openai/gpt-oss-120b";
+export const LEGACY_REVIEWER = "groq:qwen/qwen3.8-27b";
 // Ordered pilot preference, not a claim of benchmark superiority.
 export const NEW_CANDIDATES = [
-  "nvidia:z-ai/glm-5.3-flash",
-  "openrouter:deepseek/deepseek-v4.1-flash-1017:free",
   "groq:openai/gpt-oss-120b",
-  "nvidia:moonshotai/kimi-k3.1-pro",
-  "openrouter:deepseek/deepseek-v4-flash-0731:free",
-  "openrouter:deepseek/deepseek-v4-flash:free",
-  "openrouter:moonshotai/kimi-k3.1-pro:free",
   "groq:qwen/qwen3.8-27b",
-  "nvidia:nvidia/nemotron-3.5-lightning-30b-a3b",
   "groq:openai/gpt-oss-20b"
 ];
 export const DEPRECATED_CANDIDATES = [
-  "nvidia:deepseek-ai/deepseek-v4-flash",
-  "nvidia:deepseek-ai/deepseek-v4-flash-0731",
-  "nvidia:deepseek-ai/deepseek-v4.1-flash",
-  "nvidia:moonshotai/kimi-k3"
+  "nvidia:nvidia/nemotron-3-ultra-550b-a55b",
+  "nvidia:mistralai/mistral-large-4-1t-a52b",
+  "openrouter:deepseek/deepseek-v4.1-flash-1017:free"
 ];
 export const PROBE_VERSION=2;
 export const PROBE_ROUTES=[...NEW_CANDIDATES,LEGACY_REVIEWER,LEGACY_BUILDER];
@@ -48,7 +40,7 @@ export function modelFamily(model){
   return id.replace(/:free$/,"");
 }
 export const routeFamily=route=>modelFamily(splitRoute(route).model);
-export const stageRoute=stage=>(stage.providerId||"nvidia")+":"+stage.requestedModel;
+export const stageRoute=stage=>(stage.providerId||"groq")+":"+stage.requestedModel;
 export function modelMatches(model,reported,provider){
   return typeof reported==="string"&&
     (provider==="openrouter"?model.replace(/:free$/,"")===reported.replace(/:free$/,""):model===reported);
