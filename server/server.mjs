@@ -6,7 +6,7 @@
 // Right panel: the product's real app (Vercel) or HTML prototype, and live agent status read from GitHub.
 import http from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
-import { execFile, spawn, execFileSync as require_execFileSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve, extname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -249,8 +249,6 @@ async function teamPlan(p) {
   return { models: ENGINE_MODELS.map((m) => ({ id: m.id, name: m.name, cost: m.cost, available: !!available[m.id] })), rows, error,
     note: `Advisory mapping only: the background worker's authoritative engine and builder/reviewer models come from the AI Org governance policy. The Studio cannot read GitHub secret availability or enforce per-agent overrides yet. Local availability reflects the Groq key saved on this machine.` };
 }
-const execFileSyncSafe = (cmd, args) => { try { return require_execFileSync(cmd, args, { encoding: "utf8", timeout: 5000 }).trim(); } catch { return ""; } };
-
 // ---------- "Other models" chat (Studio-drawn) ----------
 const providerConf = (id) => {
   const def = PROVIDERS[id]; if (!def) return null;
