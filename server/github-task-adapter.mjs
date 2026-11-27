@@ -24,6 +24,20 @@ export function createGithubTaskAdapter({ run = runGh, allowedRepositories = [] 
     }
   }
 
+  async function getRepository({ repository } = {}) {
+    assertRepository(repository);
+    const info = await run(["api", `repos/${repository}`]);
+    if (
+      !info ||
+      typeof info.private !== "boolean" ||
+      typeof info.full_name !== "string" ||
+      info.full_name.toLowerCase() !== repository.toLowerCase()
+    ) {
+      throw new Error("GitHub did not confirm product repository identity and visibility");
+    }
+    return { fullName: info.full_name, private: info.private };
+  }
+
   async function findTask({ repository, requestId } = {}) {
     assertRepository(repository);
     if (!validRequestId(requestId)) throw new Error("Invalid request ID");
@@ -80,5 +94,5 @@ export function createGithubTaskAdapter({ run = runGh, allowedRepositories = [] 
     return { number: issue.number, state: issue.state, url: issue.html_url };
   }
 
-  return { findTask, ensureTask };
+  return { getRepository, findTask, ensureTask };
 }
