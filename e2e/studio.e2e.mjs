@@ -457,9 +457,9 @@ try {
     assert(auto["dev-coder"] && auto["rex-reviewer"] && auto["dev-coder"] !== auto["rex-reviewer"], `dev vs rex: ${auto["dev-coder"]} / ${auto["rex-reviewer"]}`);
     const options = await page.$$eval("#team select[data-slug=dev-coder] option", (o) => o.map((x) => x.textContent).join(" "));
     assert(/Groq free tier/i.test(options) && !/Claude|Codex|NVIDIA/i.test(options), `agent model choices must be Groq free-only: ${options}`);
-    const rexChoices = await page.$eval("#team select[data-slug=rex-reviewer] option", o => o.map(x => x.value));
+    const rexChoices = await page.$$eval("#team select[data-slug=rex-reviewer] option", o => o.map(x => x.value));
     assert(rexChoices.includes("free:qwen-3.8-27b") && !rexChoices.includes("free:gpt-oss-120b"), "reviewer cannot choose builder model");
-    const devChoices = await page.$eval("#team select[data-slug=dev-coder] option", o => o.map(x => x.value));
+    const devChoices = await page.$$eval("#team select[data-slug=dev-coder] option", o => o.map(x => x.value));
     assert(devChoices.includes("free:gpt-oss-120b") && !devChoices.includes("free:qwen-3.8-27b"), "builder cannot choose reviewer model");
     await page.selectOption("#team select[data-slug=maya-ai-pm]", "free:qwen-3.8-27b");
     await page.waitForFunction(() => document.querySelector("#team select[data-slug=maya-ai-pm]").value === "free:qwen-3.8-27b", null, { timeout: 8000 });
