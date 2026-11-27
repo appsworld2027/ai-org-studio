@@ -24,6 +24,8 @@ import { createFounderPilot } from "./founder-pilot.mjs";
 
 import { createFounderInbox } from "./founder-inbox.mjs";
 import { handleFounderInbox } from "./founder-inbox-http.mjs";
+import { createGithubTaskAdapter } from "./github-task-adapter.mjs";
+import { dispatchTask } from "./task-dispatch.mjs";
 
 import { makeConnectors, CATALOG } from "./connectors.mjs";
 import { openApps } from "./mcp-client.mjs";
@@ -428,7 +430,43 @@ if (req.method === "GET") {
     }
 
     if (path === "/api/founder-inbox") {
-      return await handleFounderInbox(req, res, founderInbox);
+      const studioManifest = (() => {
+        try { return JSON.parse(readFileSync(join(ROOT, ".ai-org", "manifest.json"), "utf8")); }
+        catch { return null; }
+      })();
+      const allowedRepositories = studioManifest?.allowedProductRepositories || [];
+      return await handleFounderInbox(req, res, founderInbox, {
+        products: products().map((p) => ({ id: p.id, name: p.name, repo: p.repo })),
+        resolveProduct: (id) => {
+          if (id) return store.products.get(id);
+          const defaultId = process.env.STUDIO_DEFAULT_PRODUCT_ID || settings.defaultProductId;
+          if (defaultId) return store.products.get(defaultId);
+          const all = products();
+          return all.length === 1 ? all[0] : null;
+        },
+        dispatch: async ({ task, product }) => {
+          const productManifestPath = join(product.dir, ".ai-org", "manifest.json");
+          let productManifest;
+          try { productManifest = JSON.parse(readFileSync(productManifestPath, "utf8")); }
+          catch { throw new Error(`Product manifest is missing or invalid: ${productManifestPath}`); }
+          const github = createGithubTaskAdapter({
+            allowedRepositories,
+            run: async (args) => JSON.parse(await gh(args))
+          });
+          return dispatchTask({
+            studioManifest,
+            productManifest,
+            allowedRepositories,
+            repository: product.repo,
+            productName: product.name,
+            title: task.title,
+            description: task.description,
+            requestId: task.requestId,
+            availableEngines: { free: true },
+            github
+          });
+        }
+      });
     }
 
     if (path === "/api/config") return json(res, 200, {
