@@ -45,6 +45,15 @@ const input = () => ({
   }
 });
 
+test("repository policy allowlists use GitHub case-insensitive identity", async () => {
+  const args = input();
+  args.allowedRepositories = [PARENT_REPO.toLowerCase()];
+  args.studioManifest.allowedPublicCodeRepositories = [PARENT_REPO.toLowerCase()];
+  args.studioManifest.inheritProductExecutionPolicyFor = [PARENT_REPO.toLowerCase()];
+  const result = await dispatchTask(args);
+  assert.equal(result.status, "submitted");
+});
+
 test("dispatches to an explicitly approved public source-code repository", async () => {
   const result = await dispatchTask(input());
   assert.equal(result.status, "submitted");
