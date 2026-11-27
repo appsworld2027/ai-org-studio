@@ -510,6 +510,7 @@ try {
     try {
       await page.getByRole("button", { name: "Founder Inbox" }).click();
       await page.waitForFunction(() => document.querySelector("#founder-inbox-dialog")?.open, null, { timeout: 3000 });
+      await page.waitForFunction(() => [...document.querySelectorAll("#founder-inbox-product option")].some(option => option.value === "parent-plus"), null, { timeout: 8000 });
       const parentPlusOptionCount = await inbox.locator('option[value="parent-plus"]').count();
       const inboxState = await inbox.innerText();
       assert(parentPlusOptionCount === 1, `only a GitHub-verified private product repository is dispatchable; options=${parentPlusOptionCount}; state=${inboxState}`);
