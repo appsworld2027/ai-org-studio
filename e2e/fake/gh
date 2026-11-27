@@ -25,29 +25,28 @@ if [ "$2" = "--paginate" ] && [ "$3" = "--slurp" ] && [[ "$4" == repos/appsworld
 fi
 if [ "$2" = "--method" ] && [ "$3" = "POST" ] && [ "$4" = "repos/appsworld2027/Parent-plus-/issues" ]; then
   shift 4
-  title=""; body=""; labels=()
+  title=""; body=""
   while [ "$#" -gt 0 ]; do
     if [ "$1" = "-f" ] && [ -n "${2:-}" ]; then
       case "$2" in
         title=*) title="${2#title=}" ;;
         body=*) body="${2#body=}" ;;
-        labels\[\]=*) labels+=("${2#labels[]=}") ;;
       esac
       shift 2
     else
       shift
     fi
   done
-  node - "${STUDIO_HOME}/fake-dispatched-issues.json" "$title" "$body" "${labels[@]}" <<'NODE'
+  node - "${STUDIO_HOME}/fake-dispatched-issues.json" "$title" "$body" <<'NODE'
 const fs = require("fs");
-const [file, title, body, ...labels] = process.argv.slice(2);
+const [file, title, body] = process.argv.slice(2);
 let issues = [];
 try { issues = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
 const number = 500 + issues.length;
 const issue = {
   number, state: "open", title, body,
   html_url: `https://github.com/appsworld2027/Parent-plus-/issues/${number}`,
-  labels: labels.map(name => ({ name }))
+  labels: [{ name: "ai:discovery" }]
 };
 issues.push(issue);
 fs.writeFileSync(file, JSON.stringify(issues, null, 2));
