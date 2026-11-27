@@ -18,7 +18,7 @@ test("only explicitly supported free providers are allowed", () => {
 test("provider model catalogs expose only approved free IDs", () => {
   assert.deepEqual(sortModels("zai", ["glm-4.7", "glm-4.7-flash", "glm-5.3-flash"]), ["glm-4.7-flash"]);
   assert.deepEqual(sortModels("nvidia", ["nvidia/nemotron-3-ultra-550b-a55b", "mistralai/mistral-large-4-1t-a52b"]), ["nvidia/nemotron-3-ultra-550b-a55b"]);
-  assert.deepEqual(sortModels("gemini", ["gemini-3.8-flash", "gemini-3-pro", "gemini-2.5-flash-lite"]), ["gemini-3.8-flash", "gemini-2.5-flash-lite"]);
+  assert.deepEqual(sortModels("gemini", ["gemini-3.8-flash", "gemini-3-pro", "gemini-2.5-flash-lite"]), ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]);
   assert.deepEqual(sortModels("openrouter", ["vendor/paid", "vendor/free:free"]), ["vendor/free:free"]);
 });
 
