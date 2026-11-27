@@ -33,32 +33,37 @@ test("no plan or paid engine can enter the agent assignment pool", () => {
   assert.ok(rows.every((r) => !r.pick || ENGINE_MODELS.some((m) => m.id === r.pick.id && m.engine === "free" && m.cost === 0)));
 });
 
-test("a backup is offered when an independent approved free model exists", () => {
+test("a backup is offered only when it is permitted for the seat", () => {
   const rows = plan({ agents: TEAM, available: all(ALL_FREE) });
   for (const r of rows) {
-    if (["quinn-qa", "rex-reviewer"].includes(r.slug)) {
-      assert.equal(r.fallback, null, `${r.slug} has no independent fallback besides the builder model`);
+    if (["dev-coder", "quinn-qa", "rex-reviewer"].includes(r.slug)) {
+      assert.equal(r.fallback, null, `${r.slug} has no other approved seat model`);
     } else {
       assert.ok(r.fallback && r.fallback.id !== r.pick.id, `${r.slug} has a different backup`);
     }
   }
 });
 
-test("only one free model available: still works and says the check uses the same model", () => {
+test("only one builder model available: independent QA and review pause", () => {
   const rows = plan({ agents: TEAM, available: all([BUILDER]) });
-  assert.equal(pick(rows, "quinn-qa"), BUILDER);
-  assert.match(rows.find((r) => r.slug === "quinn-qa").why, /only one AI/);
+  assert.equal(pick(rows, "dev-coder"), BUILDER);
+  for (const slug of ["quinn-qa", "rex-reviewer"]) {
+    assert.equal(pick(rows, slug), undefined);
+    assert.match(rows.find((r) => r.slug === slug).why, /independent reviewer/i);
+  }
 });
 test("nothing available: no crash, plain message", () => {
   const rows = plan({ agents: TEAM, available: {} });
   assert.equal(rows[0].pick, null); assert.match(rows[0].why, /No AI connected/);
 });
-test("user overrides win (if available) and are flagged when they break independence", () => {
+test("overrides cannot weaken independence even if the requested model is available", () => {
   const avail = all(ALL_FREE);
   const base = plan({ agents: TEAM, available: avail });
   const dev = pick(base, "dev-coder");
   const rows = plan({ agents: TEAM, available: avail, overrides: { "rex-reviewer": dev, "maya-ai-pm": "claude:opus" } });
-  assert.equal(pick(rows, "rex-reviewer"), dev); assert.match(rows.find((r) => r.slug === "rex-reviewer").why, /same model as the builder/);
+  assert.equal(pick(rows, "rex-reviewer"), REVIEWER);
+  assert.match(rows.find((r) => r.slug === "rex-reviewer").why, /override rejected/i);
+  assert.equal(rows.find((r) => r.slug === "rex-reviewer").overridden, false);
   assert.notEqual(pick(rows, "maya-ai-pm"), "claude:opus", "an override for an AI you do not have is ignored");
 });
 test("custom agents of any product are matched from their job description", () => {
@@ -106,4 +111,21 @@ test("thinking effort: each provider gets its own field; a model that refuses it
     fetchImpl: async (u, o) => { bodies.push(JSON.parse(o.body)); return n++ === 0 ? { ok: false, status: 400, text: async () => '{"error":"reasoning_effort is not supported by this model"}' } : { ok: true, body: sse({ choices: [{ delta: { content: "ok" } }] }) }; } });
   assert.equal(bodies.length, 2); assert.equal(bodies[0].reasoning_effort, "high"); assert.equal(bodies[1].reasoning_effort, undefined);
   assert.ok(events.some((e) => e.t === "note" && /does not take a thinking level/.test(e.message)));
+});
+
+test("builders cannot select the reserved independent reviewer model", () => {
+  const agents = [...TEAM, A("tara-database", "Tara"), A("ravi-integration", "Ravi")];
+  const overrides = Object.fromEntries(["dev-coder", "tara-database", "ravi-integration"].map(slug => [slug, REVIEWER]));
+  const rows = plan({ agents, available: all(ALL_FREE), overrides });
+  for (const slug of Object.keys(overrides)) {
+    assert.equal(pick(rows, slug), BUILDER);
+    assert.match(rows.find(r => r.slug === slug).why, /override rejected/i);
+  }
+  assert.equal(pick(rows, "rex-reviewer"), REVIEWER);
+});
+test("reviewer-only connection cannot substitute for an unavailable builder", () => {
+  const rows = plan({ agents: TEAM, available: all([REVIEWER]) });
+  assert.equal(pick(rows, "dev-coder"), undefined);
+  assert.match(rows.find(r => r.slug === "dev-coder").why, /approved builder/i);
+  assert.equal(pick(rows, "rex-reviewer"), REVIEWER);
 });
