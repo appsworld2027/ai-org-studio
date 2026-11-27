@@ -10,13 +10,22 @@ export async function handleFounderInbox(req, res, inbox, options = {}) {
   const dispatchEnabled = typeof options.dispatch === "function";
 
   if (req.method === "GET") {
+    let gate = { enabled: dispatchEnabled, products: options.products || [], reason: "" };
+    if (dispatchEnabled && typeof options.canDispatch === "function") {
+      try { gate = await options.canDispatch(); }
+      catch { gate = { enabled: false, products: [], reason: "Could not verify repository privacy; dispatch is paused." }; }
+    }
+    const enabled = dispatchEnabled && gate?.enabled === true;
     return respond(200, {
       tasks: inbox.list(),
-      products: options.products || [],
-      executionEnabled: dispatchEnabled,
-      message: dispatchEnabled
+      products: gate?.products || options.products || [],
+      executionEnabled: enabled,
+      executionReason: enabled ? "" : (gate?.reason || (dispatchEnabled
+        ? "Repository privacy could not be verified; dispatch is paused."
+        : "Founder requests are saved locally; AI Org dispatch is not connected.")),
+      message: enabled
         ? "Founder requests are dispatched to the canonical AI Org worker."
-        : "Founder requests are saved locally; AI Org dispatch is not connected."
+        : (gate?.reason || "Founder requests are saved locally; AI Org dispatch is not connected.")
     });
   }
 
@@ -55,6 +64,19 @@ export async function handleFounderInbox(req, res, inbox, options = {}) {
       return respond(400, { error: "Select a registered product before sending this task to AI Org." });
     }
 
+    if (typeof options.canDispatch === "function") {
+      let gate;
+      try { gate = await options.canDispatch(); }
+      catch { gate = { enabled: false, reason: "Could not verify repository privacy; dispatch is paused." }; }
+      if (gate?.enabled !== true || !(gate.products || []).some((item) => item.id === product.id)) {
+        return respond(423, {
+          error: "Founder task dispatch is paused.",
+          message: gate?.reason || "The product repository must be private before dispatch.",
+          executionEnabled: false
+        });
+      }
+    }
+
     task = inbox.submit({
       ...input,
       productId: product.id,
@@ -71,7 +93,7 @@ export async function handleFounderInbox(req, res, inbox, options = {}) {
       });
       return respond(200, {
         task: blocked,
-        executionEnabled: true,
+        executionEnabled: false,
         message: `Saved, but not dispatched: ${blocked.dispatchError}`
       });
     }
