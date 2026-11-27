@@ -436,13 +436,14 @@ if (req.method === "GET") {
       })();
       const allowedRepositories = studioManifest?.allowedProductRepositories || [];
       return await handleFounderInbox(req, res, founderInbox, {
-        products: products().map((p) => ({ id: p.id, name: p.name, repo: p.repo })),
+        products: products().filter((p) => allowedRepositories.includes(p.repo)).map((p) => ({ id: p.id, name: p.name, repo: p.repo })),
         resolveProduct: (id) => {
-          if (id) return store.products.get(id);
+          if (id) { const selected = store.products.get(id); return selected && allowedRepositories.includes(selected.repo) ? selected : null; }
           const defaultId = process.env.STUDIO_DEFAULT_PRODUCT_ID || settings.defaultProductId;
           if (defaultId) return store.products.get(defaultId);
           const all = products();
-          return all.length === 1 ? all[0] : null;
+          const allowed = all.filter((p) => allowedRepositories.includes(p.repo));
+          return allowed.length === 1 ? allowed[0] : null;
         },
         dispatch: async ({ task, product }) => {
           const productManifestPath = join(product.dir, ".ai-org", "manifest.json");
