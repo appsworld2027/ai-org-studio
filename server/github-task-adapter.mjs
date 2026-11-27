@@ -19,7 +19,9 @@ const validRepository = (value) =>
 
 export function createGithubTaskAdapter({ run = runGh, allowedRepositories = [] } = {}) {
   function assertRepository(repository) {
-    if (!validRepository(repository) || !Array.isArray(allowedRepositories) || !allowedRepositories.includes(repository)) {
+    const allowlisted = Array.isArray(allowedRepositories) &&
+      allowedRepositories.some((item) => typeof item === "string" && item.toLowerCase() === String(repository || "").toLowerCase());
+    if (!validRepository(repository) || !allowlisted) {
       throw new Error("Repository is not allowlisted for Studio dispatch");
     }
   }
