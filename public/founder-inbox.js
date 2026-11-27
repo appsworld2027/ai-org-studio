@@ -4,6 +4,7 @@
   button.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:9998;padding:12px 18px;border-radius:8px;cursor:pointer";
 
   const dialog = document.createElement("dialog");
+  dialog.id = "founder-inbox-dialog";
   dialog.style.cssText = "width:min(720px,90vw);max-height:85vh;overflow:auto;padding:24px;border-radius:12px";
 
   const heading = document.createElement("h2");
