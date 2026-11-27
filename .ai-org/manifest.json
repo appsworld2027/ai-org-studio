@@ -39,7 +39,8 @@
     "models": {
       "builder": "groq/openai/gpt-oss-120b",
       "reviewer": "groq/qwen/qwen3.8-27b"
-    }
+    },
+    "requirePrivateRepositoriesForConfidentialCode": true
   },
   "memory": {
     "folder": "docs/ai-memory",
