@@ -7,7 +7,8 @@ const policy = {
   executionPolicy: {
     enabled: true,
     allowedEngines: ["free"],
-    allowPaidFallback: false
+    allowPaidFallback: false,
+    provider: "groq"
   }
 };
 const publicCodeDataPolicy = {
@@ -23,7 +24,7 @@ const input = () => ({
     allowedProductRepositories: [PARENT_REPO],
     allowedPublicCodeRepositories: [PARENT_REPO],
     inheritProductExecutionPolicyFor: [PARENT_REPO],
-    publicCodeDataPolicy
+    publicCodeDataPolicy: { ...publicCodeDataPolicy }
   },
   // Parent Plus's current manifest predates a product-local executionPolicy.
   productManifest: { product: { name: "Parent Plus" } },
