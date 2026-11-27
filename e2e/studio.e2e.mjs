@@ -364,7 +364,12 @@ try {
     await page.click(".eng[data-eng=other]"); await page.waitForSelector("#chatPane:not([hidden])");
     await page.click("#btnKeys"); await page.selectOption("#kProvider", "custom");
     await page.fill("#kBase", `http://127.0.0.1:${modelPort}/v1`); await page.fill("#kKey", "bad-key"); await page.click("#kSave");
-    await page.waitForFunction(() => /rejected/.test(document.querySelector("#kStatus").textContent), null, { timeout: 8000 });
+    try {
+      await page.waitForFunction(() => /rejected/.test(document.querySelector("#kStatus").textContent), null, { timeout: 8000 });
+    } catch (error) {
+      const status = await page.locator("#kStatus").textContent().catch(() => "<missing>");
+      throw new Error(`custom provider rejection diagnostic: status=${status}; testMode=${env.STUDIO_TEST_MODE}; modelPort=${modelPort}; modelLog=${JSON.stringify(modelLog)}; server=${srvOut.slice(-1600)}; wait=${error.message}`);
+    }
     await page.fill("#kKey", "good-key"); await page.click("#kSave");
     await page.waitForFunction(() => /2 models available/.test(document.querySelector("#kStatus").textContent), null, { timeout: 8000 });
     await page.click("#formKeys button[value=cancel]");
