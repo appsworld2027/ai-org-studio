@@ -493,10 +493,21 @@ try {
       await page.getByRole("button", { name: "Send to AI Org" }).click();
       try {
         await page.waitForFunction(() => document.querySelector("dialog")?.innerText.includes("Submitted to the canonical AI Org worker"), null, { timeout: 12000 });
-      } catch {
-        const status = await page.locator('dialog [role="status"]').textContent().catch(() => "<no status element>");
-        const inbox = await page.locator("dialog").innerText().catch(() => "<dialog unavailable>");
-        throw new Error(`dispatch did not confirm; status=${status}; dialog=${inbox.slice(0, 900)}`);
+      } catch (error) {
+        const debug = await page.evaluate(() => {
+          const dialog = document.querySelector("dialog");
+          const form = dialog?.querySelector("form");
+          return {
+            url: location.href,
+            dialogCount: document.querySelectorAll("dialog").length,
+            open: dialog?.open ?? null,
+            text: dialog?.innerText ?? null,
+            formMethod: form?.method ?? null,
+            formAction: form?.action ?? null,
+            submitHandler: typeof form?.onsubmit
+          };
+        }).catch(e => ({ browserError: e.message }));
+        throw new Error(`dispatch did not confirm; ${error.message}; debug=${JSON.stringify(debug)}`);
       }
       assert(await page.locator("dialog").getByText("Open AI Org issue #500").isVisible(), "GitHub issue link displayed");
       const issues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
