@@ -523,8 +523,18 @@ if (req.method === "GET") {
         const requestedBase = PROVIDERS[id].custom ? String(b.base || store.keys.get(id)?.base || "").trim() : PROVIDERS[id].base;
         if (PROVIDERS[id].custom && b.base && !/^https?:\/\/\S+$/.test(b.base)) return json(res, 400, { error: "Address must start with http:// or https://" });
         if (!providerAllowed(id, process.env, requestedBase)) return json(res, 403, { error: BLOCKED + " Custom model servers must use a localhost or private-network endpoint." });
-        store.keys.set(id, { key: String(b.key || "").trim() || store.keys.get(id)?.key || "", base: PROVIDERS[id].custom ? requestedBase : undefined });
-        try { const models = await listModels(id); return json(res, 200, { ok: true, models }); } catch (e) { return json(res, 200, { ok: true, models: PROVIDERS[id].models, warning: e.message }); }
+        const previous = store.keys.get(id) || null;
+        const candidate = { key: String(b.key || "").trim() || previous?.key || "", base: PROVIDERS[id].custom ? requestedBase : undefined };
+        store.keys.set(id, candidate);
+        try {
+          const models = await listModels(id);
+          return json(res, 200, { ok: true, models });
+        } catch (e) {
+          // Do not persist a rejected key or replace a previously working credential.
+          store.keys.set(id, previous);
+          const status = /key was rejected/i.test(String(e.message)) ? 401 : 502;
+          return json(res, status, { error: e.message });
+        }
       }
       if (path.endsWith(id) && req.method === "GET") {
         const savedBase = PROVIDERS[id].custom ? store.keys.get(id)?.base : PROVIDERS[id].base;
