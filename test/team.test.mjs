@@ -12,26 +12,35 @@ const TEAM = [A("maya-ai-pm", "Maya", "AI Product Manager"), A("dev-coder", "Dev
 const all = (ids) => Object.fromEntries(ids.map((i) => [i, true]));
 const pick = (rows, slug) => rows.find((r) => r.slug === slug).pick?.id;
 
-test("only free models: builder and reviewers get DIFFERENT models", () => {
-  const rows = plan({ agents: TEAM, available: all(["free:nemotron", "free:mistral"]) });
-  const dev = pick(rows, "dev-coder");
-  assert.ok(dev);
-  assert.notEqual(pick(rows, "quinn-qa"), dev); assert.notEqual(pick(rows, "rex-reviewer"), dev);
+const BUILDER = "free:gpt-oss-120b";
+const REVIEWER = "free:qwen-3.8-27b";
+const ALL_FREE = ENGINE_MODELS.map((m) => m.id);
+
+test("agent model pool is strictly Groq free-tier; builders and reviewers differ", () => {
+  assert.ok(ENGINE_MODELS.length >= 2);
+  assert.ok(ENGINE_MODELS.every((m) => m.engine === "free" && m.cost === 0));
+  assert.ok(ENGINE_MODELS.every((m) => m.id.startsWith("free:") && m.model));
+  assert.doesNotMatch(ENGINE_MODELS.map((m) => m.name + " " + m.id).join(" "), /Claude|Codex|NVIDIA|Anthropic|OpenAI API/i);
+  const rows = plan({ agents: TEAM, available: all(ALL_FREE) });
+  assert.equal(pick(rows, "dev-coder"), BUILDER);
+  assert.equal(pick(rows, "quinn-qa"), REVIEWER);
+  assert.equal(pick(rows, "rex-reviewer"), REVIEWER);
   assert.match(rows.find((r) => r.slug === "rex-reviewer").why, /different model from the builder/);
 });
-test("with Claude and Codex: product thinking and coding get the strongest; routine relay gets the fastest", () => {
-  const rows = plan({ agents: TEAM, available: all(ENGINE_MODELS.filter((m) => m.engine !== "free").map((m) => m.id)) });
-  assert.match(pick(rows, "maya-ai-pm"), /opus|codex/);
-  assert.equal(pick(rows, "kiran-pjm-a"), "claude:haiku");
-  assert.notEqual(pick(rows, "rex-reviewer"), pick(rows, "dev-coder"), "reviewer differs from builder");
+
+test("no plan or paid engine can enter the agent assignment pool", () => {
+  const rows = plan({ agents: TEAM, available: all([...ALL_FREE, "claude:opus", "codex:default", "openai:api"]) });
+  assert.ok(rows.every((r) => !r.pick || ENGINE_MODELS.some((m) => m.id === r.pick.id && m.engine === "free" && m.cost === 0)));
 });
-test("a backup is offered when more than one AI is available", () => {
-  const rows = plan({ agents: TEAM, available: all(["claude:sonnet", "free:nemotron", "free:mistral"]) });
+
+test("a backup is offered when both approved free models are available", () => {
+  const rows = plan({ agents: TEAM, available: all(ALL_FREE) });
   for (const r of rows) assert.ok(r.fallback && r.fallback.id !== r.pick.id, `${r.slug} has a different backup`);
 });
-test("only one AI available: still works, and says the check uses the same model", () => {
-  const rows = plan({ agents: TEAM, available: all(["free:nemotron"]) });
-  assert.equal(pick(rows, "quinn-qa"), "free:nemotron");
+
+test("only one free model available: still works and says the check uses the same model", () => {
+  const rows = plan({ agents: TEAM, available: all([BUILDER]) });
+  assert.equal(pick(rows, "quinn-qa"), BUILDER);
   assert.match(rows.find((r) => r.slug === "quinn-qa").why, /only one AI/);
 });
 test("nothing available: no crash, plain message", () => {
@@ -39,7 +48,7 @@ test("nothing available: no crash, plain message", () => {
   assert.equal(rows[0].pick, null); assert.match(rows[0].why, /No AI connected/);
 });
 test("user overrides win (if available) and are flagged when they break independence", () => {
-  const avail = all(["free:nemotron", "free:mistral"]);
+  const avail = all(ALL_FREE);
   const base = plan({ agents: TEAM, available: avail });
   const dev = pick(base, "dev-coder");
   const rows = plan({ agents: TEAM, available: avail, overrides: { "rex-reviewer": dev, "maya-ai-pm": "claude:opus" } });
@@ -49,8 +58,8 @@ test("user overrides win (if available) and are flagged when they break independ
 test("custom agents of any product are matched from their job description", () => {
   assert.ok(needsFromText("Writes database migrations and APIs").coding === 3);
   assert.ok(needsFromText("Reviews pull requests for security").review === 3);
-  const rows = plan({ agents: [A("sec-bot", "Sentinel", "Security Auditor", "Audits code for security issues")], available: all(["free:nemotron", "free:mistral"]) });
-  assert.equal(pick(rows, "sec-bot"), "free:mistral", "the stronger reviewer of the two free models");
+  const rows = plan({ agents: [A("sec-bot", "Sentinel", "Security Auditor", "Audits code for security issues")], available: all(ALL_FREE) });
+  assert.equal(pick(rows, "sec-bot"), REVIEWER, "the stronger reviewer of the two free models");
 });
 test("parseAgent reads AI Org role files", () => {
   const a = parseAgent("---\nslug: dev-coder\nname: Dev\nrole: Coding Specialist\ndescription: Implements one issue.\nmodel: default\n---\n\n# Dev");
