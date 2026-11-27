@@ -43,8 +43,16 @@ export async function dispatchTask({
     throw new Error("Invalid task input");
   }
 
-  if (typeof github?.ensureTask !== "function") {
+  if (typeof github?.getRepository !== "function" || typeof github?.ensureTask !== "function") {
     throw new Error("GitHub task adapter unavailable");
+  }
+
+  const repositoryInfo = await github.getRepository({ repository });
+  if (repositoryInfo?.private !== true) {
+    return {
+      status: "paused",
+      reason: "The Parent Plus GitHub repository must be private before founder tasks can be dispatched."
+    };
   }
 
   const body = [
