@@ -13,8 +13,12 @@ test("creates an allowlisted GitHub issue and reuses it on retry", async () => {
     calls.push(args);
     if (args[1] === "--paginate") return [[...issues]];
     if (args[1] === "--method" && args[2] === "POST") {
-      const body = args[args.indexOf("body=") + 1] || args.find(x => x.startsWith("body="))?.slice(5);
-      const title = args.find(x => x.startsWith("title="))?.slice(6);
+      const field = name => {
+        const index = args.findIndex((value, i) => value === "-f" && args[i + 1]?.startsWith(name + "="));
+        return index >= 0 ? args[index + 1].slice(name.length + 1) : undefined;
+      };
+      const body = field("body");
+      const title = field("title");
       const issue = { number: 44, state: "open", html_url: url, body, title };
       issues.push(issue);
       return issue;
