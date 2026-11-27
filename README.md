@@ -99,7 +99,7 @@ Product copies live in `~/studio-products/`.
 
 ## Checks
 
-36 unit tests and 24 browser checks (ST-01 to ST-28; run twice in CI: with stand-ins and with the real Claude Code and Codex in `docs/FEATURE_CONTRACT.md`) run on every pull request.
+CI runs the Node unit suite, shell syntax checks and full Playwright browser journeys against isolated stand-in engines. It does not install subscription CLIs, require account sign-in or call paid inference APIs.
 
 ## Free-model-only agent policy
 The Studio's model API agent blocks OpenAI API, Anthropic API and custom paid servers permanently. OpenRouter is limited to `:free` models, and Groq is restricted to the explicit free-tier model allowlist in `server/billing.mjs`. No environment variable can enable paid API providers.
