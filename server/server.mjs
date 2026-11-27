@@ -15,6 +15,7 @@ import pty from "node-pty";
 import { parseBacklog, buildBoard, feedFrom, appTarget, rosterFrom, isAgentEvidenceRun, workflowEvidenceFrom } from "./status.mjs";
 import { makeLedger, summarize } from "./usage.mjs";
 import { makeWorkerUsage } from "./worker-usage.mjs";
+import { makeQualificationReader } from "./role-qualification.mjs";
 import { feedbackInbox, feedbackDeliveries, feedbackDeliveryDetail, feedbackSubmit, feedbackFixes, feedbackFixDetail, feedbackConflicts, feedbackUsage } from "./feedback.mjs";
 import { makeStore, expand, repoOf, validUrl, HOME } from "./store.mjs";
 import { PROVIDERS, publicProviders, sortModels } from "./providers.mjs";
@@ -132,6 +133,7 @@ const gh = (args, timeout = 20000) => run(GH, args, { timeout });
 const ghJson = async (path) => JSON.parse(await gh(["api", path]) || "null");
 const observeRuntime = makeRuntimeObserver({ gh: async args => JSON.parse(await gh(args)), checkpoint: makeRuntimeCheckpointStore(garage.dir + "-runtime-local") });
 const workerUsage = makeWorkerUsage({ gh, ghJson });
+const qualificationReader = makeQualificationReader({ gh, ghJson });
 
 // ---------- products ----------
 const products = () => store.products.list();
@@ -564,6 +566,7 @@ if (req.method === "GET") {
       const { entries, ...workers } = await workerUsage(p);
       return json(res, 200, { days, workers, ...summarize([...ledger.entries(p.id), ...entries], { since: Date.now() - days * 864e5 }) });
     }
+    if (path === "/api/role-qualification" && req.method === "GET") return json(res, 200, await qualificationReader());
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/team$/))) {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
       if (req.method === "GET") return json(res, 200, await teamPlan(p));

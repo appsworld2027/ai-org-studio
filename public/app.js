@@ -382,6 +382,19 @@
     }
   }
 
+  async function loadQualification() {
+    const note = $("#qualificationNote"), table = $("#qualificationEvidence");
+    try {
+      const q = await api("/api/role-qualification");
+      const rows = q.rows || [];
+      const passed = rows.filter(r => r.status === "passed").length;
+      note.textContent = (q.available ? passed + "/" + rows.length + " current synthetic objective screens passed." : "GitHub evidence unavailable; any displayed results are historical, not verified current status.") + " Not product acceptance, independent expert approval, or verified billing.";
+      table.replaceChildren(...rows.map(r => el("div",{class:"trk",role:"row"},
+        el("div",{role:"rowheader"},el("b",{text:r.role}),el("br"),el("small",{text:r.fixture})),
+        el("div",{role:"cell"},el("b",{text:q.available ? r.status.replaceAll("-"," ") : "historical"}),el("br"),el("small",{text:r.total ? r.checks+"/"+r.total+" checks" : "No verified result"})),
+        el("div",{role:"cell"},el("small",{text:r.model || "Model not observed"}), ...(r.runUrl ? [el("br"),el("a",{href:r.runUrl,target:"_blank",rel:"noopener noreferrer",text:"Run evidence"})] : [])))));
+    } catch { note.textContent = "Canonical qualification evidence unavailable; no status inferred."; table.replaceChildren(); }
+  }
   // ---------- team: which AI each agent uses ----------
   async function loadTeam(body) {
     const t = $("#team");
@@ -970,7 +983,7 @@
     clearInterval(pollTimer); poll(); pollTimer = setInterval(poll, cfg.boardRefreshMs);
     $("#usage").replaceChildren(); $("#usageNote").textContent = ""; $("#usageErr").textContent = "";
     $("#founderUsage").textContent = "Consumption is loading.";
-    loadTeam(); loadUsage(); $("#changesDiff").hidden = true; loadChanges();
+    loadTeam(); loadQualification(); loadUsage(); $("#changesDiff").hidden = true; loadChanges();
   }
   async function reloadConfig(selectId) {
     cfg = await api("/api/config");
