@@ -238,16 +238,16 @@ async function teamAgents(p) {
 }
 async function teamPlan(p) {
   const saved = store.readJson("team.json", {})[p.id] || {};
-  // Default availability: what this machine can run. Free models need an NVIDIA key in the Studio (or the AI Org's GitHub secret).
-  const has = (bin) => { try { return !!execFileSyncSafe("bash", ["-lc", `command -v ${bin}`]); } catch { return false; } };
-  const nvidia = !!store.keys.get("nvidia")?.key;
-  const available = saved.availability || { "claude:opus": has("claude"), "claude:sonnet": has("claude"), "claude:haiku": has("claude"), "codex:default": has("codex"), "free:nemotron": nvidia, "free:mistral": nvidia };
+  // Local Studio availability is based only on the Groq key saved on this machine.
+  // The GitHub Actions secret is separate and cannot be read from the Studio process.
+  const groq = !!store.keys.get("groq")?.key || !!process.env.GROQ_API_KEY;
+  const available = Object.fromEntries(ENGINE_MODELS.map((m) => [m.id, saved.availability?.[m.id] ?? groq]));
   let agents = [], error = "";
   try { agents = await teamAgents(p); } catch (e) { error = `Could not read the AI Org team: ${e.message}`; }
   const rows = teamPlanFor({ agents, available, overrides: saved.overrides || {} });
   if (agents.length) { try { garage.publishTeam(p, { rows }); } catch (e) { log(`team export: ${e.message}`); } }
   return { models: ENGINE_MODELS.map((m) => ({ id: m.id, name: m.name, cost: m.cost, available: !!available[m.id] })), rows, error,
-    note: `Published to the Garage as ${p.id}/team-models.json for the AI Org's background agents (the AI Org router reads it once the AI Org track adds that). In the Studio chat, pick any model directly.` };
+    note: `Advisory mapping only: the background worker's authoritative engine and builder/reviewer models come from the AI Org governance policy. The Studio cannot read GitHub secret availability or enforce per-agent overrides yet. Local availability reflects the Groq key saved on this machine.` };
 }
 const execFileSyncSafe = (cmd, args) => { try { return require_execFileSync(cmd, args, { encoding: "utf8", timeout: 5000 }).trim(); } catch { return ""; } };
 
