@@ -485,41 +485,43 @@ try {
     await page.selectOption("#productPick", "parent-plus"); await waitTerm(/CLAUDE heard|CLAUDE ready/);
   });
   await check("ST-40", "Founder Inbox dispatches an idempotent free-only task to Parent Plus", async () => {
+    const inbox = page.locator("#founder-inbox-dialog");
+    let submittedPayload = null;
+    const captureRequest = request => {
+      if (request.url().endsWith("/api/founder-inbox") && request.method() === "POST") {
+        try { submittedPayload = request.postDataJSON(); } catch {}
+      }
+    };
+    page.on("request", captureRequest);
     try {
       await page.getByRole("button", { name: "Founder Inbox" }).click();
-      await page.getByLabel("Product repository").selectOption("parent-plus");
-      await page.locator('dialog input[placeholder="Task title"]').fill("E2E founder request");
-      await page.locator('dialog textarea[placeholder^="Describe"]').fill("Review the registration journey and report its top three edge cases.");
-      await page.getByRole("button", { name: "Send to AI Org" }).click();
-      try {
-        await page.waitForFunction(() => document.querySelector("dialog")?.innerText.includes("Submitted to the canonical AI Org worker"), null, { timeout: 12000 });
-      } catch (error) {
-        const debug = await page.evaluate(() => {
-          const dialog = document.querySelector("dialog");
-          const form = dialog?.querySelector("form");
-          return {
-            url: location.href,
-            dialogCount: document.querySelectorAll("dialog").length,
-            open: dialog?.open ?? null,
-            text: dialog?.innerText ?? null,
-            formMethod: form?.method ?? null,
-            formAction: form?.action ?? null,
-            submitHandler: typeof form?.onsubmit
-          };
-        }).catch(e => ({ browserError: e.message }));
-        throw new Error(`dispatch did not confirm; ${error.message}; debug=${JSON.stringify(debug)}`);
-      }
-      assert(await page.locator("dialog").getByText("Open AI Org issue #500").isVisible(), "GitHub issue link displayed");
-      const issues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
-      assert(issues.length === 1, "one GitHub issue created");
-      assert(issues[0].labels.some(label => label.name === "ai:discovery"), "AI discovery stage label applied");
-      assert(issues[0].body.includes("Groq free-tier route only") && issues[0].body.includes("no paid model or paid fallback"), "free-only execution constraints persisted");
-      const inboxText = await page.locator("dialog").innerText();
+      await page.waitForFunction(() => document.querySelector("#founder-inbox-dialog")?.open, null, { timeout: 3000 });
+      await inbox.getByLabel("Product repository").selectOption("parent-plus");
+      await inbox.getByLabel("Task title").fill("E2E founder request");
+      await inbox.getByLabel("Requested outcome").fill("Review the registration journey and report its top three edge cases.");
+      await inbox.getByRole("button", { name: "Send to AI Org" }).click();
+      await page.waitForFunction(() => document.querySelector("#founder-inbox-dialog")?.innerText.includes("Submitted to the canonical AI Org worker"), null, { timeout: 12000 });
+      assert(await inbox.getByText("Open AI Org issue #500").isVisible(), "GitHub issue link displayed");
+      assert(submittedPayload?.requestId, "the browser submitted a stable idempotency key");
+      const firstIssues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
+      assert(firstIssues.length === 1, "one GitHub issue created");
+      assert(firstIssues[0].labels.some(label => label.name === "ai:discovery"), "AI discovery stage label applied");
+      assert(firstIssues[0].body.includes("Groq free-tier route only") && firstIssues[0].body.includes("no paid model or paid fallback"), "free-only execution constraints persisted");
+      const replay = await page.evaluate(async payload => {
+        const response = await fetch("/api/founder-inbox", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        return { status: response.status, data: await response.json() };
+      }, submittedPayload);
+      assert(replay.status >= 200 && replay.status < 300, `same request ID retry accepted: HTTP ${replay.status}`);
+      assert.equal(replay.data.task.githubIssueNumber, 500, "retry resolves to the original GitHub issue");
+      const replayedIssues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
+      assert.equal(replayedIssues.length, 1, "retry does not create a duplicate GitHub issue");
+      const inboxText = await inbox.innerText();
       assert(!inboxText.includes("Run Maya") && !inboxText.includes("NVIDIA model"), "local synthetic pilot is not exposed as production dispatch");
     } finally {
-      if (await page.locator("dialog[open]").count()) {
-        await page.locator("dialog").getByRole("button", { name: "Close" }).click().catch(() => {});
-        await page.waitForFunction(() => !document.querySelector("dialog")?.open, null, { timeout: 3000 }).catch(() => {});
+      page.off("request", captureRequest);
+      if (await inbox.count() && await inbox.evaluate(el => el.open).catch(() => false)) {
+        await inbox.getByRole("button", { name: "Close" }).click().catch(() => {});
+        await page.waitForFunction(() => !document.querySelector("#founder-inbox-dialog")?.open, null, { timeout: 3000 }).catch(() => {});
       }
     }
   });
