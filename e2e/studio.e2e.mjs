@@ -512,9 +512,9 @@ try {
         return { status: response.status, data: await response.json() };
       }, submittedPayload);
       assert(replay.status >= 200 && replay.status < 300, `same request ID retry accepted: HTTP ${replay.status}`);
-      assert.equal(replay.data.task.githubIssueNumber, 500, "retry resolves to the original GitHub issue");
+      assert(replay.data.task.githubIssueNumber === 500, "retry resolves to the original GitHub issue");
       const replayedIssues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
-      assert.equal(replayedIssues.length, 1, "retry does not create a duplicate GitHub issue");
+      assert(replayedIssues.length === 1, "retry does not create a duplicate GitHub issue");
       const inboxText = await inbox.innerText();
       assert(!inboxText.includes("Run Maya") && !inboxText.includes("NVIDIA model"), "local synthetic pilot is not exposed as production dispatch");
     } finally {
