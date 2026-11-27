@@ -24,9 +24,18 @@ test("slugOf reads issue titles and loop branch names", () => {
   assert.equal(slugOf("ai/fix-needs-you-fees-overdue-12"), "needs-you-fees-overdue");
   assert.equal(slugOf("QA lab nightly: failing checks"), null);
 });
-test("stageOf maps loop labels to who acts; later stage and blocked win", () => {
+test("stageOf maps all routed AI Org roles to the founder lifecycle", () => {
   assert.deepEqual(stageOf(["ai:discovery"]), { label: "ai:discovery", stage: "contract", who: "Maya, product manager", kind: "agent" });
   assert.equal(stageOf(["ai:founder-decision"]).kind, "founder");
+  assert.deepEqual(stageOf(["ai:plan"]), { label: "ai:plan", stage: "plan", who: "Arjun, AI CPTO", kind: "agent" });
+  assert.equal(stageOf(["ai:lane-a"]).who, "Kiran, project manager A");
+  assert.equal(stageOf(["ai:lane-b"]).who, "Leela, project manager B");
+  assert.equal(stageOf(["ai:design"]).stage, "design");
+  assert.equal(stageOf(["ai:tests-review"]).who, "Quinn, test challenger");
+  assert.equal(stageOf(["ai:tests-signoff"]).who, "Arjun, test sign-off");
+  assert.equal(stageOf(["ai:database"]).who, "Tara, database specialist");
+  assert.equal(stageOf(["ai:integration"]).who, "Ravi, integration specialist");
+  assert.equal(stageOf(["ai:release-ops"]).who, "Sam, release operations");
   assert.equal(stageOf(["ai:delivery", "ai:release"]).label, "ai:release");
   assert.equal(stageOf(["ai:release", "ai:blocked"]).kind, "blocked");
   assert.equal(stageOf(["bug"]), null);
@@ -59,7 +68,7 @@ test("buildBoard: a running agent run is attributed to the item it works on", ()
     runs: [{ name: "AI agents", status: "in_progress", display_title: "Discovery: Overdue fees [needs-you-fees-overdue]", run_started_at: "2026-11-23T10:35:00Z", html_url: "https://r/1" },
            { name: "QA lab (personas + journeys + probes)", status: "in_progress", run_started_at: "2026-11-23T10:30:00Z", html_url: "https://r/2" },
            { name: "AI agents", status: "completed", display_title: "AI agents" }] });
-  assert.deepEqual(b.working[0], { who: "Quinn, tester", what: "Overdue fees in Needs you", minutes: 5, url: "https://r/1", tool: "Unknown" });
+  assert.deepEqual(b.working[0], { who: "Quinn, test author", what: "Overdue fees in Needs you", minutes: 5, url: "https://r/1", tool: "Unknown" });
   assert.equal(b.working[1].who, "QA lab"); assert.equal(b.working[1].minutes, 10);
   assert.equal(b.working.length, 2);
 });
@@ -86,7 +95,7 @@ test("real snapshot of Parent Plus (23 Nov) renders a sensible board", () => {
   const backlog = parseBacklog(Buffer.from(fx("backlog.json").content, "base64").toString());
   const b = buildBoard({ backlog, issues, runs, now: Date.parse(runs[0].run_started_at) + 60000 });
   const fees = b.rows.find((r) => r.slug === "needs-you-fees-overdue");
-  assert.equal(fees.stage, "tests"); assert.equal(fees.who, "Quinn, tester");
+  assert.equal(fees.stage, "tests"); assert.equal(fees.who, "Quinn, test author");
   assert.ok(b.rows.some((r) => /QA lab nightly/.test(r.title) && r.kind === "agent"));
   assert.equal(b.rows.find((r) => r.slug === "coach-needs-you").kind, "done");
   assert.ok(b.working.length >= 1);
@@ -112,8 +121,11 @@ test("founder overview reports observed delivery and exact workflow evidence", (
 });
 
 import { toolFromSteps } from "../server/status.mjs";
-test("toolFromSteps names the engine that actually ran, else Unknown", () => {
-  assert.equal(toolFromSteps([{ name: "Run agent with Claude Code", conclusion: "skipped" }, { name: "Run agent with the free engine (Claude Code via FCC + NVIDIA NIM)", status: "completed", conclusion: "success" }, { name: "Run agent with Codex (experimental)", conclusion: "skipped" }]), "Free engine (NVIDIA NIM)");
+test("toolFromSteps identifies the actual free provider before adapter/CLI names", () => {
+  assert.equal(toolFromSteps([{ name: "Run agent with Claude Code", conclusion: "skipped" },
+    { name: "Run agent with the free Groq model (Claude Code CLI via FCC)", status: "completed", conclusion: "success" },
+    { name: "Run agent with Codex (experimental)", conclusion: "skipped" }]), "Free engine (Groq)");
+  assert.equal(toolFromSteps([{ name: "Run agent with the free engine (Claude Code via FCC + NVIDIA NIM)", status: "completed", conclusion: "success" }]), "Free engine (NVIDIA NIM)");
   assert.equal(toolFromSteps([{ name: "Run agent with Codex (experimental)", status: "in_progress" }]), "Codex");
   assert.equal(toolFromSteps([]), "Unknown");
 });
@@ -121,11 +133,11 @@ test("toolFromSteps names the engine that actually ran, else Unknown", () => {
 import { rosterFrom } from "../server/status.mjs";
 test("rosterFrom: shows who works on what, who is idle, and the last tagged action", () => {
   const rows = [{ kind: "agent", who: "Dev, builder", title: "Fees overdue" }, { kind: "done", who: "Shipped", title: "Old" }];
-  const working = [{ who: "Dev, builder", what: "Fees overdue", minutes: 7, tool: "Free engine (NVIDIA NIM)", url: "https://r" }];
+  const working = [{ who: "Dev, builder", what: "Fees overdue", minutes: 7, tool: "Free engine (Groq)", url: "https://r" }];
   const comments = [{ body: "**[Quinn — QA]** All 6 tests passed", created_at: "2026-11-26T08:00:00Z", html_url: "https://c", user: { login: "github-actions[bot]" } }];
   const r = rosterFrom({ rows, working, comments });
   const by = (n) => r.find((x) => x.name === n);
-  assert.deepEqual([by("Dev").state, by("Dev").feature, by("Dev").tool], ["working", "Fees overdue", "Free engine (NVIDIA NIM)"]);
+  assert.deepEqual([by("Dev").state, by("Dev").feature, by("Dev").tool], ["working", "Fees overdue", "Free engine (Groq)"]);
   assert.equal(by("Maya").state, "idle");
   assert.equal(by("Quinn").last.via, "GitHub Actions"); assert.match(by("Quinn").last.text, /All 6 tests passed/);
   assert.equal(r.length, 11);
