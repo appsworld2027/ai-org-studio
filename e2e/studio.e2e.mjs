@@ -440,7 +440,11 @@ try {
     await page.click(".eng[data-eng=other]");
   });
   await check("ST-23", "Team table: each AI Org agent gets a model, reviewers differ from the builder, override works", async () => {
-    await page.click("#tab-agents"); await page.waitForSelector("#team select[data-slug=dev-coder]", { timeout: 10000 });
+    await page.click("#tab-agents");
+    await page.waitForFunction(() => ["dev-coder", "rex-reviewer"].every(slug => {
+      const select = document.querySelector(`#team select[data-slug="${slug}"]`);
+      return select && [...select.options].some(option => option.value.startsWith("free:"));
+    }), null, { timeout: 10000 });
     const auto = await page.$$eval("#team select", (s) => Object.fromEntries(s.map((x) => [x.dataset.slug, x.options[0].textContent])));
     assert(auto["dev-coder"] && auto["rex-reviewer"] && auto["dev-coder"] !== auto["rex-reviewer"], `dev vs rex: ${auto["dev-coder"]} / ${auto["rex-reviewer"]}`);
     const options = await page.$$eval("#team select[data-slug=dev-coder] option", (o) => o.map((x) => x.textContent).join(" "));
@@ -452,7 +456,7 @@ try {
   });
   await check("ST-10", "Agents tab shows the live board from GitHub", async () => {
     await page.click("#tab-agents");
-    await page.waitForSelector("#tracks .trk:not(.head)", { timeout: 8000 });
+    await page.waitForFunction(() => [...document.querySelectorAll("#tracks .trk:not(.head) .name")].some(node => /overdue fees/i.test(node.innerText) && /Quinn, test author/.test(node.innerText)), null, { timeout: 10000 });
     const rows = await page.$$eval("#tracks .trk:not(.head) .name", (n) => n.map((x) => x.innerText));
     assert(rows.some((r) => /overdue fees/i.test(r) && /Quinn, test author/.test(r)), `fees row with Quinn: ${rows.join(" | ")}`);
     assert(rows.some((r) => /shipped/.test(r)), "shipped row");
