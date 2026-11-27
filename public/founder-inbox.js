@@ -46,6 +46,7 @@
 
   let pendingId = null;
   let products = [];
+  let executionEnabled = false;
 
   function link(url, label) {
     const a = document.createElement("a");
@@ -56,7 +57,8 @@
     return a;
   }
 
-  function renderProducts(items, executionEnabled) {
+  function renderProducts(items, enabled) {
+    executionEnabled = enabled === true;
     products = (Array.isArray(items) ? items : []).filter(item => item && item.id && item.name && item.repo);
     const selected = product.value;
     product.replaceChildren();
@@ -74,7 +76,7 @@
       option.textContent = "No registered product repositories";
       product.append(option);
     }
-    product.disabled = !products.length;
+    product.disabled = !products.length || !executionEnabled;
     submit.disabled = !products.length || !executionEnabled;
   }
 
@@ -150,7 +152,7 @@
     } catch (error) {
       status.textContent = error.message + " — retrying will reuse the same request ID.";
     } finally {
-      submit.disabled = !products.length;
+      submit.disabled = !products.length || !executionEnabled;
     }
   };
 })();
