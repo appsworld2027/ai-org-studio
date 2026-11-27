@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Only the synthetic Garage repository is verified private.
+# Only the synthetic Garage and Parent Plus fixtures are verified private.
 if [ "$*" = "api --hostname github.com repos/example/studio-private-fixture --jq .visibility" ]; then
   echo private
   exit 0
@@ -16,6 +16,10 @@ fi
 if [ "$1 $2 $3" = "run download 1201" ] && [ "$5" = "appsworld2027/Parent-plus-" ] && [ "$7" = "ai-org-usage-1" ]; then
   node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({version:1,at:Date.now(),rows:[{model:"fixture/worker-model",role:"Maya",input:32,output:7}]}))' "$9/ai-org-usage.json"
   exit $?
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/appsworld2027/Parent-plus-" ]; then
+  echo '{"full_name":"appsworld2027/Parent-plus-","private":true}'
+  exit 0
 fi
 [ "$1" = api ] || { echo "fake gh: unsupported $*" >&2; exit 2; }
 # Idempotent Parent Plus issue adapter fixture used by Founder Inbox browser E2E.
