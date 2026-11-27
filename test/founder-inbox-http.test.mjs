@@ -49,6 +49,24 @@ test("GET exposes registered products and canonical dispatch state", async (t) =
   assert.deepEqual(res.body.products, [product]);
 });
 
+test("GET keeps public product visible but disables confidential dispatch", async (t) => {
+  const store = inbox(t);
+  const res = response();
+  await handleFounderInbox(request("GET"), res, store, {
+    products: [product],
+    dispatch: async () => ({ status: "submitted" }),
+    canDispatch: async () => ({
+      enabled: false,
+      products: [],
+      reason: "Parent Plus repository is public. Make it private before sending founder tasks."
+    })
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.executionEnabled, false);
+  assert.deepEqual(res.body.products, [product]);
+  assert.match(res.body.executionReason, /repository is public/i);
+});
+
 test("POST creates one product-scoped GitHub task and persists the issue evidence", async (t) => {
   const store = inbox(t);
   let dispatched;
@@ -76,6 +94,26 @@ test("POST creates one product-scoped GitHub task and persists the issue evidenc
   assert.equal(res.body.task.executionVerified, false);
 });
 
+test("POST blocks public repositories before storing or dispatching a task", async (t) => {
+  const store = inbox(t);
+  const res = response();
+  let dispatched = false;
+  await handleFounderInbox(request("POST", input), res, store, {
+    resolveProduct: () => product,
+    dispatch: async () => { dispatched = true; throw new Error("must not run"); },
+    canDispatch: async () => ({
+      enabled: false,
+      products: [],
+      reason: "Parent Plus repository is public. Make it private before sending founder tasks."
+    })
+  });
+  assert.equal(res.statusCode, 423);
+  assert.equal(res.body.executionEnabled, false);
+  assert.match(res.body.message, /repository is public/i);
+  assert.equal(dispatched, false);
+  assert.equal(store.list().length, 0);
+});
+
 test("POST stores a blocked state when free-only policy denies dispatch", async (t) => {
   const store = inbox(t);
   const res = response();
@@ -85,6 +123,7 @@ test("POST stores a blocked state when free-only policy denies dispatch", async 
   });
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.task.status, "blocked");
+  assert.equal(res.body.executionEnabled, false);
   assert.match(res.body.message, /Groq free route is unavailable/);
 });
 
