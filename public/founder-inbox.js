@@ -31,6 +31,7 @@
   const submit = document.createElement("button");
   submit.textContent = "Send to AI Org";
   submit.type = "submit";
+  submit.disabled = true;
   const close = document.createElement("button");
   close.textContent = "Close";
   close.type = "button";
@@ -55,8 +56,8 @@
     return a;
   }
 
-  function renderProducts(items) {
-    products = Array.isArray(items) ? items : [];
+  function renderProducts(items, executionEnabled) {
+    products = (Array.isArray(items) ? items : []).filter(item => item && item.id && item.name && item.repo);
     const selected = product.value;
     product.replaceChildren();
     for (const item of products) {
@@ -73,15 +74,15 @@
       option.textContent = "No registered product repositories";
       product.append(option);
     }
-    product.disabled = !product.options.length || !products.length;
-    submit.disabled = !products.length;
+    product.disabled = !products.length;
+    submit.disabled = !products.length || !executionEnabled;
   }
 
   async function refresh() {
     const response = await fetch("/api/founder-inbox", { cache: "no-store" });
     if (!response.ok) throw new Error("Could not load founder inbox");
     const data = await response.json();
-    renderProducts(data.products);
+    renderProducts(data.products, data.executionEnabled);
     notice.textContent = data.executionEnabled
       ? "Studio is connected to the canonical AI Org dispatcher. Requests go to the selected product repository; Groq free-tier execution only, with no paid fallback."
       : "Founder Inbox is currently local-only. AI Org dispatch is not connected; no agent will run.";
