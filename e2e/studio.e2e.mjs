@@ -26,6 +26,10 @@ const home = join(tmp, "studio-home"); mkdirSync(home);
 const prod = join(tmp, "parent-plus"); mkdirSync(join(prod, "founders/prototypes"), { recursive: true });
 writeFileSync(join(prod, "founders/prototypes/ParentPlus_Coach_Tutor_App.html"), readFileSync(join(ROOT, "e2e/product/founders/prototypes/ParentPlus_Coach_Tutor_App.html")));
 writeFileSync(join(prod, "README.md"), "# Parent Plus\nCoach and parent app.\n");
+mkdirSync(join(prod, ".ai-org"), { recursive: true });
+writeFileSync(join(prod, ".ai-org", "manifest.json"), JSON.stringify({
+  executionPolicy: { enabled: true, allowedEngines: ["free"], allowPaidFallback: false }
+}));
 const git = (...a) => execFileSync("git", ["-C", prod, ...a], { stdio: "ignore" });
 git("init", "-q", "-b", "main"); git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
 writeFileSync(join(home, "team.json"), JSON.stringify({ "parent-plus": { availability: { "claude:opus": false, "claude:sonnet": false, "claude:haiku": false, "codex:default": false, "free:nemotron": true, "free:mistral": true } } }));
@@ -480,6 +484,21 @@ try {
     assert(existsSync(join(tmp, "ws/demo-app/.git")), "repo copied into the Studio workspace");
     await openTerm("claude"); await waitTerm(/CLAUDE ready \(mode=new, product=Demo-App\)/);
     await page.selectOption("#productPick", "parent-plus"); await waitTerm(/CLAUDE heard|CLAUDE ready/);
+  });
+  await check("ST-40", "Founder Inbox dispatches an idempotent free-only task to Parent Plus", async () => {
+    await page.getByRole("button", { name: "Founder Inbox" }).click();
+    await page.locator("dialog select").selectOption("parent-plus");
+    await page.locator('dialog input[placeholder="Task title"]').fill("E2E founder request");
+    await page.locator('dialog textarea[placeholder^="Describe"]').fill("Review the registration journey and report its top three edge cases.");
+    await page.getByRole("button", { name: "Send to AI Org" }).click();
+    await page.waitForFunction(() => document.querySelector("dialog")?.innerText.includes("Submitted to the canonical AI Org worker"), null, { timeout: 12000 });
+    assert(await page.locator("dialog").getByText("Open AI Org issue #500").isVisible(), "GitHub issue link displayed");
+    const issues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
+    assert(issues.length === 1, "one GitHub issue created");
+    assert(issues[0].labels.some(label => label.name === "ai:discovery"), "AI discovery stage label applied");
+    assert(issues[0].body.includes("Groq free-tier route only") && issues[0].body.includes("no paid model or paid fallback"), "free-only execution constraints persisted");
+    const inboxText = await page.locator("dialog").innerText();
+    assert(!inboxText.includes("Run Maya") && !inboxText.includes("NVIDIA model"), "local synthetic pilot is not exposed as production dispatch");
   });
   await check("ST-14", "keyboard: tabs reachable with arrow keys, visible focus", async () => {
     await page.focus("#tab-garage"); await page.keyboard.press("ArrowRight");
