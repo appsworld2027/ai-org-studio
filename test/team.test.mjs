@@ -33,9 +33,15 @@ test("no plan or paid engine can enter the agent assignment pool", () => {
   assert.ok(rows.every((r) => !r.pick || ENGINE_MODELS.some((m) => m.id === r.pick.id && m.engine === "free" && m.cost === 0)));
 });
 
-test("a backup is offered when both approved free models are available", () => {
+test("a backup is offered when an independent approved free model exists", () => {
   const rows = plan({ agents: TEAM, available: all(ALL_FREE) });
-  for (const r of rows) assert.ok(r.fallback && r.fallback.id !== r.pick.id, `${r.slug} has a different backup`);
+  for (const r of rows) {
+    if (["quinn-qa", "rex-reviewer"].includes(r.slug)) {
+      assert.equal(r.fallback, null, `${r.slug} has no independent fallback besides the builder model`);
+    } else {
+      assert.ok(r.fallback && r.fallback.id !== r.pick.id, `${r.slug} has a different backup`);
+    }
+  }
 });
 
 test("only one free model available: still works and says the check uses the same model", () => {
