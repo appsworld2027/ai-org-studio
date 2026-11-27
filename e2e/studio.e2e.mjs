@@ -18,8 +18,8 @@ const assert = (c, m) => { if (!c) throw new Error(m); };
 const freePort = () => new Promise((ok) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => ok(p)); }); });
 const rawGet = (port, path, cookie) => new Promise((ok) => { const s = net.connect(port, "127.0.0.1", () => s.write(`GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\n${cookie ? `Cookie: studio_key=${cookie}\r\n` : ""}Connection: close\r\n\r\n`)); let d = ""; s.on("data", (x) => (d += x)); s.on("end", () => ok(d.split(" ")[1])); });
 
-// The whole test run lives next to the code, not in the temp folder: Codex's sandbox hides the temp folder from the
-// commands it runs (real products live in ~/studio-products, so real use is unaffected).
+// The whole test run lives next to the code so deterministic stand-in engines can access the temporary fixtures.
+// Real products live in ~/studio-products, so real use is unaffected.
 const tmp = mkdtempSync(join(ROOT, ".e2e-run-"));
 const home = join(tmp, "studio-home"); mkdirSync(home);
 // A real git repo stands in for the product (so prototypes come from git, as in real use).
@@ -63,8 +63,7 @@ const port = await freePort();
 const failFlag = join(tmp, "gh-down");
 const fakeEngine = (name) => `printf '${name} ready (mode=%s, product=%s) model=%s effort=%s\\n' "$STUDIO_MODE" "$STUDIO_PRODUCT" "$STUDIO_MODEL" "$STUDIO_EFFORT"; while IFS= read -r line; do line=$(printf '%s' "$line" | sed -e 's/\\x1b\\[200~/<paste>/g' -e 's/\\x1b\\[201~/<\\/paste>/g'); printf '${name} heard: %s\\n' "$line"; printf '%s\\n' "$line" >> "$STUDIO_HEARD_FILE"; done`;
 const TOKEN = "e2e-test-key-0123456789";
-// Claude Code / Codex for the chat checks: the REAL programs when STUDIO_REAL_CLAUDE / STUDIO_REAL_CODEX point at them
-// (CI installs them), talking to stand-in model servers; otherwise small recorded stand-ins (e2e/fake/claude, codex).
+// CI always uses deterministic CLI stand-ins. A local diagnostic may opt into a real CLI explicitly; no paid model is called here.
 const anthropicPort = await freePort(), openaiPort = await freePort();
 
 const engineHome = join(tmp, "engine-home"); mkdirSync(join(engineHome, ".codex"), { recursive: true });
