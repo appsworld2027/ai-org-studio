@@ -32,7 +32,7 @@ writeFileSync(join(prod, ".ai-org", "manifest.json"), JSON.stringify({
 }));
 const git = (...a) => execFileSync("git", ["-C", prod, ...a], { stdio: "ignore" });
 git("init", "-q", "-b", "main"); git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
-writeFileSync(join(home, "team.json"), JSON.stringify({ "parent-plus": { availability: { "claude:opus": false, "claude:sonnet": false, "claude:haiku": false, "codex:default": false, "free:nemotron": true, "free:mistral": true } } }));
+writeFileSync(join(home, "team.json"), JSON.stringify({ "parent-plus": { availability: { "free:gpt-oss-120b": true, "free:qwen-3.8-27b": true } } }));
 writeFileSync(join(home, "products.json"), JSON.stringify({ products: [{ id: "parent-plus", name: "Parent Plus", repo: "appsworld2027/Parent-plus-", dir: prod, productionUrl: "", backlog: "docs/product/BACKLOG.md", prototypes: ["founders/prototypes/ParentPlus_Coach_Tutor_App.html"] }] }));
 
 // Stand-in AI model (OpenAI-compatible): first answers with a file read, then a file write (needs approval), then text.
@@ -443,19 +443,25 @@ try {
     await page.click(".eng[data-eng=other]");
   });
   await check("ST-23", "Team table: each AI Org agent gets a model, reviewers differ from the builder, override works", async () => {
-    await page.click("#tab-agents"); await page.waitForSelector("#team select[data-slug=dev-coder]", { timeout: 10000 });
+    await page.click("#tab-agents");
+    await page.waitForFunction(() => ["dev-coder", "rex-reviewer"].every(slug => {
+      const select = document.querySelector(`#team select[data-slug="${slug}"]`);
+      return select && [...select.options].some(option => option.value.startsWith("free:"));
+    }), null, { timeout: 10000 });
     const auto = await page.$$eval("#team select", (s) => Object.fromEntries(s.map((x) => [x.dataset.slug, x.options[0].textContent])));
     assert(auto["dev-coder"] && auto["rex-reviewer"] && auto["dev-coder"] !== auto["rex-reviewer"], `dev vs rex: ${auto["dev-coder"]} / ${auto["rex-reviewer"]}`);
-    await page.selectOption("#team select[data-slug=maya-ai-pm]", "free:mistral");
-    await page.waitForFunction(() => document.querySelector("#team select[data-slug=maya-ai-pm]").value === "free:mistral", null, { timeout: 8000 });
+    const options = await page.$$eval("#team select[data-slug=dev-coder] option", (o) => o.map((x) => x.textContent).join(" "));
+    assert(/Groq free tier/i.test(options) && !/Claude|Codex|NVIDIA/i.test(options), `agent model choices must be Groq free-only: ${options}`);
+    await page.selectOption("#team select[data-slug=maya-ai-pm]", "free:qwen-3.8-27b");
+    await page.waitForFunction(() => document.querySelector("#team select[data-slug=maya-ai-pm]").value === "free:qwen-3.8-27b", null, { timeout: 8000 });
     for (let i = 0; i < 40 && !JSON.parse(readFileSync(join(home, "team.json")))["parent-plus"]?.overrides?.["maya-ai-pm"]; i++) await page.waitForTimeout(150);
-    const saved = JSON.parse(readFileSync(join(home, "team.json"))); assert(saved["parent-plus"].overrides["maya-ai-pm"] === "free:mistral", "override saved");
+    const saved = JSON.parse(readFileSync(join(home, "team.json"))); assert(saved["parent-plus"].overrides["maya-ai-pm"] === "free:qwen-3.8-27b", "override saved");
   });
   await check("ST-10", "Agents tab shows the live board from GitHub", async () => {
     await page.click("#tab-agents");
-    await page.waitForSelector("#tracks .trk:not(.head)", { timeout: 8000 });
+    await page.waitForFunction(() => [...document.querySelectorAll("#tracks .trk:not(.head) .name")].some(node => /overdue fees/i.test(node.innerText) && /Quinn, test author/.test(node.innerText)), null, { timeout: 10000 });
     const rows = await page.$$eval("#tracks .trk:not(.head) .name", (n) => n.map((x) => x.innerText));
-    assert(rows.some((r) => /overdue fees/i.test(r) && /Quinn, tester/.test(r)), `fees row with Quinn: ${rows.join(" | ")}`);
+    assert(rows.some((r) => /overdue fees/i.test(r) && /Quinn, test author/.test(r)), `fees row with Quinn: ${rows.join(" | ")}`);
     assert(rows.some((r) => /shipped/.test(r)), "shipped row");
     assert((await page.$$("#tracks .st.agent")).length >= 1, "animated 'agent working' cell");
     assert((await page.$$("#feed a")).length >= 3, "feed");
