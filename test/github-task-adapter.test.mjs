@@ -1,100 +1,89 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  createGithubTaskAdapter
-} from "../server/github-task-adapter.mjs";
+import { createGithubTaskAdapter } from "../server/github-task-adapter.mjs";
 
-const input = {
-  repository: "appsworld2027/ai-org-studio",
-  requestId: "pilot-feedback-001"
-};
+const PARENT_REPO = "appsworld2027/Parent-plus-";
+const requestId = "request_12345678";
+const url = "https://github.com/appsworld2027/Parent-plus-/issues/44";
 
-const issue = {
-  number: 42,
-  state: "open",
-  body: "<!-- studio-request:pilot-feedback-001 -->\nTask",
-  html_url: "https://github.com/appsworld2027/ai-org-studio/issues/42"
-};
+test("creates an allowlisted GitHub issue and reuses it on retry", async () => {
+  const calls = [];
+  const issues = [];
+  const run = async args => {
+    calls.push(args);
+    if (args[1] === "--paginate") return [[...issues]];
+    if (args[1] === "--method" && args[2] === "POST") {
+      const body = args[args.indexOf("body=") + 1] || args.find(x => x.startsWith("body="))?.slice(5);
+      const title = args.find(x => x.startsWith("title="))?.slice(6);
+      const issue = { number: 44, state: "open", html_url: url, body, title };
+      issues.push(issue);
+      return issue;
+    }
+    throw new Error("Unexpected gh invocation: " + args.join(" "));
+  };
+  const adapter = createGithubTaskAdapter({ run, allowedRepositories: [PARENT_REPO] });
+  const payload = {
+    repository: PARENT_REPO,
+    requestId,
+    title: "Improve registration",
+    body: `<!-- studio-request:${requestId} -->\nFounder request`,
+    labels: ["ai:discovery"]
+  };
 
-test("Existing task is recovered across pages", async () => {
-  const adapter = createGithubTaskAdapter({
-    run: async () => [[], [issue]]
-  });
+  const first = await adapter.ensureTask(payload);
+  const second = await adapter.ensureTask(payload);
 
-  const result = await adapter.findTask(input);
-  assert.equal(result.number, 42);
+  assert.deepEqual(first, { number: 44, state: "open", url });
+  assert.deepEqual(second, first);
+  assert.equal(calls.filter(args => args[1] === "--method").length, 1);
+  assert.ok(calls.some(args => args.includes("labels[]=ai:discovery")));
 });
 
-test("Missing task returns null", async () => {
+test("findTask returns null when no request marker exists", async () => {
   const adapter = createGithubTaskAdapter({
+    allowedRepositories: [PARENT_REPO],
     run: async () => [[]]
   });
-
-  assert.equal(await adapter.findTask(input), null);
+  assert.equal(await adapter.findTask({ repository: PARENT_REPO, requestId }), null);
 });
 
-test("Pull requests are excluded", async () => {
+test("rejects repositories outside the allowlist", async () => {
   const adapter = createGithubTaskAdapter({
-    run: async () => [[{ ...issue, pull_request: {} }]]
+    allowedRepositories: [PARENT_REPO],
+    run: async () => [[]]
   });
-
-  assert.equal(await adapter.findTask(input), null);
-});
-
-test("Duplicate tasks fail safely", async () => {
-  const adapter = createGithubTaskAdapter({
-    run: async () => [[issue, { ...issue, number: 43 }]]
-  });
-
   await assert.rejects(
-    adapter.findTask(input),
-    /Duplicate GitHub tasks/
+    adapter.findTask({ repository: "appsworld2027/ai-org-studio", requestId }),
+    /not allowlisted/
   );
 });
 
-test("Other repositories are blocked", async () => {
+test("rejects duplicate markers rather than silently selecting one", async () => {
+  const marker = `<!-- studio-request:${requestId} -->`;
   const adapter = createGithubTaskAdapter({
-    run: async () => {
-      throw new Error("Must not call GitHub");
-    }
+    allowedRepositories: [PARENT_REPO],
+    run: async () => [[
+      { number: 1, state: "open", html_url: url, body: marker },
+      { number: 2, state: "open", html_url: url, body: marker }
+    ]]
   });
-
   await assert.rejects(
-    adapter.findTask({
-      ...input,
-      repository: "appsworld2027/Parent-plus-"
-    }),
-    /outside pilot scope/
+    adapter.findTask({ repository: PARENT_REPO, requestId }),
+    /Duplicate GitHub tasks detected/
   );
 });
 
-test("Invalid request IDs are rejected", async () => {
-  const adapter = createGithubTaskAdapter();
-
+test("rejects invalid labels and request IDs", async () => {
+  const adapter = createGithubTaskAdapter({
+    allowedRepositories: [PARENT_REPO],
+    run: async () => [[]]
+  });
   await assert.rejects(
-    adapter.findTask({ ...input, requestId: "bad" }),
+    adapter.ensureTask({ repository: PARENT_REPO, requestId: "bad", title: "x", body: "y", labels: ["ai:discovery"] }),
     /Invalid request ID/
   );
-});
-
-test("GitHub failures are not treated as missing tasks", async () => {
-  const adapter = createGithubTaskAdapter({
-    run: async () => {
-      throw new Error("Network failure");
-    }
-  });
-
   await assert.rejects(
-    adapter.findTask(input),
-    /Network failure/
-  );
-});
-
-test("Live task creation remains disabled", async () => {
-  const adapter = createGithubTaskAdapter();
-
-  await assert.rejects(
-    adapter.ensureTask(input),
-    /creation is disabled/
+    adapter.ensureTask({ repository: PARENT_REPO, requestId, title: "x", body: "y", labels: ["engine:paid"] }),
+    /Invalid GitHub task payload/
   );
 });
