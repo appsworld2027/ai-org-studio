@@ -11,6 +11,7 @@ test("creates an allowlisted GitHub issue and reuses it on retry", async () => {
   const issues = [];
   const run = async args => {
     calls.push(args);
+    if (args[0] === "api" && args[1] === `repos/${PARENT_REPO}`) return { full_name: PARENT_REPO, private: true };
     if (args[1] === "--paginate") return [[...issues]];
     if (args[1] === "--method" && args[2] === "POST") {
       const field = name => {
@@ -41,6 +42,25 @@ test("creates an allowlisted GitHub issue and reuses it on retry", async () => {
   assert.deepEqual(second, first);
   assert.equal(calls.filter(args => args[1] === "--method").length, 1);
   assert.ok(calls.some(args => args.includes("labels[]=ai:discovery")));
+});
+
+test("getRepository verifies canonical repository identity and privacy", async () => {
+  const adapter = createGithubTaskAdapter({
+    allowedRepositories: [PARENT_REPO],
+    run: async args => {
+      assert.deepEqual(args, ["api", `repos/${PARENT_REPO}`]);
+      return { full_name: PARENT_REPO, private: true };
+    }
+  });
+  assert.deepEqual(await adapter.getRepository({ repository: PARENT_REPO }), { fullName: PARENT_REPO, private: true });
+});
+
+test("getRepository rejects an unverified repository identity", async () => {
+  const adapter = createGithubTaskAdapter({
+    allowedRepositories: [PARENT_REPO],
+    run: async () => ({ full_name: "appsworld2027/other", private: true })
+  });
+  await assert.rejects(adapter.getRepository({ repository: PARENT_REPO }), /did not confirm product repository identity/);
 });
 
 test("findTask returns null when no request marker exists", async () => {
