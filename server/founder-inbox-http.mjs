@@ -17,7 +17,7 @@ export async function handleFounderInbox(req, res, inbox, options = {}) {
     }
     const enabled = dispatchEnabled && gate?.enabled === true;
     return respond(200, {
-      tasks: inbox.list(),
+      tasks: options.observeTasks ? await options.observeTasks(inbox.list()) : inbox.list(),
       products: gate?.enabled ? gate.products : (options.products || []),
       executionEnabled: enabled,
       executionReason: enabled ? "" : (gate?.reason || (dispatchEnabled

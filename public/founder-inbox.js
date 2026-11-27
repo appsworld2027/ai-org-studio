@@ -124,6 +124,12 @@
       if (task.githubIssueUrl && task.githubIssueNumber) {
         item.append(link(task.githubIssueUrl, "Open AI Org issue #" + task.githubIssueNumber));
       }
+      if (task.runtime && task.githubIssueNumber) {
+        const runtime = document.createElement("p");
+        runtime.textContent = "Worker: " + task.runtime.state.replaceAll("-", " ") + (task.runtime.stage ? " · " + task.runtime.stage : "") + (task.runtime.attemptVerified ? " · attempt verified (not product acceptance)" : "") + (task.runtime.checkpointUnavailable ? " · local checkpoint unavailable" : "");
+        if (task.runtime.runUrl) runtime.append(" · ", link(task.runtime.runUrl, "Run evidence"));
+        item.append(runtime);
+      }
       if (task.dispatchError) {
         const error = document.createElement("p");
         error.textContent = "Dispatch issue: " + task.dispatchError;

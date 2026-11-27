@@ -24,6 +24,7 @@ import { createFounderPilot } from "./founder-pilot.mjs";
 
 import { createFounderInbox } from "./founder-inbox.mjs";
 import { handleFounderInbox } from "./founder-inbox-http.mjs";
+import { makeRuntimeObserver, makeRuntimeCheckpointStore } from "./runtime-status.mjs";
 import { createGithubTaskAdapter } from "./github-task-adapter.mjs";
 import { dispatchTask } from "./task-dispatch.mjs";
 
@@ -129,6 +130,7 @@ const readBody = (req, limit = 1 << 20) => new Promise((ok, fail) => { let d = "
 const run = (cmd, args, opts = {}) => new Promise((ok, fail) => execFile(cmd, args, { timeout: 120000, maxBuffer: 32 << 20, ...opts }, (e, out, err) => e ? fail(new Error((err || e.message).toString().trim().split("\n").slice(-1)[0])) : ok(out)));
 const gh = (args, timeout = 20000) => run(GH, args, { timeout });
 const ghJson = async (path) => JSON.parse(await gh(["api", path]) || "null");
+const observeRuntime = makeRuntimeObserver({ gh: async args => JSON.parse(await gh(args)), checkpoint: makeRuntimeCheckpointStore(garage.dir + "-runtime-local") });
 const workerUsage = makeWorkerUsage({ gh, ghJson });
 
 // ---------- products ----------
@@ -457,6 +459,7 @@ if (req.method === "GET") {
         return { enabled: verified.length > 0, products: verified, reason: verified.length ? "" : reason };
       };
       return await handleFounderInbox(req, res, founderInbox, {
+        observeTasks: observeRuntime,
         products: allowedProducts.map((p) => ({ id: p.id, name: p.name, repo: p.repo })),
         canDispatch,
         resolveProduct: (id) => {
