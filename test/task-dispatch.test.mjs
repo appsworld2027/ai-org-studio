@@ -21,6 +21,7 @@ const input = () => ({
   requestId: "request_12345678",
   availableEngines: { free: true },
   github: {
+    getRepository: async () => ({ fullName: PARENT_REPO, private: true }),
     ensureTask: async payload => ({
       number: 77,
       state: "open",
@@ -39,6 +40,23 @@ test("dispatches a free-only task to an explicitly allowlisted product repositor
   assert.equal(result.engine, "free");
   assert.equal(result.provider, "groq");
   assert.equal(result.executionVerified, false);
+});
+
+test("never creates a founder issue in a public product repository", async () => {
+  const args = input();
+  let created = false;
+  args.github.getRepository = async () => ({ fullName: PARENT_REPO, private: false });
+  args.github.ensureTask = async () => { created = true; throw new Error("must not create a public issue"); };
+  const result = await dispatchTask(args);
+  assert.equal(result.status, "paused");
+  assert.match(result.reason, /must be private/i);
+  assert.equal(created, false);
+});
+
+test("fails closed when repository visibility cannot be verified", async () => {
+  const args = input();
+  delete args.github.getRepository;
+  await assert.rejects(dispatchTask(args), /adapter unavailable/);
 });
 
 test("creates a task body with the request marker and founder operating policy", async () => {
