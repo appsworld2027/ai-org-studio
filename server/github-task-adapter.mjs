@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { claimDispatch, dispatchFingerprint } from "./dispatch-fence.mjs";
 
 const exec = promisify(execFile);
 
@@ -17,7 +18,7 @@ const validRequestId = (value) =>
 const validRepository = (value) =>
   typeof value === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value);
 
-export function createGithubTaskAdapter({ run = runGh, allowedRepositories = [] } = {}) {
+export function createGithubTaskAdapter({ run = runGh, allowedRepositories = [], claimDir } = {}) {
   function assertRepository(repository) {
     const allowlisted = Array.isArray(allowedRepositories) &&
       allowedRepositories.some((item) => typeof item === "string" && item.toLowerCase() === String(repository || "").toLowerCase());
@@ -41,9 +42,6 @@ export function createGithubTaskAdapter({ run = runGh, allowedRepositories = [] 
   }
 
   const inflight = new Map();
-  // An ambiguous POST must not be repeated just because a lookup is still empty.
-  // This is process-local protection; a distributed writer requires a durable shared lock.
-  const uncertain = new Set();
 
   async function findTaskRaw({ repository, requestId } = {}) {
     assertRepository(repository);
@@ -100,7 +98,7 @@ export function createGithubTaskAdapter({ run = runGh, allowedRepositories = [] 
       throw new Error("Task body must start with its exact request marker");
     }
     const key = repository.toLowerCase() + "/" + requestId;
-    const fingerprint = JSON.stringify([title.trim(), body, [...labels].sort()]);
+    const fingerprint = dispatchFingerprint(title, body, labels);
     const current = inflight.get(key);
     if (current) {
       if (current.fingerprint !== fingerprint) throw new Error("Conflicting request ID reuse");
@@ -114,13 +112,19 @@ export function createGithubTaskAdapter({ run = runGh, allowedRepositories = [] 
       if (issue.state !== "closed" && !issue.labels.some(label => /^ai:[a-z-]+$/.test(typeof label === "string" ? label : label?.name || ""))) {
         throw new Error("GitHub task exists but has no confirmed AI Org stage label; reconcile before retrying");
       }
-      uncertain.delete(key);
+      // Persist the fence even when recovering a pre-existing task.
+      claimDispatch(claimDir, repository, requestId, fingerprint);
       return confirmedTask(issue);
     };
     const submit = async () => {
+      if (typeof claimDir !== "string" || !claimDir) throw new Error("Durable dispatch fence unavailable");
       const existing = await findTaskRaw({ repository, requestId });
       if (existing) return confirmExisting(existing);
-      if (uncertain.has(key) || uncertain.size >= 1000) {
+      // Persist before the side effect. Two controllers sharing this store cannot
+      // independently win the same key; restart never clears an attempted POST.
+      if (!claimDispatch(claimDir, repository, requestId, fingerprint)) {
+        const recovered = await findTaskRaw({ repository, requestId });
+        if (recovered) return confirmExisting(recovered);
         throw new Error("GitHub issue creation outcome uncertain; reconcile before retrying");
       }
       const args = [
@@ -137,7 +141,6 @@ export function createGithubTaskAdapter({ run = runGh, allowedRepositories = [] 
       } catch {
         // POST can create an issue even when the response is lost. Reconcile using
         // the canonical request marker, never issue a second POST here.
-        uncertain.add(key);
         const recovered = await findTaskRaw({ repository, requestId });
         if (recovered) return confirmExisting(recovered);
         throw new Error("GitHub issue creation outcome uncertain; reconcile before retrying");
