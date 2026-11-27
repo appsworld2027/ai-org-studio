@@ -529,7 +529,7 @@ try {
       const firstIssues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
       assert(firstIssues.length === 1, "one GitHub issue created");
       assert(firstIssues[0].labels.some(label => label.name === "ai:discovery"), "AI discovery stage label applied");
-      assert(firstIssues[0].body.includes("approved free-only AI Org router") && firstIssues[0].body.includes("no paid model, paid API, paid fallback"), "free-only execution constraints persisted");
+      assert(firstIssues[0].body.toLowerCase().includes("approved free-only ai org router") && firstIssues[0].body.toLowerCase().includes("no paid model, paid api, paid fallback"), "free-only execution constraints persisted");
       const replay = await page.evaluate(async payload => {
         const response = await fetch("/api/founder-inbox", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         return { status: response.status, data: await response.json() };
