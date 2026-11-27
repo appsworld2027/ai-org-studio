@@ -443,7 +443,7 @@ try {
     await page.click("#tab-agents"); await page.waitForSelector("#team select[data-slug=dev-coder]", { timeout: 10000 });
     const auto = await page.$$eval("#team select", (s) => Object.fromEntries(s.map((x) => [x.dataset.slug, x.options[0].textContent])));
     assert(auto["dev-coder"] && auto["rex-reviewer"] && auto["dev-coder"] !== auto["rex-reviewer"], `dev vs rex: ${auto["dev-coder"]} / ${auto["rex-reviewer"]}`);
-    const options = await page.$eval("#team select[data-slug=dev-coder] option", (o) => o.map((x) => x.textContent).join(" "));
+    const options = await page.$$eval("#team select[data-slug=dev-coder] option", (o) => o.map((x) => x.textContent).join(" "));
     assert(/Groq free tier/i.test(options) && !/Claude|Codex|NVIDIA/i.test(options), `agent model choices must be Groq free-only: ${options}`);
     await page.selectOption("#team select[data-slug=maya-ai-pm]", "free:qwen-3.8-27b");
     await page.waitForFunction(() => document.querySelector("#team select[data-slug=maya-ai-pm]").value === "free:qwen-3.8-27b", null, { timeout: 8000 });
