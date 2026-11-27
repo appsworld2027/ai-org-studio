@@ -48,5 +48,18 @@
   },
   "allowedProductRepositories": [
     "appsworld2027/Parent-plus-"
-  ]
+  ],
+  "allowedPublicCodeRepositories": [
+    "appsworld2027/Parent-plus-"
+  ],
+  "inheritProductExecutionPolicyFor": [
+    "appsworld2027/Parent-plus-"
+  ],
+  "publicCodeDataPolicy": {
+    "scope": "public-source-code-and-synthetic-test-data-only",
+    "prohibitSecrets": true,
+    "prohibitProductionCredentials": true,
+    "prohibitCustomerPersonalData": true,
+    "prohibitChildPersonalData": true
+  }
 }
