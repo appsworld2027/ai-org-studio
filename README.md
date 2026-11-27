@@ -5,7 +5,7 @@ A chat-first product studio for founders and AI PMs. You describe what you want;
 - **Left: talk to the AI.** Pick one:
   - **Claude Code**: Anthropic's own program, with your Claude plan.
   - **Codex**: OpenAI's own program, with your ChatGPT plan.
-  - **Other models**: a chat the Studio draws itself, on free models with your own free-tier key. Supported: NVIDIA, OpenRouter (free models), Groq, Google Gemini or Ollama on your machine (pay-per-use APIs are blocked by default, see below). It reads the product freely and asks before it changes a file or runs a command.
+  - **Other models**: a chat the Studio draws itself, on free models with your own free-tier key. Supported free providers: Groq, NVIDIA evaluation, OpenRouter :free models, Google Gemini free tier or Ollama on your machine. The unattended AI Org agents use only the allowlisted Groq free-tier models. It reads the product freely and asks before it changes a file or runs a command.
 - **Right: see the product.**
   - **Real app**: its live link, for example on Vercel. It switches automatically to a feature's preview when that feature is ready to test.
   - **Prototype**: the HTML mockups in the repo, used until a real app exists.
@@ -99,9 +99,11 @@ Product copies live in `~/studio-products/`.
 
 ## Checks
 
-36 unit tests and 24 browser checks (ST-01 to ST-28; run twice in CI: with stand-ins and with the real Claude Code and Codex in `docs/FEATURE_CONTRACT.md`) run on every pull request.
+CI runs the Node unit suite, shell syntax checks and full Playwright browser journeys against isolated stand-in engines. It does not install subscription CLIs, require account sign-in or call paid inference APIs.
 
-## No pay-per-use by default
-The Studio offers only your Claude and ChatGPT plans and free-tier providers. OpenAI API, Anthropic API and custom servers are blocked, OpenRouter is limited to `:free` models, and API-billing variables (see `server/billing.mjs`) are removed before Claude Code or Codex start.
-This cannot see your account settings: a "free tier" key on an account with billing enabled, a command-line tool already signed in with an API key or configured with a key helper, or extra usage enabled on a plan can still cost money. Check those yourself.
-To allow paid APIs, the owner starts the server with `STUDIO_ALLOW_PAID_APIS=1`.
+## Free-model-only agent policy
+The Studio's model API agent blocks OpenAI API, Anthropic API and custom paid servers permanently. OpenRouter is limited to `:free` models, and Groq is restricted to the explicit free-tier model allowlist in `server/billing.mjs`. No environment variable can enable paid API providers.
+
+The unattended AI Org worker uses Groq GPT-OSS 120B for building and Qwen 3.8 27B for independent review. Keep the Groq account on its free tier; the application cannot control account upgrades or provider billing settings.
+
+The Claude Code and Codex tabs are separate interactive founder tools using the user's own plan sign-in. They are not execution engines for unattended AI Org agents.
