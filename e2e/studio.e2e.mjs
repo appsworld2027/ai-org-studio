@@ -485,21 +485,32 @@ try {
     await page.selectOption("#productPick", "parent-plus"); await waitTerm(/CLAUDE heard|CLAUDE ready/);
   });
   await check("ST-40", "Founder Inbox dispatches an idempotent free-only task to Parent Plus", async () => {
-    await page.getByRole("button", { name: "Founder Inbox" }).click();
-    await page.getByLabel("Product repository").selectOption("parent-plus");
-    await page.locator('dialog input[placeholder="Task title"]').fill("E2E founder request");
-    await page.locator('dialog textarea[placeholder^="Describe"]').fill("Review the registration journey and report its top three edge cases.");
-    await page.getByRole("button", { name: "Send to AI Org" }).click();
-    await page.waitForFunction(() => document.querySelector("dialog")?.innerText.includes("Submitted to the canonical AI Org worker"), null, { timeout: 12000 });
-    assert(await page.locator("dialog").getByText("Open AI Org issue #500").isVisible(), "GitHub issue link displayed");
-    const issues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
-    assert(issues.length === 1, "one GitHub issue created");
-    assert(issues[0].labels.some(label => label.name === "ai:discovery"), "AI discovery stage label applied");
-    assert(issues[0].body.includes("Groq free-tier route only") && issues[0].body.includes("no paid model or paid fallback"), "free-only execution constraints persisted");
-    const inboxText = await page.locator("dialog").innerText();
-    assert(!inboxText.includes("Run Maya") && !inboxText.includes("NVIDIA model"), "local synthetic pilot is not exposed as production dispatch");
-    await page.locator("dialog").getByRole("button", { name: "Close" }).click();
-    await page.waitForFunction(() => !document.querySelector("dialog")?.open, null, { timeout: 3000 });
+    try {
+      await page.getByRole("button", { name: "Founder Inbox" }).click();
+      await page.getByLabel("Product repository").selectOption("parent-plus");
+      await page.locator('dialog input[placeholder="Task title"]').fill("E2E founder request");
+      await page.locator('dialog textarea[placeholder^="Describe"]').fill("Review the registration journey and report its top three edge cases.");
+      await page.getByRole("button", { name: "Send to AI Org" }).click();
+      try {
+        await page.waitForFunction(() => document.querySelector("dialog")?.innerText.includes("Submitted to the canonical AI Org worker"), null, { timeout: 12000 });
+      } catch {
+        const status = await page.locator('dialog [role="status"]').textContent().catch(() => "<no status element>");
+        const inbox = await page.locator("dialog").innerText().catch(() => "<dialog unavailable>");
+        throw new Error(`dispatch did not confirm; status=${status}; dialog=${inbox.slice(0, 900)}`);
+      }
+      assert(await page.locator("dialog").getByText("Open AI Org issue #500").isVisible(), "GitHub issue link displayed");
+      const issues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
+      assert(issues.length === 1, "one GitHub issue created");
+      assert(issues[0].labels.some(label => label.name === "ai:discovery"), "AI discovery stage label applied");
+      assert(issues[0].body.includes("Groq free-tier route only") && issues[0].body.includes("no paid model or paid fallback"), "free-only execution constraints persisted");
+      const inboxText = await page.locator("dialog").innerText();
+      assert(!inboxText.includes("Run Maya") && !inboxText.includes("NVIDIA model"), "local synthetic pilot is not exposed as production dispatch");
+    } finally {
+      if (await page.locator("dialog[open]").count()) {
+        await page.locator("dialog").getByRole("button", { name: "Close" }).click().catch(() => {});
+        await page.waitForFunction(() => !document.querySelector("dialog")?.open, null, { timeout: 3000 }).catch(() => {});
+      }
+    }
   });
   await check("ST-14", "keyboard: tabs reachable with arrow keys, visible focus", async () => {
     await page.focus("#tab-garage"); await page.keyboard.press("ArrowRight");
