@@ -40,15 +40,23 @@ export function needsFromText(text = "") {
 }
 export const score = (needs, m) => Object.entries(needs).reduce((a, [k, w]) => a + w * (m.s[k] || 0), 0) * 10 - m.cost;
 
-// available: { [modelId]: true } — which engines/models the user actually has.
-// overrides: { [slug]: modelId } — the user's own choices win (as long as the model is available).
+// available: { [modelId]: true } — advisory local availability, not GitHub runtime evidence.
+// Overrides must respect the canonical independent author/reviewer model seats.
+const BUILDER_ID = "free:gpt-oss-120b", REVIEWER_ID = "free:qwen-3.8-27b";
+const REVIEWERS = new Set(Object.values(CHECKS).flat());
+function requiredSeatModel(slug) {
+  if (Object.hasOwn(CHECKS, slug)) return BUILDER_ID;
+  if (REVIEWERS.has(slug)) return REVIEWER_ID;
+  return null; // other roles and custom agents remain advisory
+}
 export function plan({ agents, available, overrides = {} }) {
   const pool = ENGINE_MODELS.filter((m) => available[m.id]);
   const rows = [];
   for (const a of agents) {
     const needs = ROLE_NEEDS[a.slug] || needsFromText(`${a.role} ${a.description}`);
-    const ranked = pool.map((m) => ({ m, sc: score(needs, m) })).sort((x, y) => y.sc - x.sc || x.m.cost - y.m.cost);
-    rows.push({ ...a, needs, ranked, pick: null, why: "" });
+    const seat = requiredSeatModel(a.slug);
+    const ranked = pool.filter(m => !seat || m.id === seat).map((m) => ({ m, sc: score(needs, m) })).sort((x, y) => y.sc - x.sc || x.m.cost - y.m.cost);
+    rows.push({ ...a, needs, ranked, seat, pick: null, why: "", acceptedOverride: false });
   }
   const by = Object.fromEntries(rows.map((r) => [r.slug, r]));
   const WORDS = { reasoning: "thinking", writing: "writing", product: "product sense", coding: "coding", toolUse: "using tools", review: "careful review", speed: "speed" };
@@ -56,17 +64,26 @@ export function plan({ agents, available, overrides = {} }) {
   // 1) builders first (their choice constrains the checkers), then everyone else
   const order = [...rows.filter((r) => CHECKS[r.slug]), ...rows.filter((r) => !CHECKS[r.slug])];
   for (const r of order) {
-    if (!r.ranked.length) { r.why = "No AI connected for this agent yet."; continue; }
-    const ov = overrides[r.slug] && pool.find((m) => m.id === overrides[r.slug]);
+    if (!r.ranked.length) {
+      r.why = r.seat === REVIEWER_ID ? "Independent reviewer model unavailable; review must pause, not use the builder."
+        : r.seat === BUILDER_ID ? "Approved builder model unavailable; build must pause." : "No AI connected for this agent yet.";
+      continue;
+    }
+    const requested = overrides[r.slug];
+    const ov = requested && r.ranked.find(x => x.m.id === requested)?.m;
     const builders = Object.entries(CHECKS).filter(([, checkers]) => checkers.includes(r.slug)).map(([b]) => by[b]?.pick).filter(Boolean);
     const differs = (m) => !builders.some((b) => b.id === m.id);
-    if (ov) { r.pick = ov; r.why = differs(ov) ? "Your choice." : "Your choice — note: same model as the builder it checks."; continue; }
-    const pickOk = r.ranked.find((x) => differs(x.m));
-    r.pick = (pickOk || r.ranked[0]).m;
-    r.why = `Best for ${top(r.needs)}${builders.length ? (pickOk ? "; a different model from the builder, so it does not share its blind spots" : "; only one AI is connected, so it checks with the same model") : ""}.`;
+    if (ov && differs(ov)) { r.pick = ov; r.why = "Your choice."; r.acceptedOverride = true; }
+    else {
+      const pickOk = r.ranked.find((x) => differs(x.m));
+      if (!pickOk) { r.why = "Independent reviewer model unavailable; review must pause."; continue; }
+      r.pick = pickOk.m;
+      r.why = `Best for ${top(r.needs)}${builders.length ? "; a different model from the builder, so it does not share its blind spots" : ""}.`;
+      if (requested) r.why = "Override rejected (unavailable or incompatible with this seat). " + r.why;
+    }
     r.fallback = r.ranked.find((x) => x.m.id !== r.pick.id && differs(x.m))?.m || null;
   }
-  return rows.map(({ ranked, ...r }) => ({ slug: r.slug, name: r.name, role: r.role, needs: r.needs, pick: r.pick && { id: r.pick.id, name: r.pick.name }, fallback: r.fallback ? { id: r.fallback.id, name: r.fallback.name } : null, why: r.why, overridden: !!overrides[r.slug] }));
+  return rows.map(({ ranked, ...r }) => ({ slug: r.slug, name: r.name, role: r.role, needs: r.needs, pick: r.pick && { id: r.pick.id, name: r.pick.name }, fallback: r.fallback ? { id: r.fallback.id, name: r.fallback.name } : null, why: r.why, overridden: r.acceptedOverride }));
 }
 
 // Parse an AI Org role file (org/agents/<slug>.md front matter).
