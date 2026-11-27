@@ -163,8 +163,18 @@
       pendingId = null;
       title.value = "";
       description.value = "";
-      status.textContent = result.message || "Submitted to AI Org.";
-      await refresh();
+      const confirmation = result.message || "Submitted to AI Org.";
+      // The task was created successfully. Do not encourage a second submission if the
+      // receipt list cannot refresh; display success only after the issue link is rendered.
+      try {
+        await refresh();
+        status.textContent = confirmation;
+      } catch (refreshError) {
+        status.textContent = confirmation + " — the inbox could not refresh. Reopen the inbox to see the existing task; do not resubmit.";
+        if (result.task?.githubIssueUrl && result.task?.githubIssueNumber) {
+          status.append(" ", link(result.task.githubIssueUrl, "Open AI Org issue #" + result.task.githubIssueNumber));
+        }
+      }
     } catch (error) {
       status.textContent = error.message + " — retrying will reuse the same request ID.";
     } finally {
