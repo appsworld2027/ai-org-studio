@@ -502,6 +502,7 @@ try {
     try {
       await page.getByRole("button", { name: "Founder Inbox" }).click();
       await page.waitForFunction(() => document.querySelector("#founder-inbox-dialog")?.open, null, { timeout: 3000 });
+      assert(await inbox.locator('option[value="parent-plus"]').count() === 1, "only a GitHub-verified private product repository is dispatchable");
       await inbox.getByLabel("Product repository").selectOption("parent-plus");
       await inbox.getByLabel("Task title").fill("E2E founder request");
       await inbox.getByLabel("Requested outcome").fill("Review the registration journey and report its top three edge cases.");
