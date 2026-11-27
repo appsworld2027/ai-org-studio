@@ -9,7 +9,7 @@
 //   <product>/INDEX.md         list of every file with its first line (automatic)
 // Layer 2 (read-only here): the product repo's docs/ai-memory/* from the AI Org (product facts, reviewed by PR).
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, appendFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, isAbsolute } from "node:path";
 import { execFile } from "node:child_process";
 
 export const GARAGE_FOLDERS = ["notes", "research", "plans", "reports", "mockups", "screenshots", "journal"];
@@ -104,20 +104,50 @@ export function makeGarage({ dir, repo = "", gh = "gh", log = () => {}, now = ()
         log(reason);
         return { ok: false, pushed: false, reason };
       }
-      const changed = (await run("git", ["-C", dir, "status", "--porcelain", "--untracked-files=all", "--", p.id]).catch(() => "")).split("\n").filter(Boolean).map((l) => l.slice(3).replace(/^"|"$/g, ""));
+      const changed = (await run("git", ["-C", dir, "status", "--porcelain", "--untracked-files=all", "--", p.id])).split("\n").filter(Boolean).map((l) => l.slice(3).replace(/^"|"$/g, ""));
       let redacted = 0;
       for (const f of changed) { const abs = join(dir, f); try { if (!/\.(md|txt|html?|json|csv|ya?ml|js|ts|tsx|sql|sh|log)$/i.test(f) || statSync(abs).size > 2_000_000) continue; const r = redact(readFileSync(abs, "utf8")); if (r.count) { writeFileSync(abs, r.text); redacted += r.count; } } catch { /* gone */ } }
-      if (!changed.length) return { ok: true, changed: 0 };
-      await run("git", ["-C", dir, "add", "-A", "--", p.id]);
-      await run("git", ["-C", dir, "-c", "user.name=AI Org Studio", "-c", "user.email=studio@users.noreply.github.com", "commit", "-q", "-m", redact(message).text.slice(0, 200), "--only", "--", p.id]);
-      const pushed = await run("git", ["-C", dir, "push", "-q", target, "HEAD"]).then(() => true).catch(async (e) => {
-        // Another machine pushed first: take theirs, keep ours, try once more.
-        await run("git", ["-C", dir, "pull", "-q", "--rebase", "-X", "theirs", target, "HEAD"]).catch(() => "");
-        if (await verifiedPushTarget() !== target) return false;
-        return run("git", ["-C", dir, "push", "-q", target, "HEAD"]).then(() => true).catch(() => { log(`garage: push failed (${e.message}); will retry next save`); return false; });
-      });
+      if (changed.length) {
+        await run("git", ["-C", dir, "add", "-A", "--", p.id]);
+        await run("git", ["-C", dir, "-c", "user.name=AI Org Studio", "-c", "user.email=studio@users.noreply.github.com", "commit", "-q", "-m", redact(message).text.slice(0, 200), "--only", "--", p.id]);
+      }
+      // A prior save can have committed locally but failed to push. Always attempt
+      // publication after verification, even when the current working tree is clean.
+      const pending = reason => {
+        log(reason);
+        return { ok: false, changed: changed.length, pushed: false, redacted, reason };
+      };
       if (redacted) log(`garage: removed ${redacted} secret-looking value(s) before saving`);
-      return { ok: true, changed: changed.length, pushed, redacted };
+      if (await verifiedPushTarget() !== target) return pending("Garage sync blocked: privacy verification changed; local checkpoint retained.");
+      const push = () => run("git", ["-C", dir, "push", "-q", target, "HEAD"]);
+      try { await push(); }
+      catch {
+        // A concurrent push or outage must never silently resolve competing founder
+        // decisions. Retry only from a clean worktree, and abort a rebase we started.
+        const rebaseInProgress = async () => {
+          for (const name of ["rebase-merge", "rebase-apply"]) {
+            const path = (await run("git", ["-C", dir, "rev-parse", "--git-path", name])).trim();
+            if (existsSync(isAbsolute(path) ? path : join(dir, path))) return true;
+          }
+          return false;
+        };
+        if (await rebaseInProgress() || (await run("git", ["-C", dir, "status", "--porcelain"])).trim()) {
+          return pending("Garage sync pending: existing edits or rebase require reconciliation; local checkpoint retained.");
+        }
+        if (await verifiedPushTarget() !== target) return pending("Garage sync blocked: privacy verification changed; local checkpoint retained.");
+        try { await run("git", ["-C", dir, "pull", "-q", "--rebase", target, "HEAD"]); }
+        catch {
+          if (await rebaseInProgress()) {
+            try { await run("git", ["-C", dir, "rebase", "--abort"]); }
+            catch { return pending("Garage rebase failed and could not be aborted; preserve working tree for recovery."); }
+          }
+          return pending("Garage sync pending: rebase conflict or network failure; local checkpoint retained, remote unchanged.");
+        }
+        if (await verifiedPushTarget() !== target) return pending("Garage sync blocked: privacy verification changed; local checkpoint retained.");
+        try { await push(); }
+        catch { return pending("Garage sync pending: retry failed; local checkpoint retained."); }
+      }
+      return { ok: true, changed: changed.length, pushed: true, redacted };
     }).catch((e) => { log(`garage: ${e.message}`); return { ok: false, reason: e.message }; });
     return saving;
   }
