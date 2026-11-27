@@ -18,7 +18,7 @@ export async function handleFounderInbox(req, res, inbox, options = {}) {
     const enabled = dispatchEnabled && gate?.enabled === true;
     return respond(200, {
       tasks: inbox.list(),
-      products: gate?.products || options.products || [],
+      products: gate?.enabled ? gate.products : (options.products || []),
       executionEnabled: enabled,
       executionReason: enabled ? "" : (gate?.reason || (dispatchEnabled
         ? "Repository privacy could not be verified; dispatch is paused."
