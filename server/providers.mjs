@@ -79,13 +79,15 @@ export const PROVIDERS = {
 
 // Restrict live model catalogs to exact, reviewed free IDs. OpenRouter is free only with :free suffix;
 // Ollama is local and has no per-token API billing.
-export function sortModels(provider, ids = []) {
+export function sortModels(provider, ids = [], { allowLocalFixture = false } = {}) {
   const p = PROVIDERS[provider] || {};
   const uniq = [...new Set(ids.filter((x) => typeof x === "string" && x))];
   if (provider === "openrouter") {
     const free = [...new Set([...(p.models || []), ...uniq])].filter((x) => x.endsWith(":free"));
     return free.sort((a, b) => a.localeCompare(b)).slice(0, 300);
   }
+  // Custom catalogs are enabled only by the caller after the loopback test policy passes.
+  if (provider === "custom") return allowLocalFixture ? uniq.slice(0, 300) : [];
   if (provider === "ollama") {
     return [...new Set([...(p.models || []), ...uniq])].slice(0, 300);
   }

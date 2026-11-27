@@ -268,7 +268,9 @@ async function listModels(id) {
   const j = await r.json();
   // The Studio's agent needs tool use; drop models that say they cannot do it (OpenRouter publishes this per model).
   const usable = (j.data || j.models || []).filter((m) => !Array.isArray(m.supported_parameters) || m.supported_parameters.includes("tools"));
-  return sortModels(id, usable.map((m) => (m.id || m.name || "").replace(/^models\//, ""))).filter((m) => modelAllowed(id, m, process.env, pc.base));
+  return sortModels(id, usable.map((m) => (m.id || m.name || "").replace(/^models\//, "")), {
+    allowLocalFixture: id === "custom" && providerAllowed(id, process.env, pc.base)
+  }).filter((m) => modelAllowed(id, m, process.env, pc.base));
 }
 function systemPromptFor(p) {
   let rules = ""; try { rules = readFileSync(RULES, "utf8"); } catch { /* none */ }
