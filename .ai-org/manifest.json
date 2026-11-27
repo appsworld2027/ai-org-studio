@@ -44,5 +44,8 @@
   "memory": {
     "folder": "docs/ai-memory",
     "rule": "Preserve validated handovers and reviewed memory."
-  }
+  },
+  "allowedProductRepositories": [
+    "appsworld2027/Parent-plus-"
+  ]
 }
