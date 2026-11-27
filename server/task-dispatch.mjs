@@ -7,10 +7,14 @@ const validRepository = (value) =>
 
 const PUBLIC_CODE_SCOPE = "public-source-code-and-synthetic-test-data-only";
 
+function allowlistedRepository(repositories, repository) {
+  return Array.isArray(repositories) &&
+    repositories.some((item) => typeof item === "string" && item.toLowerCase() === String(repository || "").toLowerCase());
+}
+
 function approvedPublicCodeRepository(studioManifest, repository) {
   const policy = studioManifest?.publicCodeDataPolicy;
-  return Array.isArray(studioManifest?.allowedPublicCodeRepositories) &&
-    studioManifest.allowedPublicCodeRepositories.includes(repository) &&
+  return allowlistedRepository(studioManifest?.allowedPublicCodeRepositories, repository) &&
     policy?.scope === PUBLIC_CODE_SCOPE &&
     policy.prohibitSecrets === true &&
     policy.prohibitProductionCredentials === true &&
@@ -30,7 +34,7 @@ export async function dispatchTask({
   availableEngines = { free: true },
   github
 } = {}) {
-  if (!validRepository(repository) || !Array.isArray(allowedRepositories) || !allowedRepositories.includes(repository)) {
+  if (!validRepository(repository) || !allowlistedRepository(allowedRepositories, repository)) {
     throw new Error("Repository is not allowlisted for product dispatch");
   }
 
@@ -51,7 +55,7 @@ export async function dispatchTask({
   } else if (
     productManifest && typeof productManifest === "object" &&
     Array.isArray(studioManifest?.inheritProductExecutionPolicyFor) &&
-    studioManifest.inheritProductExecutionPolicyFor.includes(repository)
+    allowlistedRepository(studioManifest.inheritProductExecutionPolicyFor, repository)
   ) {
     // Explicitly approved inheritance for products whose manifest predates executionPolicy.
     productPolicy = studioPolicy;
