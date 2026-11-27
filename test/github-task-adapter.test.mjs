@@ -44,6 +44,14 @@ test("creates an allowlisted GitHub issue and reuses it on retry", async () => {
   assert.ok(calls.some(args => args.includes("labels[]=ai:discovery")));
 });
 
+test("GitHub repository allowlists match case-insensitively", async () => {
+  const adapter = createGithubTaskAdapter({
+    allowedRepositories: [PARENT_REPO.toLowerCase()],
+    run: async () => ({ full_name: PARENT_REPO, private: true })
+  });
+  assert.deepEqual(await adapter.getRepository({ repository: PARENT_REPO }), { fullName: PARENT_REPO, private: true });
+});
+
 test("getRepository verifies canonical repository identity and privacy", async () => {
   const adapter = createGithubTaskAdapter({
     allowedRepositories: [PARENT_REPO],
