@@ -1,5 +1,5 @@
-# Studio CI: unit tests + full browser test, twice: with small stand-ins, and with the REAL Claude Code and Codex programs
-# (talking to stand-in model servers, so no accounts or keys are needed).
+# Studio CI: unit tests + browser E2E with deterministic stand-in engines.
+# No subscription CLIs, Codex execution, provider credentials or paid inference are used in CI.
 name: Studio checks
 on:
   pull_request:
@@ -23,14 +23,12 @@ jobs:
         run: npm test
       - name: Shell scripts parse
         run: bash -n bin/studio.sh && bash -n bin/engine.sh && bash -n e2e/fake/gh
-      - name: Install a headless browser and the real Claude Code and Codex
+      - name: Install Playwright and Chromium
         run: |
-          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && node -e "const f='package.json',p=require('./'+f);p.allowScripts={'@anthropic-ai/claude-code':true,'@openai/codex':true};require('fs').writeFileSync(f,JSON.stringify(p))" && npm install --no-audit --no-fund --ignore-scripts=false playwright@1 @anthropic-ai/claude-code @openai/codex >/dev/null
+          mkdir -p /tmp/pw
+          cd /tmp/pw
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright@1 >/dev/null
           npx --prefix /tmp/pw playwright install --with-deps chromium
-          /tmp/pw/node_modules/.bin/claude --version && /tmp/pw/node_modules/.bin/codex --version
-      - name: Let Codex's sandbox run (Ubuntu 24.04 blocks the user namespaces it needs by default)
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: End-to-end test with stand-in engines (ST-01..ST-39)
+      - name: Browser end-to-end test with stand-in engines (ST-01..ST-39)
         run: PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs node e2e/studio.e2e.mjs
-      - name: End-to-end test with the real Claude Code and Codex
-        run: PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs STUDIO_REAL_CLAUDE=/tmp/pw/node_modules/.bin/claude STUDIO_REAL_CODEX=/tmp/pw/node_modules/.bin/codex node e2e/studio.e2e.mjs
