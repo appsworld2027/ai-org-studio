@@ -434,25 +434,39 @@ if (req.method === "GET") {
         catch { return null; }
       })();
       const allowedRepositories = studioManifest?.allowedProductRepositories || [];
+      const allowedProducts = products().filter((p) => allowedRepositories.includes(p.repo));
+      const github = createGithubTaskAdapter({
+        allowedRepositories,
+        run: async (args) => JSON.parse(await gh(args))
+      });
+      const canDispatch = async () => {
+        const verified = [];
+        let reason = "No allowlisted product repository is registered.";
+        for (const product of allowedProducts) {
+          try {
+            const info = await github.getRepository({ repository: product.repo });
+            if (info.private === true) verified.push({ id: product.id, name: product.name, repo: product.repo });
+            else reason = `${product.name} repository is public. Make it private before sending founder tasks.`;
+          } catch {
+            reason = `Could not verify privacy for ${product.repo}; founder task dispatch is paused.`;
+          }
+        }
+        return { enabled: verified.length > 0, products: verified, reason: verified.length ? "" : reason };
+      };
       return await handleFounderInbox(req, res, founderInbox, {
-        products: products().filter((p) => allowedRepositories.includes(p.repo)).map((p) => ({ id: p.id, name: p.name, repo: p.repo })),
+        products: allowedProducts.map((p) => ({ id: p.id, name: p.name, repo: p.repo })),
+        canDispatch,
         resolveProduct: (id) => {
           if (id) { const selected = store.products.get(id); return selected && allowedRepositories.includes(selected.repo) ? selected : null; }
           const defaultId = process.env.STUDIO_DEFAULT_PRODUCT_ID || settings.defaultProductId;
           if (defaultId) { const selected = store.products.get(defaultId); return selected && allowedRepositories.includes(selected.repo) ? selected : null; }
-          const all = products();
-          const allowed = all.filter((p) => allowedRepositories.includes(p.repo));
-          return allowed.length === 1 ? allowed[0] : null;
+          return allowedProducts.length === 1 ? allowedProducts[0] : null;
         },
         dispatch: async ({ task, product }) => {
           const productManifestPath = join(product.dir, ".ai-org", "manifest.json");
           let productManifest;
           try { productManifest = JSON.parse(readFileSync(productManifestPath, "utf8")); }
           catch { throw new Error(`Product manifest is missing or invalid: ${productManifestPath}`); }
-          const github = createGithubTaskAdapter({
-            allowedRepositories,
-            run: async (args) => JSON.parse(await gh(args))
-          });
           return dispatchTask({
             studioManifest,
             productManifest,
