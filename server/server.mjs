@@ -434,7 +434,8 @@ if (req.method === "GET") {
         catch { return null; }
       })();
       const allowedRepositories = studioManifest?.allowedProductRepositories || [];
-      const allowedProducts = products().filter((p) => allowedRepositories.includes(p.repo));
+      const allowedRepositorySet = new Set(allowedRepositories.filter((value) => typeof value === "string").map((value) => value.toLowerCase()));
+      const allowedProducts = products().filter((p) => allowedRepositorySet.has(String(p.repo || "").toLowerCase()));
       const github = createGithubTaskAdapter({
         allowedRepositories,
         run: async (args) => JSON.parse(await gh(args))
@@ -457,7 +458,7 @@ if (req.method === "GET") {
         products: allowedProducts.map((p) => ({ id: p.id, name: p.name, repo: p.repo })),
         canDispatch,
         resolveProduct: (id) => {
-          if (id) { const selected = store.products.get(id); return selected && allowedRepositories.includes(selected.repo) ? selected : null; }
+          if (id) { const selected = store.products.get(id); return selected && allowedRepositorySet.has(String(selected.repo || "").toLowerCase()) ? selected : null; }
           const defaultId = process.env.STUDIO_DEFAULT_PRODUCT_ID || settings.defaultProductId;
           if (defaultId) { const selected = store.products.get(defaultId); return selected && allowedRepositories.includes(selected.repo) ? selected : null; }
           return allowedProducts.length === 1 ? allowedProducts[0] : null;
