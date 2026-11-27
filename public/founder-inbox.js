@@ -13,15 +13,30 @@
   notice.textContent = "Submit a product request. Studio creates an idempotent GitHub task; the canonical AI Org worker handles planning, engineering and independent QA using free models only.";
 
   const form = document.createElement("form");
+  const productLabel = document.createElement("label");
+  productLabel.htmlFor = "founder-inbox-product";
+  productLabel.textContent = "Product repository";
   const product = document.createElement("select");
+  product.id = "founder-inbox-product";
+  product.setAttribute("aria-label", "Product repository");
   product.required = true;
   product.style.cssText = "width:100%;margin-bottom:12px;padding:8px";
+  const titleLabel = document.createElement("label");
+  titleLabel.htmlFor = "founder-inbox-title";
+  titleLabel.textContent = "Task title";
   const title = document.createElement("input");
+  title.id = "founder-inbox-title";
+  title.setAttribute("aria-label", "Task title");
   title.placeholder = "Task title";
   title.required = true;
   title.maxLength = 200;
   title.style.cssText = "width:100%;margin-bottom:12px;padding:8px";
+  const descriptionLabel = document.createElement("label");
+  descriptionLabel.htmlFor = "founder-inbox-description";
+  descriptionLabel.textContent = "Requested outcome";
   const description = document.createElement("textarea");
+  description.id = "founder-inbox-description";
+  description.setAttribute("aria-label", "Requested outcome");
   description.placeholder = "Describe the outcome you want AI Org to deliver";
   description.required = true;
   description.maxLength = 20000;
@@ -40,7 +55,7 @@
   const status = document.createElement("p");
   status.setAttribute("role", "status");
   const tasks = document.createElement("section");
-  form.append(product, title, description, submit);
+  form.append(productLabel, product, titleLabel, title, descriptionLabel, description, submit);
   dialog.append(heading, notice, form, status, tasks, close);
   document.body.append(button, dialog);
 

@@ -486,7 +486,7 @@ try {
   });
   await check("ST-40", "Founder Inbox dispatches an idempotent free-only task to Parent Plus", async () => {
     await page.getByRole("button", { name: "Founder Inbox" }).click();
-    await page.locator("dialog select").selectOption("parent-plus");
+    await page.getByLabel("Product repository").selectOption("parent-plus");
     await page.locator('dialog input[placeholder="Task title"]').fill("E2E founder request");
     await page.locator('dialog textarea[placeholder^="Describe"]').fill("Review the registration journey and report its top three edge cases.");
     await page.getByRole("button", { name: "Send to AI Org" }).click();
@@ -498,6 +498,8 @@ try {
     assert(issues[0].body.includes("Groq free-tier route only") && issues[0].body.includes("no paid model or paid fallback"), "free-only execution constraints persisted");
     const inboxText = await page.locator("dialog").innerText();
     assert(!inboxText.includes("Run Maya") && !inboxText.includes("NVIDIA model"), "local synthetic pilot is not exposed as production dispatch");
+    await page.locator("dialog").getByRole("button", { name: "Close" }).click();
+    await page.waitForFunction(() => !document.querySelector("dialog")?.open, null, { timeout: 3000 });
   });
   await check("ST-14", "keyboard: tabs reachable with arrow keys, visible focus", async () => {
     await page.focus("#tab-garage"); await page.keyboard.press("ArrowRight");
