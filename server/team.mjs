@@ -83,7 +83,7 @@ export function plan({ agents, available, overrides = {} }) {
     }
     r.fallback = r.ranked.find((x) => x.m.id !== r.pick.id && differs(x.m))?.m || null;
   }
-  return rows.map(({ ranked, ...r }) => ({ slug: r.slug, name: r.name, role: r.role, needs: r.needs, pick: r.pick && { id: r.pick.id, name: r.pick.name }, fallback: r.fallback ? { id: r.fallback.id, name: r.fallback.name } : null, why: r.why, overridden: r.acceptedOverride }));
+  return rows.map(({ ranked, ...r }) => ({ slug: r.slug, name: r.name, role: r.role, needs: r.needs, pick: r.pick && { id: r.pick.id, name: r.pick.name }, fallback: r.fallback ? { id: r.fallback.id, name: r.fallback.name } : null, why: r.why, overridden: r.acceptedOverride, allowedModelIds: ranked.map(x => x.m.id) }));
 }
 
 // Parse an AI Org role file (org/agents/<slug>.md front matter).
