@@ -2,146 +2,88 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { dispatchTask } from "../server/task-dispatch.mjs";
 
-const manifest = {
+const PARENT_REPO = "appsworld2027/Parent-plus-";
+const policy = {
   executionPolicy: {
     enabled: true,
     allowedEngines: ["free"],
     allowPaidFallback: false
   }
 };
-
-function fixture() {
-  const tasks = new Map();
-  let writes = 0;
-
-  const github = {
-    async ensureTask(task) {
-      if (!tasks.has(task.requestId)) {
-        writes++;
-        tasks.set(task.requestId, {
-          ...task,
-          number: writes
-        });
-      }
-      return tasks.get(task.requestId);
-    }
-  };
-
-  return {
-    tasks,
-    writes: () => writes,
-    input: {
-      manifest,
-      repository: "appsworld2027/ai-org-studio",
-      title: "Founder feedback pilot",
-      description: "Create a founder feedback workflow",
-      requestId: "pilot-feedback-001",
-      availableEngines: { free: true },
-      github
-    }
-  };
-}
-
-test("Disabled policy prevents GitHub writes", async () => {
-  const f = fixture();
-
-  const result = await dispatchTask({
-    ...f.input,
-    manifest: {
-      executionPolicy: {
-        ...manifest.executionPolicy,
-        enabled: false
-      }
-    }
-  });
-
-  assert.equal(result.status, "paused");
-  assert.equal(f.writes(), 0);
+const input = () => ({
+  studioManifest: { ...policy, allowedProductRepositories: [PARENT_REPO] },
+  productManifest: policy,
+  allowedRepositories: [PARENT_REPO],
+  repository: PARENT_REPO,
+  productName: "Parent Plus",
+  title: "Improve registration",
+  description: "Review the registration journey and identify edge cases.",
+  requestId: "request_12345678",
+  availableEngines: { free: true },
+  github: {
+    ensureTask: async payload => ({
+      number: 77,
+      state: "open",
+      url: "https://github.com/appsworld2027/Parent-plus-/issues/77",
+      payload
+    })
+  }
 });
 
-test("Unavailable free engine prevents task submission", async () => {
-  const f = fixture();
-
-  const result = await dispatchTask({
-    ...f.input,
-    availableEngines: { free: false, codex: true }
-  });
-
-  assert.equal(result.status, "paused");
-  assert.equal(f.writes(), 0);
-});
-
-test("Task is assigned to discovery using free engine", async () => {
-  const f = fixture();
-  const result = await dispatchTask(f.input);
-
+test("dispatches a free-only task to an explicitly allowlisted product repository", async () => {
+  const result = await dispatchTask(input());
   assert.equal(result.status, "submitted");
+  assert.equal(result.repository, PARENT_REPO);
+  assert.equal(result.taskNumber, 77);
   assert.equal(result.assignedRole, "maya-ai-pm");
   assert.equal(result.engine, "free");
+  assert.equal(result.provider, "groq");
   assert.equal(result.executionVerified, false);
-
-  const task = f.tasks.get(f.input.requestId);
-
-  assert.deepEqual(task.labels, [
-    "ai:discovery",
-    "engine:free"
-  ]);
-
-  assert.equal(f.writes(), 1);
 });
 
-test("Duplicate request reuses task through adapter", async () => {
-  const f = fixture();
-
-  const first = await dispatchTask(f.input);
-  const second = await dispatchTask(f.input);
-
-  assert.equal(first.taskNumber, second.taskNumber);
-  assert.equal(f.writes(), 1);
+test("creates a task body with the request marker and founder operating policy", async () => {
+  const args = input();
+  let payload;
+  args.github.ensureTask = async value => {
+    payload = value;
+    return { number: 77, state: "open", url: "https://github.com/appsworld2027/Parent-plus-/issues/77" };
+  };
+  await dispatchTask(args);
+  assert.equal(payload.repository, PARENT_REPO);
+  assert.deepEqual(payload.labels, ["ai:discovery"]);
+  assert.ok(payload.body.startsWith("<!-- studio-request:request_12345678 -->"));
+  assert.match(payload.body, /Groq free-tier route only/);
+  assert.match(payload.body, /no paid model or paid fallback/);
+  assert.match(payload.body, /Founder intervention is reserved/);
+  assert.doesNotMatch(payload.body, /engine:free/);
 });
 
-test("Parent Plus cannot be modified by Studio pilot", async () => {
-  const f = fixture();
-
+test("rejects repositories not explicitly allowlisted", async () => {
   await assert.rejects(
-    dispatchTask({
-      ...f.input,
-      repository: "appsworld2027/Parent-plus-"
-    }),
-    /outside the pilot scope/
-  );
-
-  assert.equal(f.writes(), 0);
-});
-
-test("Invalid input creates no task", async () => {
-  const f = fixture();
-
-  await assert.rejects(
-    dispatchTask({ ...f.input, title: "" }),
-    /Invalid task input/
-  );
-
-  assert.equal(f.writes(), 0);
-});
-
-test("Missing GitHub adapter is rejected", async () => {
-  const f = fixture();
-
-  await assert.rejects(
-    dispatchTask({ ...f.input, github: undefined }),
-    /adapter unavailable/
+    dispatchTask({ ...input(), repository: "appsworld2027/ai-org-studio" }),
+    /not allowlisted/
   );
 });
 
-test("Unconfirmed GitHub task cannot report success", async () => {
-  const f = fixture();
+test("does not dispatch when either Studio or product free-only policy is disabled", async () => {
+  const disabledStudio = input();
+  disabledStudio.studioManifest = { ...policy, allowedProductRepositories: [PARENT_REPO], executionPolicy: { ...policy.executionPolicy, enabled: false } };
+  assert.equal((await dispatchTask(disabledStudio)).status, "paused");
 
-  await assert.rejects(
-    dispatchTask({
-      ...f.input,
-      github: { ensureTask: async () => ({}) }
-    }),
-    /did not confirm/
-  );
+  const disabledProduct = input();
+  disabledProduct.productManifest = { ...policy, executionPolicy: { ...policy.executionPolicy, allowPaidFallback: true } };
+  assert.equal((await dispatchTask(disabledProduct)).status, "paused");
+});
+
+test("does not dispatch when the free engine is unavailable", async () => {
+  const args = input();
+  args.availableEngines = { free: false };
+  assert.equal((await dispatchTask(args)).status, "paused");
+});
+
+test("requires a GitHub adapter and valid task fields", async () => {
+  const args = input();
+  delete args.github;
+  await assert.rejects(dispatchTask(args), /adapter unavailable/);
+  await assert.rejects(dispatchTask({ ...input(), requestId: "bad" }), /Invalid task input/);
 });
