@@ -492,6 +492,8 @@ try {
   });
   await check("ST-40", "Founder Inbox dispatches an idempotent free-only task to Parent Plus", async () => {
     const inbox = page.locator("#founder-inbox-dialog");
+    const privateFixture = JSON.parse(execFileSync(join(ROOT, "e2e/fake/gh"), ["api", "repos/appsworld2027/Parent-plus-"], { encoding: "utf8" }));
+    assert(privateFixture.private === true, "fake GitHub metadata marks the registered Parent Plus fixture private");
     let submittedPayload = null;
     const captureRequest = request => {
       if (request.url().endsWith("/api/founder-inbox") && request.method() === "POST") {
@@ -502,7 +504,9 @@ try {
     try {
       await page.getByRole("button", { name: "Founder Inbox" }).click();
       await page.waitForFunction(() => document.querySelector("#founder-inbox-dialog")?.open, null, { timeout: 3000 });
-      assert(await inbox.locator('option[value="parent-plus"]').count() === 1, "only a GitHub-verified private product repository is dispatchable");
+      const parentPlusOptionCount = await inbox.locator('option[value="parent-plus"]').count();
+      const inboxState = await inbox.innerText();
+      assert(parentPlusOptionCount === 1, `only a GitHub-verified private product repository is dispatchable; options=${parentPlusOptionCount}; state=${inboxState}`);
       await inbox.getByLabel("Product repository").selectOption("parent-plus");
       await inbox.getByLabel("Task title").fill("E2E founder request");
       await inbox.getByLabel("Requested outcome").fill("Review the registration journey and report its top three edge cases.");
