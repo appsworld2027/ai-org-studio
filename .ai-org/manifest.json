@@ -29,15 +29,37 @@
     "approvalRule": "Founder approval required before merge or deployment."
   },
   "executionPolicy": {
-    "enabled": false,
+    "enabled": true,
     "allowedEngines": [
       "free"
     ],
     "allowPaidFallback": false,
-    "allowProductionDeployment": false
+    "allowProductionDeployment": false,
+    "provider": "groq",
+    "models": {
+      "builder": "groq/openai/gpt-oss-120b",
+      "reviewer": "groq/qwen/qwen3.8-27b"
+    },
+    "requirePrivateRepositoriesForConfidentialCode": true
   },
   "memory": {
     "folder": "docs/ai-memory",
     "rule": "Preserve validated handovers and reviewed memory."
+  },
+  "allowedProductRepositories": [
+    "appsworld2027/Parent-plus-"
+  ],
+  "allowedPublicCodeRepositories": [
+    "appsworld2027/Parent-plus-"
+  ],
+  "inheritProductExecutionPolicyFor": [
+    "appsworld2027/Parent-plus-"
+  ],
+  "publicCodeDataPolicy": {
+    "scope": "public-source-code-and-synthetic-test-data-only",
+    "prohibitSecrets": true,
+    "prohibitProductionCredentials": true,
+    "prohibitCustomerPersonalData": true,
+    "prohibitChildPersonalData": true
   }
 }

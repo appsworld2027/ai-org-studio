@@ -2,146 +2,171 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { dispatchTask } from "../server/task-dispatch.mjs";
 
-const manifest = {
+const PARENT_REPO = "appsworld2027/Parent-plus-";
+const policy = {
   executionPolicy: {
     enabled: true,
     allowedEngines: ["free"],
-    allowPaidFallback: false
+    allowPaidFallback: false,
+    provider: "groq"
   }
 };
-
-function fixture() {
-  const tasks = new Map();
-  let writes = 0;
-
-  const github = {
-    async ensureTask(task) {
-      if (!tasks.has(task.requestId)) {
-        writes++;
-        tasks.set(task.requestId, {
-          ...task,
-          number: writes
-        });
-      }
-      return tasks.get(task.requestId);
-    }
-  };
-
-  return {
-    tasks,
-    writes: () => writes,
-    input: {
-      manifest,
-      repository: "appsworld2027/ai-org-studio",
-      title: "Founder feedback pilot",
-      description: "Create a founder feedback workflow",
-      requestId: "pilot-feedback-001",
-      availableEngines: { free: true },
-      github
-    }
-  };
-}
-
-test("Disabled policy prevents GitHub writes", async () => {
-  const f = fixture();
-
-  const result = await dispatchTask({
-    ...f.input,
-    manifest: {
-      executionPolicy: {
-        ...manifest.executionPolicy,
-        enabled: false
-      }
-    }
-  });
-
-  assert.equal(result.status, "paused");
-  assert.equal(f.writes(), 0);
+const publicCodeDataPolicy = {
+  scope: "public-source-code-and-synthetic-test-data-only",
+  prohibitSecrets: true,
+  prohibitProductionCredentials: true,
+  prohibitCustomerPersonalData: true,
+  prohibitChildPersonalData: true
+};
+const input = () => ({
+  studioManifest: {
+    ...policy,
+    allowedProductRepositories: [PARENT_REPO],
+    allowedPublicCodeRepositories: [PARENT_REPO],
+    inheritProductExecutionPolicyFor: [PARENT_REPO],
+    publicCodeDataPolicy: { ...publicCodeDataPolicy }
+  },
+  // Parent Plus's current manifest predates a product-local executionPolicy.
+  productManifest: { product: { name: "Parent Plus" } },
+  allowedRepositories: [PARENT_REPO],
+  repository: PARENT_REPO,
+  productName: "Parent Plus",
+  title: "Improve registration",
+  description: "Review the registration journey and identify edge cases.",
+  requestId: "request_12345678",
+  availableEngines: { free: true },
+  github: {
+    getRepository: async () => ({ fullName: PARENT_REPO, private: false }),
+    ensureTask: async payload => ({
+      number: 77,
+      state: "open",
+      url: "https://github.com/appsworld2027/Parent-plus-/issues/77",
+      payload
+    })
+  }
 });
 
-test("Unavailable free engine prevents task submission", async () => {
-  const f = fixture();
-
-  const result = await dispatchTask({
-    ...f.input,
-    availableEngines: { free: false, codex: true }
-  });
-
-  assert.equal(result.status, "paused");
-  assert.equal(f.writes(), 0);
-});
-
-test("Task is assigned to discovery using free engine", async () => {
-  const f = fixture();
-  const result = await dispatchTask(f.input);
-
+test("repository policy allowlists use GitHub case-insensitive identity", async () => {
+  const args = input();
+  args.allowedRepositories = [PARENT_REPO.toLowerCase()];
+  args.studioManifest.allowedPublicCodeRepositories = [PARENT_REPO.toLowerCase()];
+  args.studioManifest.inheritProductExecutionPolicyFor = [PARENT_REPO.toLowerCase()];
+  const result = await dispatchTask(args);
   assert.equal(result.status, "submitted");
+});
+
+test("dispatches to an explicitly approved public source-code repository", async () => {
+  const result = await dispatchTask(input());
+  assert.equal(result.status, "submitted");
+  assert.equal(result.repository, PARENT_REPO);
+  assert.equal(result.taskNumber, 77);
   assert.equal(result.assignedRole, "maya-ai-pm");
   assert.equal(result.engine, "free");
+  assert.equal(result.provider, "groq");
   assert.equal(result.executionVerified, false);
-
-  const task = f.tasks.get(f.input.requestId);
-
-  assert.deepEqual(task.labels, [
-    "ai:discovery",
-    "engine:free"
-  ]);
-
-  assert.equal(f.writes(), 1);
 });
 
-test("Duplicate request reuses task through adapter", async () => {
-  const f = fixture();
-
-  const first = await dispatchTask(f.input);
-  const second = await dispatchTask(f.input);
-
-  assert.equal(first.taskNumber, second.taskNumber);
-  assert.equal(f.writes(), 1);
+test("never creates a task in a public repository without explicit public-code approval", async () => {
+  const args = input();
+  args.studioManifest.allowedPublicCodeRepositories = [];
+  let created = false;
+  args.github.ensureTask = async () => { created = true; throw new Error("must not create a public issue"); };
+  const result = await dispatchTask(args);
+  assert.equal(result.status, "paused");
+  assert.match(result.reason, /public repositories require an explicit/i);
+  assert.equal(created, false);
 });
 
-test("Parent Plus cannot be modified by Studio pilot", async () => {
-  const f = fixture();
+test("private allowlisted repositories do not need the public-code exception", async () => {
+  const args = input();
+  args.github.getRepository = async () => ({ fullName: PARENT_REPO, private: true });
+  args.studioManifest.allowedPublicCodeRepositories = [];
+  const result = await dispatchTask(args);
+  assert.equal(result.status, "submitted");
+});
 
+test("public-code exception fails closed if any data restriction is missing", async () => {
+  const args = input();
+  args.studioManifest.publicCodeDataPolicy.prohibitChildPersonalData = false;
+  const result = await dispatchTask(args);
+  assert.equal(result.status, "paused");
+});
+
+test("fails closed when repository identity or visibility cannot be verified", async () => {
+  const wrongIdentity = input();
+  wrongIdentity.github.getRepository = async () => ({ fullName: "appsworld2027/other", private: false });
+  assert.equal((await dispatchTask(wrongIdentity)).status, "paused");
+
+  const unknownVisibility = input();
+  unknownVisibility.github.getRepository = async () => ({ fullName: PARENT_REPO, private: null });
+  assert.equal((await dispatchTask(unknownVisibility)).status, "paused");
+});
+
+test("product policy inheritance is explicit and never overrides an explicit disabled product policy", async () => {
+  const noInheritance = input();
+  noInheritance.studioManifest.inheritProductExecutionPolicyFor = [];
+  assert.equal((await dispatchTask(noInheritance)).status, "paused");
+
+  const disabledProduct = input();
+  disabledProduct.productManifest.executionPolicy = {
+    enabled: false,
+    allowedEngines: ["free"],
+    allowPaidFallback: false
+  };
+  assert.equal((await dispatchTask(disabledProduct)).status, "paused");
+});
+
+test("creates a task body with idempotency marker and complete free-only data policy", async () => {
+  const args = input();
+  let payload;
+  args.github.ensureTask = async value => {
+    payload = value;
+    return { number: 77, state: "open", url: "https://github.com/appsworld2027/Parent-plus-/issues/77" };
+  };
+  await dispatchTask(args);
+  assert.equal(payload.repository, PARENT_REPO);
+  assert.deepEqual(payload.labels, ["ai:discovery"]);
+  assert.ok(payload.body.startsWith("<!-- studio-request:request_12345678 -->"));
+  assert.match(payload.body, /approved free-only AI Org router/i);
+  assert.match(payload.body, /no paid model, paid API, paid fallback/i);
+  assert.match(payload.body, /public source code and synthetic test data/i);
+  assert.match(payload.body, /child personal data/i);
+  assert.match(payload.body, /Founder intervention is reserved/);
+  assert.doesNotMatch(payload.body, /engine:free/);
+});
+
+test("rejects repositories not explicitly allowlisted", async () => {
   await assert.rejects(
-    dispatchTask({
-      ...f.input,
-      repository: "appsworld2027/Parent-plus-"
-    }),
-    /outside the pilot scope/
-  );
-
-  assert.equal(f.writes(), 0);
-});
-
-test("Invalid input creates no task", async () => {
-  const f = fixture();
-
-  await assert.rejects(
-    dispatchTask({ ...f.input, title: "" }),
-    /Invalid task input/
-  );
-
-  assert.equal(f.writes(), 0);
-});
-
-test("Missing GitHub adapter is rejected", async () => {
-  const f = fixture();
-
-  await assert.rejects(
-    dispatchTask({ ...f.input, github: undefined }),
-    /adapter unavailable/
+    dispatchTask({ ...input(), repository: "appsworld2027/ai-org-studio" }),
+    /not allowlisted/
   );
 });
 
-test("Unconfirmed GitHub task cannot report success", async () => {
-  const f = fixture();
+test("does not dispatch when either Studio or product free-only policy is disabled", async () => {
+  const disabledStudio = input();
+  disabledStudio.studioManifest = {
+    ...disabledStudio.studioManifest,
+    executionPolicy: { ...policy.executionPolicy, enabled: false }
+  };
+  assert.equal((await dispatchTask(disabledStudio)).status, "paused");
 
-  await assert.rejects(
-    dispatchTask({
-      ...f.input,
-      github: { ensureTask: async () => ({}) }
-    }),
-    /did not confirm/
-  );
+  const disabledProduct = input();
+  disabledProduct.productManifest.executionPolicy = {
+    ...policy.executionPolicy,
+    allowPaidFallback: true
+  };
+  assert.equal((await dispatchTask(disabledProduct)).status, "paused");
+});
+
+test("does not dispatch when the free engine is unavailable", async () => {
+  const args = input();
+  args.availableEngines = { free: false };
+  assert.equal((await dispatchTask(args)).status, "paused");
+});
+
+test("requires a GitHub adapter and valid task fields", async () => {
+  const args = input();
+  delete args.github;
+  await assert.rejects(dispatchTask(args), /adapter unavailable/);
+  await assert.rejects(dispatchTask({ ...input(), requestId: "bad" }), /Invalid task input/);
 });

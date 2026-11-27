@@ -18,17 +18,21 @@ const assert = (c, m) => { if (!c) throw new Error(m); };
 const freePort = () => new Promise((ok) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => ok(p)); }); });
 const rawGet = (port, path, cookie) => new Promise((ok) => { const s = net.connect(port, "127.0.0.1", () => s.write(`GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\n${cookie ? `Cookie: studio_key=${cookie}\r\n` : ""}Connection: close\r\n\r\n`)); let d = ""; s.on("data", (x) => (d += x)); s.on("end", () => ok(d.split(" ")[1])); });
 
-// The whole test run lives next to the code, not in the temp folder: Codex's sandbox hides the temp folder from the
-// commands it runs (real products live in ~/studio-products, so real use is unaffected).
+// The whole test run lives next to the code so deterministic stand-in engines can access the temporary fixtures.
+// Real products live in ~/studio-products, so real use is unaffected.
 const tmp = mkdtempSync(join(ROOT, ".e2e-run-"));
 const home = join(tmp, "studio-home"); mkdirSync(home);
 // A real git repo stands in for the product (so prototypes come from git, as in real use).
 const prod = join(tmp, "parent-plus"); mkdirSync(join(prod, "founders/prototypes"), { recursive: true });
 writeFileSync(join(prod, "founders/prototypes/ParentPlus_Coach_Tutor_App.html"), readFileSync(join(ROOT, "e2e/product/founders/prototypes/ParentPlus_Coach_Tutor_App.html")));
 writeFileSync(join(prod, "README.md"), "# Parent Plus\nCoach and parent app.\n");
+mkdirSync(join(prod, ".ai-org"), { recursive: true });
+writeFileSync(join(prod, ".ai-org", "manifest.json"), JSON.stringify({
+  executionPolicy: { enabled: true, allowedEngines: ["free"], allowPaidFallback: false }
+}));
 const git = (...a) => execFileSync("git", ["-C", prod, ...a], { stdio: "ignore" });
 git("init", "-q", "-b", "main"); git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
-writeFileSync(join(home, "team.json"), JSON.stringify({ "parent-plus": { availability: { "claude:opus": false, "claude:sonnet": false, "claude:haiku": false, "codex:default": false, "free:nemotron": true, "free:mistral": true } } }));
+writeFileSync(join(home, "team.json"), JSON.stringify({ "parent-plus": { availability: { "free:gpt-oss-120b": true, "free:qwen-3.8-27b": true } } }));
 writeFileSync(join(home, "products.json"), JSON.stringify({ products: [{ id: "parent-plus", name: "Parent Plus", repo: "appsworld2027/Parent-plus-", dir: prod, productionUrl: "", backlog: "docs/product/BACKLOG.md", prototypes: ["founders/prototypes/ParentPlus_Coach_Tutor_App.html"] }] }));
 
 // Stand-in AI model (OpenAI-compatible): first answers with a file read, then a file write (needs approval), then text.
@@ -59,8 +63,7 @@ const port = await freePort();
 const failFlag = join(tmp, "gh-down");
 const fakeEngine = (name) => `printf '${name} ready (mode=%s, product=%s) model=%s effort=%s\\n' "$STUDIO_MODE" "$STUDIO_PRODUCT" "$STUDIO_MODEL" "$STUDIO_EFFORT"; while IFS= read -r line; do line=$(printf '%s' "$line" | sed -e 's/\\x1b\\[200~/<paste>/g' -e 's/\\x1b\\[201~/<\\/paste>/g'); printf '${name} heard: %s\\n' "$line"; printf '%s\\n' "$line" >> "$STUDIO_HEARD_FILE"; done`;
 const TOKEN = "e2e-test-key-0123456789";
-// Claude Code / Codex for the chat checks: the REAL programs when STUDIO_REAL_CLAUDE / STUDIO_REAL_CODEX point at them
-// (CI installs them), talking to stand-in model servers; otherwise small recorded stand-ins (e2e/fake/claude, codex).
+// CI always uses deterministic CLI stand-ins. A local diagnostic may opt into a real CLI explicitly; no paid model is called here.
 const anthropicPort = await freePort(), openaiPort = await freePort();
 
 const engineHome = join(tmp, "engine-home"); mkdirSync(join(engineHome, ".codex"), { recursive: true });
@@ -78,7 +81,7 @@ execFileSync("git", ["-C", garageDir, "remote", "set-url", "origin", "https://gi
 const fakeModels = startFakeModels({ anthropicPort, openaiPort, projectDir: prod, garageDir: join(garageDir, "parent-plus") });
 // No pre-trust here: the Studio itself must mark the product folder trusted for Claude Code and Codex.
 const realClaude = process.env.STUDIO_REAL_CLAUDE || "", realCodex = process.env.STUDIO_REAL_CODEX || "";
-const env = { ...process.env, PATH: gitShimDir + ":" + process.env.PATH, REAL_GIT: realGit, FAKE_GARAGE_ROOT: garageDir, FAKE_GARAGE_REMOTE: garageRemote, HOME: engineHome, ANTHROPIC_BASE_URL: `http://127.0.0.1:${anthropicPort}`, ANTHROPIC_API_KEY: "sk-ant-test", STUDIO_ALLOW_PAID_APIS: "1" /* stand-in model servers only; the default block is covered in test/billing.test.mjs */, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", FAKE_OPENAI_KEY: "test",
+const env = { ...process.env, PATH: gitShimDir + ":" + process.env.PATH, REAL_GIT: realGit, FAKE_GARAGE_ROOT: garageDir, FAKE_GARAGE_REMOTE: garageRemote, HOME: engineHome, ANTHROPIC_BASE_URL: `http://127.0.0.1:${anthropicPort}`, ANTHROPIC_API_KEY: "sk-ant-test", STUDIO_TEST_MODE: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", FAKE_OPENAI_KEY: "test",
   STUDIO_CLAUDE_BIN: realClaude || join(ROOT, "e2e/fake/claude"), STUDIO_CODEX_BIN: realCodex || join(ROOT, "e2e/fake/codex"),
   STUDIO_CODEX_CONFIG: ['model_provider="fake"', 'model_providers.fake.name="fake"', `model_providers.fake.base_url="http://127.0.0.1:${openaiPort}/v1"`, 'model_providers.fake.env_key="FAKE_OPENAI_KEY"', 'model_providers.fake.wire_api="responses"', 'model_providers.fake.supports_websockets=false', 'model="gpt-fake"'].join("\n"), STUDIO_HOME: home, STUDIO_GARAGE: garageDir, STUDIO_GARAGE_REPO: "appsworld2027/studio-garage", FAKE_GARAGE_DIR: join(garageDir, "parent-plus"), STUDIO_PORT: String(port), STUDIO_HOST: "127.0.0.1", STUDIO_TOKEN: TOKEN, STUDIO_GH: join(ROOT, "e2e/fake/gh"),
   STUDIO_CONFIG: join(tmp, "none.json"), FAKE_GH_FAIL: failFlag, STUDIO_BOARD_TTL_MS: "500", STUDIO_POLL_MS: "1000", STUDIO_WORKSPACE: join(tmp, "ws"),
@@ -361,7 +364,12 @@ try {
     await page.click(".eng[data-eng=other]"); await page.waitForSelector("#chatPane:not([hidden])");
     await page.click("#btnKeys"); await page.selectOption("#kProvider", "custom");
     await page.fill("#kBase", `http://127.0.0.1:${modelPort}/v1`); await page.fill("#kKey", "bad-key"); await page.click("#kSave");
-    await page.waitForFunction(() => /rejected/.test(document.querySelector("#kStatus").textContent), null, { timeout: 8000 });
+    try {
+      await page.waitForFunction(() => /rejected/.test(document.querySelector("#kStatus").textContent), null, { timeout: 8000 });
+    } catch (error) {
+      const status = await page.locator("#kStatus").textContent().catch(() => "<missing>");
+      throw new Error(`custom provider rejection diagnostic: status=${status}; testMode=${env.STUDIO_TEST_MODE}; modelPort=${modelPort}; modelLog=${JSON.stringify(modelLog)}; server=${srvOut.slice(-1600)}; wait=${error.message}`);
+    }
     await page.fill("#kKey", "good-key"); await page.click("#kSave");
     await page.waitForFunction(() => /2 models available/.test(document.querySelector("#kStatus").textContent), null, { timeout: 8000 });
     await page.click("#formKeys button[value=cancel]");
@@ -440,19 +448,25 @@ try {
     await page.click(".eng[data-eng=other]");
   });
   await check("ST-23", "Team table: each AI Org agent gets a model, reviewers differ from the builder, override works", async () => {
-    await page.click("#tab-agents"); await page.waitForSelector("#team select[data-slug=dev-coder]", { timeout: 10000 });
+    await page.click("#tab-agents");
+    await page.waitForFunction(() => ["dev-coder", "rex-reviewer"].every(slug => {
+      const select = document.querySelector(`#team select[data-slug="${slug}"]`);
+      return select && [...select.options].some(option => option.value.startsWith("free:"));
+    }), null, { timeout: 10000 });
     const auto = await page.$$eval("#team select", (s) => Object.fromEntries(s.map((x) => [x.dataset.slug, x.options[0].textContent])));
     assert(auto["dev-coder"] && auto["rex-reviewer"] && auto["dev-coder"] !== auto["rex-reviewer"], `dev vs rex: ${auto["dev-coder"]} / ${auto["rex-reviewer"]}`);
-    await page.selectOption("#team select[data-slug=maya-ai-pm]", "free:mistral");
-    await page.waitForFunction(() => document.querySelector("#team select[data-slug=maya-ai-pm]").value === "free:mistral", null, { timeout: 8000 });
+    const options = await page.$$eval("#team select[data-slug=dev-coder] option", (o) => o.map((x) => x.textContent).join(" "));
+    assert(/Groq free tier/i.test(options) && !/Claude|Codex|NVIDIA/i.test(options), `agent model choices must be Groq free-only: ${options}`);
+    await page.selectOption("#team select[data-slug=maya-ai-pm]", "free:qwen-3.8-27b");
+    await page.waitForFunction(() => document.querySelector("#team select[data-slug=maya-ai-pm]").value === "free:qwen-3.8-27b", null, { timeout: 8000 });
     for (let i = 0; i < 40 && !JSON.parse(readFileSync(join(home, "team.json")))["parent-plus"]?.overrides?.["maya-ai-pm"]; i++) await page.waitForTimeout(150);
-    const saved = JSON.parse(readFileSync(join(home, "team.json"))); assert(saved["parent-plus"].overrides["maya-ai-pm"] === "free:mistral", "override saved");
+    const saved = JSON.parse(readFileSync(join(home, "team.json"))); assert(saved["parent-plus"].overrides["maya-ai-pm"] === "free:qwen-3.8-27b", "override saved");
   });
   await check("ST-10", "Agents tab shows the live board from GitHub", async () => {
     await page.click("#tab-agents");
-    await page.waitForSelector("#tracks .trk:not(.head)", { timeout: 8000 });
+    await page.waitForFunction(() => [...document.querySelectorAll("#tracks .trk:not(.head) .name")].some(node => /overdue fees/i.test(node.innerText) && /Quinn, test author/.test(node.innerText)), null, { timeout: 10000 });
     const rows = await page.$$eval("#tracks .trk:not(.head) .name", (n) => n.map((x) => x.innerText));
-    assert(rows.some((r) => /overdue fees/i.test(r) && /Quinn, tester/.test(r)), `fees row with Quinn: ${rows.join(" | ")}`);
+    assert(rows.some((r) => /overdue fees/i.test(r) && /Quinn, test author/.test(r)), `fees row with Quinn: ${rows.join(" | ")}`);
     assert(rows.some((r) => /shipped/.test(r)), "shipped row");
     assert((await page.$$("#tracks .st.agent")).length >= 1, "animated 'agent working' cell");
     assert((await page.$$("#feed a")).length >= 3, "feed");
@@ -480,6 +494,59 @@ try {
     assert(existsSync(join(tmp, "ws/demo-app/.git")), "repo copied into the Studio workspace");
     await openTerm("claude"); await waitTerm(/CLAUDE ready \(mode=new, product=Demo-App\)/);
     await page.selectOption("#productPick", "parent-plus"); await waitTerm(/CLAUDE heard|CLAUDE ready/);
+  });
+  await check("ST-40", "Founder Inbox dispatches an idempotent free-only task to Parent Plus", async () => {
+    const inbox = page.locator("#founder-inbox-dialog");
+    const privateFixture = JSON.parse(execFileSync(join(ROOT, "e2e/fake/gh"), ["api", "repos/appsworld2027/Parent-plus-"], { encoding: "utf8" }));
+    assert(privateFixture.private === true, "fake GitHub metadata marks the registered Parent Plus fixture private");
+    const gate = await page.evaluate(async () => {
+      const response = await fetch("/api/founder-inbox");
+      return { status: response.status, data: await response.json() };
+    });
+    assert(gate.status === 200 && gate.data.executionEnabled === true,
+      `Founder Inbox gate: HTTP ${gate.status}; reason=${gate.data.executionReason || gate.data.message}; products=${JSON.stringify(gate.data.products)}`);
+    let submittedPayload = null;
+    const captureRequest = request => {
+      if (request.url().endsWith("/api/founder-inbox") && request.method() === "POST") {
+        try { submittedPayload = request.postDataJSON(); } catch {}
+      }
+    };
+    page.on("request", captureRequest);
+    try {
+      await page.getByRole("button", { name: "Founder Inbox" }).click();
+      await page.waitForFunction(() => document.querySelector("#founder-inbox-dialog")?.open, null, { timeout: 3000 });
+      await page.waitForFunction(() => [...document.querySelectorAll("#founder-inbox-product option")].some(option => option.value === "parent-plus"), null, { timeout: 8000 });
+      const parentPlusOptionCount = await inbox.locator('option[value="parent-plus"]').count();
+      const inboxState = await inbox.innerText();
+      assert(parentPlusOptionCount === 1, `only a GitHub-verified private product repository is dispatchable; options=${parentPlusOptionCount}; state=${inboxState}`);
+      await inbox.getByLabel("Product repository").selectOption("parent-plus");
+      await inbox.getByLabel("Task title").fill("E2E founder request");
+      await inbox.getByLabel("Requested outcome").fill("Review the registration journey and report its top three edge cases.");
+      await inbox.getByRole("button", { name: "Send to AI Org" }).click();
+      await page.waitForFunction(() => document.querySelector("#founder-inbox-dialog")?.innerText.includes("Submitted to the canonical AI Org worker"), null, { timeout: 12000 });
+      assert(await inbox.getByText("Open AI Org issue #500").isVisible(), "GitHub issue link displayed");
+      assert(submittedPayload?.requestId, "the browser submitted a stable idempotency key");
+      const firstIssues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
+      assert(firstIssues.length === 1, "one GitHub issue created");
+      assert(firstIssues[0].labels.some(label => label.name === "ai:discovery"), "AI discovery stage label applied");
+      assert(firstIssues[0].body.toLowerCase().includes("approved free-only ai org router") && firstIssues[0].body.toLowerCase().includes("no paid model, paid api, paid fallback"), "free-only execution constraints persisted");
+      const replay = await page.evaluate(async payload => {
+        const response = await fetch("/api/founder-inbox", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        return { status: response.status, data: await response.json() };
+      }, submittedPayload);
+      assert(replay.status >= 200 && replay.status < 300, `same request ID retry accepted: HTTP ${replay.status}`);
+      assert(replay.data.task.githubIssueNumber === 500, "retry resolves to the original GitHub issue");
+      const replayedIssues = JSON.parse(readFileSync(join(home, "fake-dispatched-issues.json"), "utf8"));
+      assert(replayedIssues.length === 1, "retry does not create a duplicate GitHub issue");
+      const inboxText = await inbox.innerText();
+      assert(!inboxText.includes("Run Maya") && !inboxText.includes("NVIDIA model"), "local synthetic pilot is not exposed as production dispatch");
+    } finally {
+      page.off("request", captureRequest);
+      if (await inbox.count() && await inbox.evaluate(el => el.open).catch(() => false)) {
+        await inbox.getByRole("button", { name: "Close" }).click().catch(() => {});
+        await page.waitForFunction(() => !document.querySelector("#founder-inbox-dialog")?.open, null, { timeout: 3000 }).catch(() => {});
+      }
+    }
   });
   await check("ST-14", "keyboard: tabs reachable with arrow keys, visible focus", async () => {
     await page.focus("#tab-garage"); await page.keyboard.press("ArrowRight");

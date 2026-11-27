@@ -22,7 +22,7 @@ test("server default: blocked providers and bypass attempts are refused; launche
   const call = (method, path, body) => fetch(base + path, { method, headers: { Cookie: "studio_key=t", Origin: base, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
   try {
     let cfg; for (let i = 0; i < 100 && !cfg; i++) { try { cfg = await (await call("GET", "/api/config")).json(); } catch { await new Promise((r) => setTimeout(r, 100)); } }
-    assert.deepEqual(cfg.providers.map((p) => p.id).sort(), ["gemini", "groq", "nvidia", "ollama", "openrouter"]);
+    assert.deepEqual(cfg.providers.map((p) => p.id).sort(), ["custom", "gemini", "groq", "nvidia", "ollama", "openrouter", "zai"]);
     for (const id of ["openai", "anthropic", "custom"]) assert.equal((await call("PUT", `/api/providers/${id}`, { key: "k" })).status, 403, id);
     const r = await call("PUT", "/api/apps/probe", { custom: { command: fake, name: "Probe" }, enabled: true }); assert.equal(r.status, 200);
     await call("POST", "/api/apps/probe/check");

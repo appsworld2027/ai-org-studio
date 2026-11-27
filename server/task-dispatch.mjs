@@ -1,80 +1,142 @@
 import { authorizeExecution } from "./execution-policy.mjs";
 
+const validRequestId = (value) =>
+  typeof value === "string" && /^[a-zA-Z0-9_-]{8,100}$/.test(value);
+const validRepository = (value) =>
+  typeof value === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value);
+
+const PUBLIC_CODE_SCOPE = "public-source-code-and-synthetic-test-data-only";
+
+function allowlistedRepository(repositories, repository) {
+  return Array.isArray(repositories) &&
+    repositories.some((item) => typeof item === "string" && item.toLowerCase() === String(repository || "").toLowerCase());
+}
+
+function approvedPublicCodeRepository(studioManifest, repository) {
+  const policy = studioManifest?.publicCodeDataPolicy;
+  return allowlistedRepository(studioManifest?.allowedPublicCodeRepositories, repository) &&
+    policy?.scope === PUBLIC_CODE_SCOPE &&
+    policy.prohibitSecrets === true &&
+    policy.prohibitProductionCredentials === true &&
+    policy.prohibitCustomerPersonalData === true &&
+    policy.prohibitChildPersonalData === true;
+}
+
 export async function dispatchTask({
-  manifest,
+  studioManifest,
+  productManifest,
+  allowedRepositories = studioManifest?.allowedProductRepositories || [],
   repository,
+  productName = "Product",
   title,
   description,
   requestId,
-  availableEngines = {},
+  availableEngines = { free: true },
   github
 } = {}) {
-  const policy = authorizeExecution({
-    manifest,
+  if (!validRepository(repository) || !allowlistedRepository(allowedRepositories, repository)) {
+    throw new Error("Repository is not allowlisted for product dispatch");
+  }
+
+  const studioPolicy = authorizeExecution({
+    manifest: studioManifest,
     requestedEngine: "free",
     availableEngines
   });
+  if (!studioPolicy.allowed) return { status: "paused", reason: studioPolicy.reason };
 
-  if (!policy.allowed) {
-    return {
-      status: "paused",
-      reason: policy.reason
-    };
+  let productPolicy;
+  if (productManifest && typeof productManifest === "object" && productManifest.executionPolicy) {
+    productPolicy = authorizeExecution({
+      manifest: productManifest,
+      requestedEngine: "free",
+      availableEngines
+    });
+  } else if (
+    productManifest && typeof productManifest === "object" &&
+    Array.isArray(studioManifest?.inheritProductExecutionPolicyFor) &&
+    allowlistedRepository(studioManifest.inheritProductExecutionPolicyFor, repository)
+  ) {
+    // Explicitly approved inheritance for products whose manifest predates executionPolicy.
+    productPolicy = studioPolicy;
+  } else {
+    return { status: "paused", reason: "Product execution policy is missing and inheritance is not approved" };
   }
-
-  if (repository !== "appsworld2027/ai-org-studio") {
-    throw new Error("Repository is outside the pilot scope");
-  }
+  if (!productPolicy.allowed) return { status: "paused", reason: productPolicy.reason };
 
   if (
-    typeof title !== "string" ||
-    !title.trim() ||
-    title.length > 200 ||
-    typeof description !== "string" ||
-    !description.trim() ||
-    description.length > 20000 ||
-    typeof requestId !== "string" ||
-    !/^[a-zA-Z0-9_-]{8,100}$/.test(requestId)
+    typeof title !== "string" || !title.trim() || title.length > 200 ||
+    typeof description !== "string" || !description.trim() || description.length > 20000 ||
+    !validRequestId(requestId)
   ) {
     throw new Error("Invalid task input");
   }
 
-  if (typeof github?.ensureTask !== "function") {
+  if (typeof github?.getRepository !== "function" || typeof github?.ensureTask !== "function") {
     throw new Error("GitHub task adapter unavailable");
   }
+
+  const repositoryInfo = await github.getRepository({ repository });
+  if (
+    typeof repositoryInfo?.fullName !== "string" ||
+    repositoryInfo.fullName.toLowerCase() !== repository.toLowerCase() ||
+    typeof repositoryInfo.private !== "boolean"
+  ) {
+    return {
+      status: "paused",
+      reason: "GitHub could not verify the exact product repository identity and visibility."
+    };
+  }
+
+  const publicCodeApproved = repositoryInfo.private === false &&
+    approvedPublicCodeRepository(studioManifest, repository);
+  if (repositoryInfo.private !== true && !publicCodeApproved) {
+    return {
+      status: "paused",
+      reason: "Public repositories require an explicit public-source-code and synthetic-data-only approval."
+    };
+  }
+
+  const body = [
+    `<!-- studio-request:${requestId} -->`,
+    `## Product: ${productName}`,
+    "## Founder instruction",
+    description.trim(),
+    "",
+    "## Execution constraints",
+    "- Approved free-only AI Org router; every model must be on a verified zero-cost allowlist.",
+    "- No paid model, paid API, paid fallback, subscription login or automatic upgrade.",
+    "- Public repository work is limited to public source code and synthetic test data.",
+    "- Never send secrets, production credentials, customer personal data or child personal data to hosted model providers.",
+    "- AI Org owns planning, orchestration, implementation, independent QA and repair.",
+    "- Routine engineering, tests, retries, PR creation and preview deployment proceed autonomously under repository policy.",
+    "- Founder intervention is reserved for strategy changes, material product risk and release to general users.",
+    "- Completion requires test evidence and an independent review; do not claim success from generated code alone."
+  ].join("\n");
 
   const task = await github.ensureTask({
     repository,
     requestId,
     title: title.trim(),
-    body: [
-      `<!-- studio-request:${requestId} -->`,
-      "## Founder instruction",
-      description.trim(),
-      "",
-      "## Execution constraints",
-      "- Free engine only.",
-      "- No paid fallback.",
-      "- No automatic merge or production deployment.",
-      "- Independent QA and evidence required."
-    ].join("\n"),
-    labels: ["ai:discovery", "engine:free"]
+    body,
+    labels: ["ai:discovery"]
   });
 
-  if (
-    !Number.isInteger(task?.number) ||
-    task.number <= 0
-  ) {
-    throw new Error("GitHub did not confirm a task");
+  if (!Number.isInteger(task?.number) || task.number <= 0 || !/^https:\/\/github\.com\//.test(task?.url || "")) {
+    throw new Error("GitHub did not confirm a valid task URL and issue number");
   }
 
   return {
     status: "submitted",
     repository,
+    productName,
     taskNumber: task.number,
+    taskUrl: task.url,
     requestId,
     assignedRole: "maya-ai-pm",
     engine: "free",
+    provider: studioManifest.executionPolicy.provider || "selected by the canonical AI Org router",
+    model: "selected by the canonical AI Org router",
     executionVerified: false
   };
 }

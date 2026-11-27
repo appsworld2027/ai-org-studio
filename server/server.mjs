@@ -6,7 +6,7 @@
 // Right panel: the product's real app (Vercel) or HTML prototype, and live agent status read from GitHub.
 import http from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
-import { execFile, spawn, execFileSync as require_execFileSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve, extname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,8 @@ import { createFounderPilot } from "./founder-pilot.mjs";
 
 import { createFounderInbox } from "./founder-inbox.mjs";
 import { handleFounderInbox } from "./founder-inbox-http.mjs";
+import { createGithubTaskAdapter } from "./github-task-adapter.mjs";
+import { dispatchTask } from "./task-dispatch.mjs";
 
 import { makeConnectors, CATALOG } from "./connectors.mjs";
 import { openApps } from "./mcp-client.mjs";
@@ -39,7 +41,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const store = makeStore();
 let localFounderPilot;
 function founderPilotInstance() {
-  if (process.env.STUDIO_LOCAL_PILOT !== "true") return null;
+  // The legacy synthetic NVIDIA pilot is diagnostic-only. It cannot run while canonical GitHub dispatch is active.
+  if (process.env.STUDIO_LOCAL_PILOT !== "true" || process.env.STUDIO_CANONICAL_DISPATCH !== "false") return null;
 
   return localFounderPilot ||= createFounderPilot({
     dir: join(store.dir, "founder-pilot"),
@@ -238,25 +241,23 @@ async function teamAgents(p) {
 }
 async function teamPlan(p) {
   const saved = store.readJson("team.json", {})[p.id] || {};
-  // Default availability: what this machine can run. Free models need an NVIDIA key in the Studio (or the AI Org's GitHub secret).
-  const has = (bin) => { try { return !!execFileSyncSafe("bash", ["-lc", `command -v ${bin}`]); } catch { return false; } };
-  const nvidia = !!store.keys.get("nvidia")?.key;
-  const available = saved.availability || { "claude:opus": has("claude"), "claude:sonnet": has("claude"), "claude:haiku": has("claude"), "codex:default": has("codex"), "free:nemotron": nvidia, "free:mistral": nvidia };
+  // Local Studio availability is based only on the Groq key saved on this machine.
+  // The GitHub Actions secret is separate and cannot be read from the Studio process.
+  const groq = !!store.keys.get("groq")?.key || !!process.env.GROQ_API_KEY;
+  const available = Object.fromEntries(ENGINE_MODELS.map((m) => [m.id, saved.availability?.[m.id] ?? groq]));
   let agents = [], error = "";
   try { agents = await teamAgents(p); } catch (e) { error = `Could not read the AI Org team: ${e.message}`; }
   const rows = teamPlanFor({ agents, available, overrides: saved.overrides || {} });
   if (agents.length) { try { garage.publishTeam(p, { rows }); } catch (e) { log(`team export: ${e.message}`); } }
   return { models: ENGINE_MODELS.map((m) => ({ id: m.id, name: m.name, cost: m.cost, available: !!available[m.id] })), rows, error,
-    note: `Published to the Garage as ${p.id}/team-models.json for the AI Org's background agents (the AI Org router reads it once the AI Org track adds that). In the Studio chat, pick any model directly.` };
+    note: `Advisory mapping only: the background worker's authoritative engine and builder/reviewer models come from the AI Org governance policy. The Studio cannot read GitHub secret availability or enforce per-agent overrides yet. Local availability reflects the Groq key saved on this machine.` };
 }
-const execFileSyncSafe = (cmd, args) => { try { return require_execFileSync(cmd, args, { encoding: "utf8", timeout: 5000 }).trim(); } catch { return ""; } };
-
 // ---------- "Other models" chat (Studio-drawn) ----------
 const providerConf = (id) => {
-  const def = PROVIDERS[id]; if (!def || !providerAllowed(id)) return null;
+  const def = PROVIDERS[id]; if (!def) return null;
   const saved = store.keys.get(id) || {};
   const base = def.custom ? saved.base : def.base;
-  if (!base) return null;
+  if (!base || !providerAllowed(id, process.env, base)) return null;
   return { id, base, key: saved.key || (def.needsKey ? null : undefined), extraHeaders: id === "openrouter" ? { "HTTP-Referer": "https://github.com/appsworld2027/ai-org-studio", "X-Title": "AI Org Studio" } : {} };
 };
 async function listModels(id) {
@@ -267,7 +268,9 @@ async function listModels(id) {
   const j = await r.json();
   // The Studio's agent needs tool use; drop models that say they cannot do it (OpenRouter publishes this per model).
   const usable = (j.data || j.models || []).filter((m) => !Array.isArray(m.supported_parameters) || m.supported_parameters.includes("tools"));
-  return sortModels(id, usable.map((m) => (m.id || m.name || "").replace(/^models\//, ""))).filter((m) => modelAllowed(id, m));
+  return sortModels(id, usable.map((m) => (m.id || m.name || "").replace(/^models\//, "")), {
+    allowLocalFixture: id === "custom" && providerAllowed(id, process.env, pc.base)
+  }).filter((m) => modelAllowed(id, m, process.env, pc.base));
 }
 function systemPromptFor(p) {
   let rules = ""; try { rules = readFileSync(RULES, "utf8"); } catch { /* none */ }
@@ -279,7 +282,7 @@ const EFFORTS = ["default", "none", "minimal", "low", "medium", "high", "xhigh",
 async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
   const c = store.chats.get(p.id, chatId); if (!c) throw new Error("Chat not found");
   await garage.pull();
-  if (!modelAllowed(c.provider, c.model)) throw new Error(BLOCKED);
+  if (!modelAllowed(c.provider, c.model, process.env, store.keys.get(c.provider)?.base)) throw new Error(BLOCKED);
   const pc = providerConf(c.provider); if (!pc) throw new Error("This chat's provider is not set up. Open Keys.");
   if (PROVIDERS[c.provider].needsKey && !pc.key) throw new Error("Add your key for this provider under Keys.");
   const key = `${p.id}:${chatId}`; if (live.get(key)?.abort) throw new Error("Still working on the last message.");
@@ -428,14 +431,66 @@ if (req.method === "GET") {
     }
 
     if (path === "/api/founder-inbox") {
-      return await handleFounderInbox(req, res, founderInbox);
+      const studioManifest = (() => {
+        try { return JSON.parse(readFileSync(join(ROOT, ".ai-org", "manifest.json"), "utf8")); }
+        catch { return null; }
+      })();
+      const allowedRepositories = studioManifest?.allowedProductRepositories || [];
+      const allowedRepositorySet = new Set(allowedRepositories.filter((value) => typeof value === "string").map((value) => value.toLowerCase()));
+      const allowedProducts = products().filter((p) => allowedRepositorySet.has(String(p.repo || "").toLowerCase()));
+      const github = createGithubTaskAdapter({
+        allowedRepositories,
+        run: async (args) => JSON.parse(await gh(args))
+      });
+      const canDispatch = async () => {
+        const verified = [];
+        let reason = "No allowlisted product repository is registered.";
+        for (const product of allowedProducts) {
+          try {
+            const info = await github.getRepository({ repository: product.repo });
+            if (info.private === true) verified.push({ id: product.id, name: product.name, repo: product.repo });
+            else reason = `${product.name} repository is public. Make it private before sending founder tasks.`;
+          } catch {
+            reason = `Could not verify privacy for ${product.repo}; founder task dispatch is paused.`;
+          }
+        }
+        return { enabled: verified.length > 0, products: verified, reason: verified.length ? "" : reason };
+      };
+      return await handleFounderInbox(req, res, founderInbox, {
+        products: allowedProducts.map((p) => ({ id: p.id, name: p.name, repo: p.repo })),
+        canDispatch,
+        resolveProduct: (id) => {
+          if (id) { const selected = store.products.get(id); return selected && allowedRepositorySet.has(String(selected.repo || "").toLowerCase()) ? selected : null; }
+          const defaultId = process.env.STUDIO_DEFAULT_PRODUCT_ID || settings.defaultProductId;
+          if (defaultId) { const selected = store.products.get(defaultId); return selected && allowedRepositories.includes(selected.repo) ? selected : null; }
+          return allowedProducts.length === 1 ? allowedProducts[0] : null;
+        },
+        dispatch: async ({ task, product }) => {
+          const productManifestPath = join(product.dir, ".ai-org", "manifest.json");
+          let productManifest;
+          try { productManifest = JSON.parse(readFileSync(productManifestPath, "utf8")); }
+          catch { throw new Error(`Product manifest is missing or invalid: ${productManifestPath}`); }
+          return dispatchTask({
+            studioManifest,
+            productManifest,
+            allowedRepositories,
+            repository: product.repo,
+            productName: product.name,
+            title: task.title,
+            description: task.description,
+            requestId: task.requestId,
+            availableEngines: { free: true },
+            github
+          });
+        }
+      });
     }
 
     if (path === "/api/config") return json(res, 200, {
       platform: platform(), workspace: WORKSPACE,
       products: products().map((p) => ({ id: p.id, name: p.name, repo: p.repo, productionUrl: p.productionUrl, prototypes: (p.prototypes || []).map((f) => f.split("/").pop()), ready: existsSync(p.dir) })),
       terminals: Object.entries(TERMINAL).map(([id, e]) => ({ id, name: e.name })),
-      providers: publicProviders(store.keys.all()).filter((x) => providerAllowed(x.id)), boardRefreshMs: Number(process.env.STUDIO_POLL_MS || 30000),
+      providers: publicProviders(store.keys.all()).filter((x) => x.id === "custom" || providerAllowed(x.id, process.env, x.base)), boardRefreshMs: Number(process.env.STUDIO_POLL_MS || 30000),
     });
     if (path === "/api/products" && req.method === "POST") {
       const b = await readBody(req); try { const p = await addProduct(b); return json(res, 200, { ok: true, id: p.id }); } catch (e) { return json(res, 400, { error: e.message }); }
@@ -464,15 +519,30 @@ if (req.method === "GET") {
     // provider keys: write-only from the browser; the key itself never comes back
     if ((m = path.match(/^\/api\/providers\/([a-z]+)$/)) && PROVIDERS[m[1]]) {
       const id = m[1];
-      if (req.method !== "DELETE" && !providerAllowed(id)) return json(res, 403, { error: BLOCKED });
+      if (req.method === "DELETE") { store.keys.set(id, null); return json(res, 200, { ok: true }); }
       if (req.method === "PUT") {
         const b = await readBody(req, 8192);
+        const requestedBase = PROVIDERS[id].custom ? String(b.base || store.keys.get(id)?.base || "").trim() : PROVIDERS[id].base;
         if (PROVIDERS[id].custom && b.base && !/^https?:\/\/\S+$/.test(b.base)) return json(res, 400, { error: "Address must start with http:// or https://" });
-        store.keys.set(id, { key: String(b.key || "").trim() || store.keys.get(id)?.key || "", base: PROVIDERS[id].custom ? String(b.base || "").trim() : undefined });
-        try { const models = await listModels(id); return json(res, 200, { ok: true, models }); } catch (e) { return json(res, 200, { ok: true, models: PROVIDERS[id].models, warning: e.message }); }
+        if (!providerAllowed(id, process.env, requestedBase)) return json(res, 403, { error: BLOCKED + " Custom model servers must use a localhost or private-network endpoint." });
+        const previous = store.keys.get(id) || null;
+        const candidate = { key: String(b.key || "").trim() || previous?.key || "", base: PROVIDERS[id].custom ? requestedBase : undefined };
+        store.keys.set(id, candidate);
+        try {
+          const models = await listModels(id);
+          return json(res, 200, { ok: true, models });
+        } catch (e) {
+          // Do not persist a rejected key or replace a previously working credential.
+          store.keys.set(id, previous);
+          const status = /key was rejected/i.test(String(e.message)) ? 401 : 502;
+          return json(res, status, { error: e.message });
+        }
       }
-      if (req.method === "DELETE") { store.keys.set(id, null); return json(res, 200, { ok: true }); }
-      if (path.endsWith(id) && req.method === "GET") { try { return json(res, 200, { models: await listModels(id) }); } catch (e) { return json(res, 200, { models: PROVIDERS[id].models, warning: e.message }); } }
+      if (path.endsWith(id) && req.method === "GET") {
+        const savedBase = PROVIDERS[id].custom ? store.keys.get(id)?.base : PROVIDERS[id].base;
+        if (!providerAllowed(id, process.env, savedBase)) return json(res, 403, { error: BLOCKED });
+        try { return json(res, 200, { models: await listModels(id) }); } catch (e) { return json(res, 200, { models: PROVIDERS[id].models, warning: e.message }); }
+      }
     }
     if ((m = path.match(/^\/api\/products\/([a-z0-9-]+)\/terminal\/(claude|codex)$/))) {
       const p = store.products.get(m[1]); if (!p) return json(res, 404, { error: "No such product" });
@@ -621,7 +691,7 @@ if (req.method === "GET") {
         const b = await readBody(req);
         if (b.engine === "claude" || b.engine === "codex") return json(res, 200, store.chats.create(p.id, { engine: b.engine, model: /^[A-Za-z0-9._:\/-]{0,80}$/.test(b.model || "") ? b.model || "" : "", effort: EFFORTS.includes(b.effort) ? b.effort : "", mode: MODES.includes(b.mode) ? b.mode : "ask" }));
         if (!validProvider(b.provider) || !validModel(b.model)) return json(res, 400, { error: "Pick a provider and model." });
-        if (!modelAllowed(b.provider, b.model)) return json(res, 403, { error: BLOCKED });
+        if (!modelAllowed(b.provider, b.model, process.env, store.keys.get(b.provider)?.base)) return json(res, 403, { error: BLOCKED });
         return json(res, 200, store.chats.create(p.id, { provider: b.provider, model: b.model }));
       }
     }
@@ -633,7 +703,7 @@ if (req.method === "GET") {
         const b = await readBody(req, 4096), c = store.chats.get(p.id, m[2]); if (!c) return json(res, 404, { error: "Chat not found" });
         if (live.get(`${p.id}:${c.id}`)?.abort) return json(res, 409, { error: "Wait until the current answer finishes." });
         if (!validProvider(b.provider) || !validModel(b.model)) return json(res, 400, { error: "Pick a provider and model." });
-        if (!modelAllowed(b.provider, b.model)) return json(res, 403, { error: BLOCKED });
+        if (!modelAllowed(b.provider, b.model, process.env, store.keys.get(b.provider)?.base)) return json(res, 403, { error: BLOCKED });
         c.provider = b.provider; c.model = b.model; store.chats.save(p.id, c); return json(res, 200, { ok: true });
       }
     }

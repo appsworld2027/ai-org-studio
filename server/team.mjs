@@ -19,15 +19,12 @@ export const ROLE_NEEDS = {
 // Builder → the roles that judge its work (must differ in model).
 export const CHECKS = { "dev-coder": ["quinn-qa", "rex-reviewer"], "tara-database": ["quinn-qa", "rex-reviewer"], "ravi-integration": ["quinn-qa", "rex-reviewer"] };
 
-// Models the AI Org can run its agents on. "engine" = how the AI Org worker runs it; "cost" = 0 free, 1 plan, 2 pay-per-use.
-// Scores 0-3 are our working estimates; the Studio shows them and the user can override any assignment.
+// Background AI Org agents are free-model only. This pool mirrors governance/AUTONOMY_POLICY.json;
+// interactive Claude/Codex sessions are separate founder tools and never appear as agent assignments.
+// Scores 0-3 are working capability estimates, not benchmark claims.
 export const ENGINE_MODELS = [
-  { id: "claude:opus", name: "Claude Opus (your Claude plan)", engine: "claude", cost: 1, s: { reasoning: 3, coding: 3, review: 3, writing: 3, product: 3, toolUse: 3, speed: 1 } },
-  { id: "claude:sonnet", name: "Claude Sonnet (your Claude plan)", engine: "claude", cost: 1, s: { reasoning: 2, coding: 3, review: 2, writing: 2, product: 2, toolUse: 3, speed: 2 } },
-  { id: "claude:haiku", name: "Claude Haiku (your Claude plan)", engine: "claude", cost: 1, s: { reasoning: 1, coding: 2, review: 1, writing: 2, product: 1, toolUse: 2, speed: 3 } },
-  { id: "codex:default", name: "Codex (your ChatGPT plan)", engine: "codex", cost: 1, s: { reasoning: 3, coding: 3, review: 3, writing: 2, product: 2, toolUse: 3, speed: 1 } },
-  { id: "free:nemotron", name: "Nemotron 3 Ultra (free, NVIDIA)", engine: "free", model: "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b", cost: 0, s: { reasoning: 2, coding: 2, review: 1, writing: 2, product: 1, toolUse: 2, speed: 3 } },
-  { id: "free:mistral", name: "Mistral Large 4 (free, NVIDIA)", engine: "free", model: "nvidia_nim/mistralai/mistral-large-4-1t-a52b", cost: 0, s: { reasoning: 2, coding: 2, review: 2, writing: 2, product: 1, toolUse: 2, speed: 2 } },
+  { id: "free:gpt-oss-120b", name: "GPT-OSS 120B (Groq free tier)", engine: "free", model: "openai/gpt-oss-120b", cost: 0, s: { reasoning: 2, coding: 3, review: 1, writing: 2, product: 2, toolUse: 3, speed: 2 } },
+  { id: "free:qwen-3.8-27b", name: "Qwen 3.8 27B (Groq free tier)", engine: "free", model: "qwen/qwen3.8-27b", cost: 0, s: { reasoning: 2, coding: 2, review: 3, writing: 2, product: 2, toolUse: 2, speed: 2 } },
 ];
 
 // Read needs from a job description when the role is not in the table (any product, any custom agent).

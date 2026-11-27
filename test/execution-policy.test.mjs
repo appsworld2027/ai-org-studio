@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { authorizeExecution } from "../server/execution-policy.mjs";
 
 const manifest = {
@@ -86,4 +87,14 @@ test("Additional unauthorized engines are rejected", () => {
     },
     availableEngines
   }).allowed, false);
+});
+
+test("the real Studio manifest enables Groq free-only execution", () => {
+  const actual = JSON.parse(readFileSync(new URL("../.ai-org/manifest.json", import.meta.url), "utf8"));
+  assert.equal(actual.executionPolicy.enabled, true);
+  assert.deepEqual(actual.executionPolicy.allowedEngines, ["free"]);
+  assert.equal(actual.executionPolicy.allowPaidFallback, false);
+  assert.equal(actual.executionPolicy.provider, "groq");
+  assert.equal(actual.executionPolicy.models.builder, "groq/openai/gpt-oss-120b");
+  assert.equal(actual.executionPolicy.models.reviewer, "groq/qwen/qwen3.8-27b");
 });
