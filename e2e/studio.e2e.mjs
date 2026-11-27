@@ -494,6 +494,12 @@ try {
     const inbox = page.locator("#founder-inbox-dialog");
     const privateFixture = JSON.parse(execFileSync(join(ROOT, "e2e/fake/gh"), ["api", "repos/appsworld2027/Parent-plus-"], { encoding: "utf8" }));
     assert(privateFixture.private === true, "fake GitHub metadata marks the registered Parent Plus fixture private");
+    const gate = await page.evaluate(async () => {
+      const response = await fetch("/api/founder-inbox");
+      return { status: response.status, data: await response.json() };
+    });
+    assert(gate.status === 200 && gate.data.executionEnabled === true,
+      `Founder Inbox gate: HTTP ${gate.status}; reason=${gate.data.executionReason || gate.data.message}; products=${JSON.stringify(gate.data.products)}`);
     let submittedPayload = null;
     const captureRequest = request => {
       if (request.url().endsWith("/api/founder-inbox") && request.method() === "POST") {
