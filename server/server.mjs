@@ -41,7 +41,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const store = makeStore();
 let localFounderPilot;
 function founderPilotInstance() {
-  if (process.env.STUDIO_LOCAL_PILOT !== "true") return null;
+  // The legacy synthetic NVIDIA pilot is diagnostic-only. It cannot run while canonical GitHub dispatch is active.
+  if (process.env.STUDIO_LOCAL_PILOT !== "true" || process.env.STUDIO_CANONICAL_DISPATCH !== "false") return null;
 
   return localFounderPilot ||= createFounderPilot({
     dir: join(store.dir, "founder-pilot"),
