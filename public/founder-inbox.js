@@ -103,7 +103,7 @@
     renderProducts(data.products, data.executionEnabled);
     notice.textContent = data.executionEnabled
       ? "Studio is connected to the canonical AI Org dispatcher. Requests go to the selected product repository; Groq free-tier execution only, with no paid fallback."
-      : "Founder Inbox is currently local-only. AI Org dispatch is not connected; no agent will run.";
+      : (data.executionReason || "Founder Inbox is currently local-only. AI Org dispatch is not connected; no agent will run.");
     tasks.replaceChildren();
 
     for (const task of data.tasks || []) {
