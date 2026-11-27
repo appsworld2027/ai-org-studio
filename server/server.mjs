@@ -441,7 +441,7 @@ if (req.method === "GET") {
         resolveProduct: (id) => {
           if (id) { const selected = store.products.get(id); return selected && allowedRepositories.includes(selected.repo) ? selected : null; }
           const defaultId = process.env.STUDIO_DEFAULT_PRODUCT_ID || settings.defaultProductId;
-          if (defaultId) return store.products.get(defaultId);
+          if (defaultId) { const selected = store.products.get(defaultId); return selected && allowedRepositories.includes(selected.repo) ? selected : null; }
           const all = products();
           const allowed = all.filter((p) => allowedRepositories.includes(p.repo));
           return allowed.length === 1 ? allowed[0] : null;
