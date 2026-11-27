@@ -59,3 +59,19 @@ test("local Garage metadata survives restart, avoids regression and excludes arb
   await makeRuntimeCheckpointStore(dir)(task,projectRuntimeStatus(issue,[receipt(1,"started")],repo,null));
   assert.equal(await readFile(file,"utf8"),original);
 });
+
+test("restarted observer shows historical local evidence during GitHub outage without marking current execution verified", async t => {
+  const dir=await mkdtemp(join(tmpdir(),"runtime-outage-"));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const checkpoint=makeRuntimeCheckpointStore(dir);
+  await checkpoint(task,projectRuntimeStatus(issue,[receipt(2,"completed")],repo,run));
+  // A later unavailable run lookup must not erase the exact historical success.
+  await checkpoint(task,projectRuntimeStatus(issue,[receipt(2,"completed")],repo,null));
+  const restarted=makeRuntimeObserver({checkpoint:makeRuntimeCheckpointStore(dir),gh:async()=>{throw Error("offline")}});
+  const [view]=await restarted([{...task,executionVerified:false}]);
+  assert.equal(view.runtime.state,"unavailable");
+  assert.equal(view.runtime.attemptVerified,undefined);
+  assert.equal(view.runtime.lastKnown.attemptVerified,true);
+  assert.equal(view.runtime.lastKnown.receiptId,2);
+  assert.equal(view.executionVerified,false);
+});
