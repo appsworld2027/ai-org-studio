@@ -395,7 +395,7 @@
       }));
       t.replaceChildren(el("div", { class: "trk head", role: "row" }, el("div", { role: "columnheader", text: "Agent" }), el("div", { role: "columnheader", text: "Uses" }), el("div", { role: "columnheader", text: "Why" })));
       for (const r of d.rows) {
-        const sel = el("select", { "data-slug": r.slug, "aria-label": `Model for ${r.name}` }, el("option", { value: "", text: r.pick ? `Auto: ${r.pick.name}` : "Auto (no AI available)" }), ...d.models.filter((m) => m.available).map((m) => el("option", { value: m.id, text: m.name })));
+        const sel = el("select", { "data-slug": r.slug, "aria-label": `Model for ${r.name}` }, el("option", { value: "", text: r.pick ? `Auto: ${r.pick.name}` : "Auto (no AI available)" }), ...d.models.filter((m) => m.available && (!r.allowedModelIds || r.allowedModelIds.includes(m.id))).map((m) => el("option", { value: m.id, text: m.name })));
         sel.value = r.overridden ? r.pick?.id || "" : "";
         sel.onchange = () => loadTeam({ overrides: currentOverrides() });
         t.append(el("div", { class: "trk", role: "row" }, el("div", { role: "rowheader" }, el("b", { text: r.name }), el("br"), el("small", { text: r.role })), el("div", { role: "cell" }, sel),
