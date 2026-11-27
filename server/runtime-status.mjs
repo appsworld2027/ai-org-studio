@@ -51,7 +51,10 @@ export function makeRuntimeObserver({ gh, checkpoint = async () => {}, clock = D
           catch { status.checkpointUnavailable = true; }
         }
         return status;
-      } catch { return { state: "unavailable" }; }
+      } catch {
+        const lastKnown = await checkpoint.read?.(task).catch(() => null);
+        return lastKnown ? { state: "unavailable", lastKnown } : { state: "unavailable" };
+      }
     })();
     cache.set(key, { at: clock(), promise });
     if (cache.size > 200) cache.delete(cache.keys().next().value);
@@ -72,9 +75,10 @@ export function makeRuntimeObserver({ gh, checkpoint = async () => {}, clock = D
 // Contains only canonical receipt metadata; never task descriptions, code, logs, or credentials.
 export function makeRuntimeCheckpointStore(dir) {
   const pending = new Map();
-  return (task, status) => {
+  const keyFor = task => task.repository.toLowerCase().replace("/", "__") + "-" + task.githubIssueNumber;
+  const save = (task, status) => {
     if (!validRepo(task.repository) || !positive(task.githubIssueNumber) || !positive(status.receiptId)) return Promise.resolve();
-    const key = task.repository.toLowerCase().replace("/", "__") + "-" + task.githubIssueNumber;
+    const key = keyFor(task);
     const previous = pending.get(key) || Promise.resolve();
     const operation = previous.catch(() => {}).then(async () => {
       await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -82,7 +86,10 @@ export function makeRuntimeCheckpointStore(dir) {
       let old;
       try { old = JSON.parse(await readFile(path, "utf8")); }
       catch (e) { if (e.code !== "ENOENT") throw e; }
+      if (old && (String(old.repository).toLowerCase() !== task.repository.toLowerCase() || old.issue !== task.githubIssueNumber)) throw new Error("Checkpoint identity mismatch");
       if (old && old.receiptId > status.receiptId) return;
+      // A temporary run lookup outage cannot erase an earlier exact verified attempt.
+      if (old?.receiptId === status.receiptId && old.attemptVerified && status.runStatus === "unavailable") return;
       if (old && old.receiptId === status.receiptId && old.runStatus === status.runStatus && old.runConclusion === status.runConclusion) return;
       const { state, stage, runId, attempt, mode, receiptId, at, runUrl, runStatus, runConclusion, attemptVerified } = status;
       const data = { version: 1, repository: task.repository, issue: task.githubIssueNumber, state, stage, runId, attempt, mode, receiptId, at, runUrl, runStatus, runConclusion, attemptVerified };
@@ -93,4 +100,19 @@ export function makeRuntimeCheckpointStore(dir) {
     pending.set(key, operation);
     return operation.finally(() => { if (pending.get(key) === operation) pending.delete(key); });
   };
+  save.read = async task => {
+    if (!validRepo(task.repository) || !positive(task.githubIssueNumber)) return null;
+    try {
+      const data = JSON.parse(await readFile(join(dir, keyFor(task) + ".json"), "utf8"));
+      if (data.version !== 1 || String(data.repository).toLowerCase() !== task.repository.toLowerCase() ||
+          data.issue !== task.githubIssueNumber || !positive(data.receiptId) || !positive(data.runId) ||
+          !positive(data.attempt) || !Number.isFinite(Date.parse(data.at))) return null;
+      if (!MARKER.test("<!-- ai-org:runtime:v1 state=" + data.state + " stage=" + data.stage + " run=" + data.runId + " attempt=" + data.attempt + " mode=" + data.mode + " -->")) return null;
+      const { state, stage, runId, attempt, mode, receiptId, at, runStatus, runConclusion } = data;
+      return { state, stage, runId, attempt, mode, receiptId, at,
+        runUrl: "https://github.com/" + task.repository + "/actions/runs/" + runId,
+        attemptVerified: data.attemptVerified === true && state === "completed" && runStatus === "completed" && runConclusion === "success" };
+    } catch { return null; }
+  };
+  return save;
 }

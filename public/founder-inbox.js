@@ -129,6 +129,13 @@
         runtime.textContent = "Worker: " + task.runtime.state.replaceAll("-", " ") + (task.runtime.stage ? " · " + task.runtime.stage : "") + (task.runtime.attemptVerified ? " · attempt verified (not product acceptance)" : "") + (task.runtime.checkpointUnavailable ? " · local checkpoint unavailable" : "");
         if (task.runtime.runUrl) runtime.append(" · ", link(task.runtime.runUrl, "Run evidence"));
         item.append(runtime);
+        if (task.runtime.lastKnown) {
+          const previous = task.runtime.lastKnown;
+          const historical = document.createElement("p");
+          historical.textContent = "Last known worker: " + previous.state + " · " + previous.stage + " · " + previous.at + " (historical; current status unavailable)";
+          historical.append(" · ", link(previous.runUrl, "Last known run evidence"));
+          item.append(historical);
+        }
       }
       if (task.dispatchError) {
         const error = document.createElement("p");
