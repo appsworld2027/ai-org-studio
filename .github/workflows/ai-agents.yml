@@ -85,12 +85,11 @@ jobs:
       contents: read
       issues: write
 
-    uses: appsworld2027/parent-plus-ai-org/.github/workflows/agent-worker.yml@2a68daf8da47d0dcc1e393ce6f3dac498b22574e
+    uses: appsworld2027/parent-plus-ai-org/.github/workflows/agent-worker.yml@139db9390b3c4188708090f44cdf62dda7a86698
 
     with:
       number: ${{ inputs.number }}
-      handbook_ref: 2a68daf8da47d0dcc1e393ce6f3dac498b22574e
+      handbook_ref: 139db9390b3c4188708090f44cdf62dda7a86698
 
     secrets:
-      AI_ORG_HANDBOOK_SSH_KEY: ${{ secrets.AI_ORG_HANDBOOK_SSH_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
