@@ -67,6 +67,36 @@ test("GET keeps public product visible but disables confidential dispatch", asyn
   assert.match(res.body.executionReason, /repository is public/i);
 });
 
+test("GET fails closed when GitHub repository privacy cannot be verified", async (t) => {
+  const store = inbox(t);
+  const res = response();
+  await handleFounderInbox(request("GET"), res, store, {
+    products: [product],
+    dispatch: async () => ({ status: "submitted" }),
+    canDispatch: async () => { throw new Error("GitHub API unavailable"); }
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.executionEnabled, false);
+  assert.deepEqual(res.body.products, [product]);
+  assert.match(res.body.executionReason, /could not verify repository privacy/i);
+});
+
+test("POST blocks dispatch when GitHub repository privacy lookup fails", async (t) => {
+  const store = inbox(t);
+  const res = response();
+  let dispatched = false;
+  await handleFounderInbox(request("POST", input), res, store, {
+    resolveProduct: () => product,
+    dispatch: async () => { dispatched = true; throw new Error("must not run"); },
+    canDispatch: async () => { throw new Error("GitHub API unavailable"); }
+  });
+  assert.equal(res.statusCode, 423);
+  assert.equal(res.body.executionEnabled, false);
+  assert.match(res.body.message, /could not verify repository privacy/i);
+  assert.equal(dispatched, false);
+  assert.equal(store.list().length, 0);
+});
+
 test("POST creates one product-scoped GitHub task and persists the issue evidence", async (t) => {
   const store = inbox(t);
   let dispatched;
