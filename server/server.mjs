@@ -444,6 +444,7 @@ if (req.method === "GET") {
       const allowedProducts = products().filter((p) => allowedRepositorySet.has(String(p.repo || "").toLowerCase()));
       const github = createGithubTaskAdapter({
         allowedRepositories,
+        claimDir: join(store.dir, "dispatch-claims"),
         run: async (args) => JSON.parse(await gh(args))
       });
       const canDispatch = async () => {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, unlinkSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { makeGarage } from "../server/garage.mjs";
@@ -31,7 +31,13 @@ async function fixture(work) {
     git("-C", dir, "push", "-q", "origin", "HEAD");
     git("-C", dir, "remote", "set-url", "origin", fakeUrl);
     mkdirSync(shim);
-    writeFileSync(gh, '#!/bin/sh\n[ "$4" = repos/example/studio-private-fixture ] || exit 1\nprintf "private\\n"\n', { mode: 0o755 });
+    writeFileSync(gh, `#!/bin/sh
+case "$4" in
+  repos/example/studio-private-fixture) printf '%s\\n' '{"full_name":"example/studio-private-fixture","visibility":"private"}' ;;
+  repos/example/studio-private-fixture/actions/workflows?per_page=100) printf '%s\\n' '{"total_count":0,"workflows":[]}' ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 });
     // Only the exact fixture transport is mapped to a local bare repo. No external access.
     writeFileSync(join(shim, "git"), `#!/bin/sh
 if [ "$1" = "-C" ] && [ "$2" = "${dir}" ] && { [ "$3" = "push" ] || [ "$3" = "pull" ]; }; then
@@ -42,7 +48,7 @@ fi
 exec "${gitBin}" "$@"
 `, { mode: 0o755 });
     process.env.PATH = shim + ":" + previous;
-    await work({ base, remote, dir, p, garage, note, offline });
+    await work({ base, remote, dir, p, garage, note, offline, gh, fakeUrl });
   } finally {
     process.env.PATH = previous;
     rmSync(base, { recursive: true, force: true });
@@ -84,5 +90,81 @@ test("Garage rejects conflicting concurrent memory instead of automatically disc
     assert.equal(git("-C", dir, "status", "--porcelain"), "", "unfinished rebases must be aborted");
     assert.match(readFileSync(note, "utf8"), /Different local founder decision/);
     assert.match(git("--git-dir", remote, "show", "main:synthetic/MEMORY.md"), /Remote founder decision/);
+  });
+});
+
+test("Garage refuses a different private push repository even if it is private", async () => {
+  await fixture(async ({ remote, dir, p, garage, note }) => {
+    const original = git("--git-dir", remote, "rev-parse", "main");
+    git("-C", dir, "remote", "set-url", "--push", "origin", "https://github.com/example/different-private.git");
+    writeFileSync(note, "# Fictional checkpoint\nKeep this private\n");
+    const result = await garage.save(p, "must not push");
+    assert.equal(result.pushed, false);
+    assert.match(result.reason, /exact configured private/);
+    assert.equal((await garage.pull()).ok, false);
+    assert.equal(git("--git-dir", remote, "rev-parse", "main"), original);
+    assert.match(readFileSync(note, "utf8"), /Keep this private/);
+  });
+});
+
+test("Garage verifies canonical GitHub identity as well as visibility", async () => {
+  await fixture(async ({ remote, p, garage, note, gh }) => {
+    const original = git("--git-dir", remote, "rev-parse", "main");
+    writeFileSync(gh, '#!/bin/sh\nprintf \'%s\\n\' \'{"full_name":"example/other","visibility":"private"}\'\n', {mode:0o755});
+    writeFileSync(note, "# Fictional checkpoint\nDo not publish\n");
+    assert.equal((await garage.save(p, "blocked")).pushed, false);
+    assert.equal(git("--git-dir", remote, "rev-parse", "main"), original);
+  });
+});
+
+test("Garage never reads or indexes a symlink and blocks a symlink-bearing checkpoint", async () => {
+  await fixture(async ({ base, remote, dir, p, garage }) => {
+    const original = git("--git-dir", remote, "rev-parse", "main");
+    const outside = join(base, "outside.txt");
+    writeFileSync(outside, "FICTIONAL-OUTSIDE-ISOLATION-SENTINEL\n");
+    symlinkSync(outside, join(dir, p.id, "notes", "linked.txt"));
+    assert.throws(() => garage.readFile(p, "notes/linked.txt"), /symbolic links/);
+    assert.throws(() => garage.ensureProduct({...p, id:"../escape"}), /Invalid Garage product ID/);
+    assert.equal(garage.files(p).some(x => x.path === "notes/linked.txt"), false);
+    garage.rebuildIndex(p);
+    assert.doesNotMatch(readFileSync(join(dir,p.id,"INDEX.md"),"utf8"), /FICTIONAL-OUTSIDE-ISOLATION-SENTINEL/);
+    const result = await garage.save(p, "blocked symbolic link");
+    assert.equal(result.pushed, false);
+    assert.match(result.reason, /symbolic links|regular files/);
+    assert.equal(git("--git-dir", remote, "rev-parse", "main"), original);
+  });
+});
+
+test("Garage redacts fictional key markers in unusual filenames before commit or index", async () => {
+  await fixture(async ({ remote, dir, p, garage }) => {
+    const marker = "sk-" + "a".repeat(35);
+    writeFileSync(join(dir,p.id,"notes","résumé with space.txt"), "# " + marker + "\n");
+    const result = await garage.save(p, "redacted fictional marker");
+    assert.equal(result.pushed,true);
+    assert.ok(result.redacted>=1);
+    const saved = git("--git-dir",remote,"show","main:synthetic/notes/résumé with space.txt");
+    const index = git("--git-dir",remote,"show","main:synthetic/INDEX.md");
+    assert.doesNotMatch(saved,new RegExp(marker));
+    assert.doesNotMatch(index,new RegExp(marker));
+    assert.match(saved,/REDACTED/);
+  });
+});
+
+test("Garage blocks an active downstream mirror without verification but permits exact private reads", async () => {
+  await fixture(async ({ remote, p, garage, note, gh }) => {
+    const original = git("--git-dir", remote, "rev-parse", "main");
+    writeFileSync(gh, `#!/bin/sh
+case "$4" in
+  repos/example/studio-private-fixture) printf '%s\\n' '{"full_name":"example/studio-private-fixture","visibility":"private"}' ;;
+  repos/example/studio-private-fixture/actions/workflows?per_page=100) printf '%s\\n' '{"total_count":1,"workflows":[{"name":"GitLab Mirror","path":".github/workflows/mirror.yml","state":"active"}]}' ;;
+  *) exit 1 ;;
+esac
+`, {mode:0o755});
+    assert.equal((await garage.pull()).ok,true);
+    writeFileSync(note,"# Mirror must be verified\nFictional data remains local\n");
+    const result=await garage.save(p,"blocked external mirror");
+    assert.equal(result.pushed,false);
+    assert.match(result.reason,/unverified active mirror/);
+    assert.equal(git("--git-dir",remote,"rev-parse","main"),original);
   });
 });

@@ -129,9 +129,18 @@ test("Garage verifies the actual push destination and blocks public or unverifia
   const gh = join(dir, "fake-gh");
   const p = { id: "fictional", name: "Fictional", repo: "example/fictional", dir };
   const garage = makeGarage({ dir, repo: "example/private", gh });
-  for (const reply of ["echo public", "exit 1"]) {
+  writeFileSync(gh, `#!/bin/sh
+touch "${dir}/checked"
+exit 1
+`);
+  chmodSync(gh, 0o700);
+  const wrongTarget = await garage.save(p, "Fictional decision");
+  assert.equal(wrongTarget.pushed, false);
+  assert.equal(existsSync(join(dir, "checked")), false, "wrong repository blocked before any metadata request");
+  execFileSync("git", ["-C", dir, "remote", "set-url", "--push", "origin", "https://github.com/example/private.git"]);
+  for (const reply of ["echo '" + JSON.stringify({full_name:"example/private",visibility:"public"}) + "'", "exit 1"]) {
     writeFileSync(gh, `#!/bin/sh
-[ "$4" = repos/example/public ] || exit 2
+[ "$4" = repos/example/private ] || exit 2
 touch "${dir}/checked"
 ${reply}
 `);
