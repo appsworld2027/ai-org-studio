@@ -6,6 +6,8 @@ export const STAGES = [
   { id: "idea", name: "Idea" },
   { id: "contract", name: "Contract" },
   { id: "approve", name: "Your OK" },
+  { id: "plan", name: "Plan" },
+  { id: "design", name: "Design" },
   { id: "tests", name: "Tests" },
   { id: "build", name: "Build" },
   { id: "qa", name: "QA + review" },
@@ -17,25 +19,39 @@ export const STAGES = [
 const LABEL_STAGE = {
   "ai:discovery": ["contract", "Maya, product manager", "agent"],
   "ai:founder-decision": ["approve", "You", "founder"],
-  "ai:tests": ["tests", "Quinn, tester", "agent"],
+  "ai:plan": ["plan", "Arjun, AI CPTO", "agent"],
+  "ai:lane-a": ["plan", "Kiran, project manager A", "agent"],
+  "ai:lane-b": ["plan", "Leela, project manager B", "agent"],
+  "ai:design": ["design", "Iris, product designer", "agent"],
+  "ai:tests": ["tests", "Quinn, test author", "agent"],
+  "ai:tests-review": ["tests", "Quinn, test challenger", "agent"],
+  "ai:tests-signoff": ["tests", "Arjun, test sign-off", "agent"],
   "ai:contract": ["build", "Loop controller", "loop"],
   "ai:build": ["build", "Dev, builder", "agent"],
+  "ai:database": ["build", "Tara, database specialist", "agent"],
+  "ai:integration": ["build", "Ravi, integration specialist", "agent"],
   "ai:fix": ["qa", "Dev, builder (fixing)", "agent"],
   "ai:qa": ["qa", "Quinn, tester", "agent"],
   "ai:review": ["qa", "Rex, reviewer", "agent"],
   "ai:delivery": ["demo", "Loop controller", "loop"],
+  "ai:release-ops": ["demo", "Sam, release operations", "agent"],
   "ai:release": ["demo", "Sam, release checks", "loop"],
   "ai:founder-test": ["demo", "You", "founder"],
   "ai:blocked": [null, "Needs a decision", "blocked"],
 };
-// When several labels are present, the later stage wins; blocked always wins.
-const ORDER = ["ai:discovery", "ai:founder-decision", "ai:tests", "ai:contract", "ai:build", "ai:fix", "ai:qa", "ai:review", "ai:delivery", "ai:release", "ai:founder-test", "ai:blocked"];
+// When several labels are present, the later lifecycle stage wins; blocked always wins.
+const ORDER = ["ai:discovery", "ai:founder-decision", "ai:plan", "ai:lane-a", "ai:lane-b", "ai:design",
+  "ai:tests", "ai:tests-review", "ai:tests-signoff", "ai:contract", "ai:build", "ai:database",
+  "ai:integration", "ai:fix", "ai:qa", "ai:review", "ai:delivery", "ai:release-ops", "ai:release",
+  "ai:founder-test", "ai:blocked"];
 
 // Which AI engine ran (or is running) an agents-workflow job, read from its step names. Never guessed: no match means "Unknown".
 export function toolFromSteps(steps = []) {
   const s = steps.find((x) => /^Run agent with/i.test(x.name || "") && x.conclusion !== "skipped" && x.status !== "pending");
   if (!s) return "Unknown";
-  if (/free engine/i.test(s.name)) return "Free engine (NVIDIA NIM)";
+  if (/groq/i.test(s.name)) return "Free engine (Groq)";
+  if (/nvidia nim/i.test(s.name)) return "Free engine (NVIDIA NIM)";
+  if (/free engine/i.test(s.name)) return "Free engine (provider unknown)";
   if (/codex/i.test(s.name)) return "Codex";
   if (/claude code/i.test(s.name)) return "Claude Code (GitHub Actions)";
   return "Unknown";
