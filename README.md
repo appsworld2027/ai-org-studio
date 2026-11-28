@@ -20,7 +20,7 @@ A chat-first product studio for founders and AI PMs. You describe what you want;
 
   It runs on your own Claude / ChatGPT plan (personal use; see `docs/COMPLIANCE.md`). Engineers can still open "Terminal view".
 - **Pick the brain.** Choose model and thinking level under the text box (Other models), or above the Claude Code / Codex screen. Decisions come as clickable cards with one Recommended option.
-- **Team.** Agents → Team shows which AI each AI Org agent uses and why (matched to its job; reviewers never use the builder's model when another is available). Override any row.
+- **Team.** Agents → Team shows local model recommendations and advisory availability. The GitHub Actions workers follow the authoritative AI Org autonomy policy, not Studio overrides. Local selections do not change a worker's assigned model, provider credentials or qualification status.
 
 It runs on your own free cloud machine, and only you can open it: the link carries a private key, and the machine's own sign-in protects it too.
 
