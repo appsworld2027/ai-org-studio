@@ -176,11 +176,11 @@ export function makeGarage({ dir, repo = "", gh = "gh", log = () => {}, now = ()
     if (!rel || rel.includes("..") || !abs.startsWith(d + "/")) throw new Error("bad path");
     return readFileSync(abs);
   }
-  // The agent→model plan from the Studio's Team table, published for the AI Org router to read (no shared files edited).
+  // The agent→model plan from the Studio's Team table, exported as advisory memory only (no shared files edited).
   function publishTeam(p, plan) {
     if (!ready()) return; ensureProduct(p);
     const rows = (plan.rows || []).map((r) => ({ agent: r.slug, name: r.name, model: r.pick?.id || null, backup: r.fallback?.id || null, why: r.why }));
-    const f = join(productDir(p.id), "team-models.json"), body = JSON.stringify({ product: p.id, updated: now().toISOString().slice(0, 10), note: "Written by AI Org Studio (Team table). The AI Org router may read this to pick each agent's model.", agents: rows }, null, 2) + "\n";
+    const f = join(productDir(p.id), "team-models.json"), body = JSON.stringify({ product: p.id, updated: now().toISOString().slice(0, 10), note: "Advisory AI Org Studio Team table only. Not an authoritative background-worker policy.", agents: rows }, null, 2) + "\n";
     let old = ""; try { old = readFileSync(f, "utf8"); } catch { /* new */ }
     if (old.replace(/"updated": "[^"]+"/, "") !== body.replace(/"updated": "[^"]+"/, "")) writeFileSync(f, body);
   }
