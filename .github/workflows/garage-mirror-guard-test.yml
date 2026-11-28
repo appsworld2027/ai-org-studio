@@ -1,0 +1,21 @@
+name: Synthetic Garage mirror guard
+on:
+  pull_request:
+    paths:
+      - 'ops/garage-mirror/**'
+      - '.github/workflows/garage-mirror-guard-test.yml'
+permissions:
+  contents: read
+jobs:
+  guard-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Synthetic boundary checks; no credentials or mirror writes
+        working-directory: ops/garage-mirror
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest -v test_guard.py

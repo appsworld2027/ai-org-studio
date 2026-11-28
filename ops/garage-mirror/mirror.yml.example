@@ -1,0 +1,30 @@
+# PROPOSAL ONLY. Move guard.py to .github/scripts and replace mirror.yml only
+# after independent review of the source-ref and membership policy.
+name: Guarded Garage GitLab mirror
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gitlab-mirror
+  cancel-in-progress: false
+jobs:
+  mirror:
+    if: github.repository == 'appsworld2027/studio-garage' && github.ref == 'refs/heads/main' && github.event.repository.private == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact private mirror and synchronize reviewed main only
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: python3 .github/scripts/garage-mirror-guard.py
