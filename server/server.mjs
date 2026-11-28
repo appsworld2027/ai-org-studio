@@ -38,6 +38,7 @@ import { startCodex } from "./engines/codex.mjs";
 import { UPLOAD_DIR, UPLOAD_MAX, safeUploadName, readRaw, ensureIgnored, pruneUploads } from "./uploads.mjs";
 import { publicUrl, platform } from "./platform.mjs";
 import { ENGINE_MODELS, plan as teamPlanFor, parseAgent } from "./team.mjs";
+import { readWorkerPolicy, workerPolicyNote } from "./worker-policy.mjs";
 
 scrubPaidEnv();
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -252,10 +253,11 @@ async function teamPlan(p) {
   const available = Object.fromEntries(ENGINE_MODELS.map((m) => [m.id, saved.availability?.[m.id] ?? groq]));
   let agents = [], error = "";
   try { agents = await teamAgents(p); } catch (e) { error = `Could not read the AI Org team: ${e.message}`; }
+  const workerPolicy = await readWorkerPolicy({ ghJson, readManifest: () => readFileSync(join(p.dir, ".ai-org/manifest.json"), "utf8") });
   const rows = teamPlanFor({ agents, available, overrides: saved.overrides || {} });
   if (agents.length) { try { garage.publishTeam(p, { rows }); } catch (e) { log(`team export: ${e.message}`); } }
-  return { models: ENGINE_MODELS.map((m) => ({ id: m.id, name: m.name, cost: m.cost, available: !!available[m.id] })), rows, error,
-    note: `Advisory mapping only: the background worker's authoritative engine and builder/reviewer models come from the AI Org governance policy. The Studio cannot read GitHub secret availability or enforce per-agent overrides yet. Local availability reflects the Groq key saved on this machine.` };
+  return { models: ENGINE_MODELS.map((m) => ({ id: m.id, name: m.name, cost: m.cost, available: !!available[m.id] })), rows, error, workerPolicy,
+    note: workerPolicyNote(workerPolicy) + " " + `Advisory mapping only: the background worker's authoritative engine and builder/reviewer models come from the AI Org governance policy. The Studio cannot read GitHub secret availability or enforce per-agent overrides yet. Local availability reflects the Groq key saved on this machine.` };
 }
 // ---------- "Other models" chat (Studio-drawn) ----------
 const providerConf = (id) => {
