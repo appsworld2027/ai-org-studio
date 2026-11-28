@@ -377,6 +377,7 @@ async function authorTests(){
   }
   const suiteIssues=validateLockedSuite(code);
   if(suiteIssues.length)throw Error("Locked suite fixture mismatch: "+suiteIssues.join(", "));
+  for(const id of ["AC-01","AC-02","AC-03","AC-04"]) if(!code.includes(id)) throw Error("Missing acceptance criterion "+id+"; suite remains unlocked");
   writeFileSync(join(candidate,TEST),code,{mode:0o600,flag:"wx"});
   // Qualify on the unchanged candidate before publishing a lock receipt.
   // A broken fixture leaves an unlocked draft and evidence, not a locked invalid suite.
@@ -653,8 +654,6 @@ try {
   const tests=await authorTests();
   const locked=pathHash(TEST);
   if (!locked) throw Error("Quinn did not write executable tests");
-  const testSource=readFileSync(join(candidate,TEST),"utf8");
-  for(const id of ["AC-01","AC-02","AC-03","AC-04"]) if(!testSource.includes(id)) throw Error("Missing locked criterion "+id);
   let build=await authorBuild(locked);
   if(pathHash(TEST)!==locked) throw Error("Locked acceptance tests changed");
   state.changedPaths=APP.filter(p=>pathHash(p)!==before[p]);save();
