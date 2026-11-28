@@ -377,9 +377,16 @@ async function authorTests(){
   }
   const suiteIssues=validateLockedSuite(code);
   if(suiteIssues.length)throw Error("Locked suite fixture mismatch: "+suiteIssues.join(", "));
+  for(const id of ["AC-01","AC-02","AC-03","AC-04"]) if(!code.includes(id)) throw Error("Missing acceptance criterion "+id+"; suite remains unlocked");
   writeFileSync(join(candidate,TEST),code,{mode:0o600,flag:"wx"});
+  // Qualify on the unchanged candidate before publishing a lock receipt.
+  // A broken fixture leaves an unlocked draft and evidence, not a locked invalid suite.
+  const baseline=testRun("baseline");
+  if (!baselineQuality(baseline.report,baseline.evidence))
+    throw Error("Baseline did not demonstrate a feature-related failure; suite remains unlocked");
+  if (pathHash(TEST)!==createHash("sha256").update(code).digest("hex")) throw Error("Acceptance draft changed during baseline qualification");
   const suite={stage:"ai:tests",role:"studio",executionId:randomUUID(),sourceExecutionId:quinn.executionId};
-  const artifact={contractArtifactHash:expected,qaArtifactHash:quinn.artifactHash,fragments:state.fragments,files:{[TEST]:pathHash(TEST)},...(state.testAmendment?{testAmendment:state.testAmendment}:{})};
+  const artifact={contractArtifactHash:expected,qaArtifactHash:quinn.artifactHash,fragments:state.fragments,files:{[TEST]:pathHash(TEST)},baselineQualification:baseline.evidence,...(state.testAmendment?{testAmendment:state.testAmendment}:{})};
   const hash=artifactDigest(artifact);
   writeFileSync(join(runDir,"locked-suite.json"),JSON.stringify(artifact),{mode:0o600,flag:"wx"});
   log("artifact.saved",suite,{artifactHash:hash});state.lockedSuite={executionId:suite.executionId,artifactHash:hash,artifact};save();
@@ -647,11 +654,6 @@ try {
   const tests=await authorTests();
   const locked=pathHash(TEST);
   if (!locked) throw Error("Quinn did not write executable tests");
-  const testSource=readFileSync(join(candidate,TEST),"utf8");
-  for(const id of ["AC-01","AC-02","AC-03","AC-04"]) if(!testSource.includes(id)) throw Error("Missing locked criterion "+id);
-  const baseline=testRun("baseline");
-  if (!baselineQuality(baseline.report,baseline.evidence))
-    throw Error("Baseline did not demonstrate a feature-related failure; tests need review");
   let build=await authorBuild(locked);
   if(pathHash(TEST)!==locked) throw Error("Locked acceptance tests changed");
   state.changedPaths=APP.filter(p=>pathHash(p)!==before[p]);save();
