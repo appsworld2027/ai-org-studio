@@ -86,3 +86,27 @@ test("Garage rejects conflicting concurrent memory instead of automatically disc
     assert.match(git("--git-dir", remote, "show", "main:synthetic/MEMORY.md"), /Remote founder decision/);
   });
 });
+
+test("A-12 pull reports recovered memory and network outage truthfully", async () => {
+  await fixture(async ({ base, remote, dir, p, garage, note, offline }) => {
+    const other = join(base, "recovery-second-clone");
+    git("clone", "-q", remote, other);
+    writeFileSync(join(other, p.id, "MEMORY.md"), "# Shared decision\nNew remote synthetic decision\n");
+    git("-C", other, "add", "-A");
+    git("-C", other, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "new remote decision");
+    git("-C", other, "push", "-q", "origin", "HEAD");
+    const recovered = await garage.pull();
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.available, true);
+    assert.equal(recovered.head, git("-C", dir, "rev-parse", "HEAD"));
+    assert.match(readFileSync(note, "utf8"), /New remote synthetic decision/);
+    writeFileSync(offline, "offline");
+    const failed = await garage.pull();
+    assert.equal(failed.ok, false);
+    assert.equal(failed.available, true);
+    assert.match(failed.reason, /recovery/i);
+    assert.match(readFileSync(note, "utf8"), /New remote synthetic decision/);
+    unlinkSync(offline);
+    assert.equal((await garage.pull()).ok, true);
+  });
+});

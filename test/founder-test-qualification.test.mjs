@@ -56,3 +56,14 @@ test("sandbox preload preserves writes and never bypasses non-journal fsync rest
     `],{env:{PATH:process.env.PATH,TMPDIR:scratch,HOME:scratch},encoding:"utf8"});
   assert.equal(result.status,0,result.stderr);
 });
+
+test("delivery publishes a suite lock only after real baseline qualification",()=>{
+  const source=readFileSync(new URL("../scripts/supervised-founder-delivery.mjs",import.meta.url),"utf8");
+  const author=source.slice(source.indexOf("async function authorTests()"),source.indexOf("async function authorBuild("));
+  const baseline=author.indexOf('const baseline=testRun("baseline")');
+  const quality=author.indexOf("baselineQuality(baseline.report,baseline.evidence)");
+  const lock=author.indexOf('writeFileSync(join(runDir,"locked-suite.json")');
+  assert.ok(baseline>=0 && quality>baseline && lock>quality);
+  assert.match(author,/baselineQualification:baseline\.evidence/);
+  assert.equal((source.match(/testRun\("baseline"\)/g)||[]).length,1);
+});
