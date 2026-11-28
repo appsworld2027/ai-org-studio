@@ -56,3 +56,11 @@ test("provider route conversion and explicit free-model guards remain correct", 
     provider: { allow_fallbacks: false, max_price: { prompt: 0, completion: 0, request: 0 } }
   });
 });
+
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+test("historical standalone reviewer cannot issue an unqualified model request",()=>{
+  const result=spawnSync(process.execPath,[fileURLToPath(new URL("../scripts/supervised-founder-independent-review.mjs",import.meta.url))],{encoding:"utf8",timeout:5000});
+  assert.equal(result.status,1);
+  assert.match(result.stderr,/Historical standalone review is retired/);
+});
