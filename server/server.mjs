@@ -32,6 +32,7 @@ import { dispatchTask } from "./task-dispatch.mjs";
 import { makeConnectors, CATALOG } from "./connectors.mjs";
 import { openApps } from "./mcp-client.mjs";
 import { makeGarage } from "./garage.mjs";
+import { prepareGarageTurn, persistGarageTurn, completeGarageTurn } from "./garage-turn.mjs";
 import { makeEngineChats, MODES } from "./engine-chats.mjs";
 import { startCodex } from "./engines/codex.mjs";
 import { UPLOAD_DIR, UPLOAD_MAX, safeUploadName, readRaw, ensureIgnored, pruneUploads } from "./uploads.mjs";
@@ -285,7 +286,6 @@ const live = new Map(); // `${product}:${chat}` -> { abort, pending: Map(callId 
 const EFFORTS = ["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"];
 async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
   const c = store.chats.get(p.id, chatId); if (!c) throw new Error("Chat not found");
-  await garage.pull();
   if (!modelAllowed(c.provider, c.model, process.env, store.keys.get(c.provider)?.base)) throw new Error(BLOCKED);
   const pc = providerConf(c.provider); if (!pc) throw new Error("This chat's provider is not set up. Open Keys.");
   if (PROVIDERS[c.provider].needsKey && !pc.key) throw new Error("Add your key for this provider under Keys.");
@@ -293,10 +293,15 @@ async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
   const L = live.get(key) || { pending: new Map(), clients: new Set() }; live.set(key, L);
   const ac = new AbortController(); L.abort = ac;
   const emit = (e) => { if (e.t === "usage") { for (const u of e.models || []) { try { ledger.record({ product: p.id, engine: `free:${c.provider}`, model: u.model, requestedModel: u.requestedModel, modelSource: u.model ? "provider" : "unknown", input: u.input, output: u.output, cache: u.cache, reasoning: u.reasoning, role: "Studio chat" }); } catch { /* ledger is best effort */ } } return; } for (const ws of L.clients) if (ws.readyState === 1) ws.send(JSON.stringify(e)); wsEmit?.(e); };
-  c.messages.push({ role: "user", content: text });
-  if (c.title === "New chat") c.title = text.replace(/\s+/g, " ").slice(0, 60);
-  store.chats.save(p.id, c);
+  const messageStart = c.messages.length;
+  let started = false;
   try {
+    await prepareGarageTurn(garage, emit);
+    if (ac.signal.aborted) return;
+    c.messages.push({ role: "user", content: text });
+    started = true;
+    if (c.title === "New chat") c.title = text.replace(/\s+/g, " ").slice(0, 60);
+    store.chats.save(p.id, c);
     if (effort) { c.effort = effort; }
     // Connected apps (MCP) for this turn; started fresh so new connections apply at once, stopped afterwards.
     L.apps = await openApps(connectors.servers(), { env: ENGINE_ENV, log }).catch(() => ({ tools: [], problems: [], close() {} }));
@@ -306,9 +311,15 @@ async function chatTurn(p, chatId, text, auto, effort, wsEmit) {
       askUser: (q) => new Promise((ok) => L.pending.set(q.id, ok)) });
   } catch (e) { if (!ac.signal.aborted) emit({ t: "error", message: e.message }); }
   finally {
-    L.apps?.close(); L.apps = null; L.abort = null; L.pending.clear(); store.chats.save(p.id, c); emit({ t: "idle" });
-    const last = [...c.messages].reverse().find((m) => m.role === "assistant" && m.content);
-    afterTurn(p, c, { engine: `free:${c.provider}`, model: c.model, ask: text, did: last?.content || "" });
+    L.apps?.close(); L.apps = null; L.pending.clear();
+    const last = c.messages.slice(messageStart).reverse().find((m) => m.role === "assistant" && m.content);
+    await completeGarageTurn({
+      checkpoint: started ? async () => {
+        store.chats.save(p.id, c);
+        return afterTurn(p, c, { engine: `free:${c.provider}`, model: c.model, ask: text, did: last?.content || "" });
+      } : null,
+      emit, release: () => { L.abort = null; emit({ t: "idle" }); }
+    });
   }
 }
 
@@ -326,9 +337,7 @@ const appsForEngines = () => { const servers = connectors.servers(); return { cl
 const garageDirs = (p) => (garage.ready() ? [garage.ensureProduct(p)] : []);
 // After every reply: one journal line (which AI, what was asked, what it did) and save the Garage to GitHub.
 function afterTurn(p, chat, info) {
-  if (!garage.ready()) return;
-  try { garage.journal(p, info); } catch (e) { log(`garage journal: ${e.message}`); }
-  garage.save(p, `${info.engine}: ${String(info.ask || "").replace(/\s+/g, " ").slice(0, 70)}`);
+  return persistGarageTurn(garage, p, info, log);
 }
 // The product folders are the user's own repositories, added by them in the Studio, so mark them trusted for the
 // official programs (the same choice the user would make on their "Do you trust this folder?" screen).

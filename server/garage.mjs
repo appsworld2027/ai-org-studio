@@ -152,7 +152,20 @@ export function makeGarage({ dir, repo = "", gh = "gh", log = () => {}, now = ()
     return saving;
   }
   // Pull at chat start so memory written from another machine or AI is there.
-  async function pull() { if (ready()) await run("git", ["-C", dir, "pull", "-q", "--rebase", "--autostash", "origin", "HEAD"]).catch((e) => log(`garage: pull skipped (${e.message})`)); }
+  async function pull() {
+    if (!ready()) return { ok: false, available: false, configured: !!repo, reason: "Garage recovery unavailable: shared memory repository is not ready." };
+    saving = saving.then(async () => {
+      try {
+        await run("git", ["-C", dir, "pull", "-q", "--rebase", "--autostash", "origin", "HEAD"]);
+        const head = (await run("git", ["-C", dir, "rev-parse", "HEAD"])).trim();
+        return { ok: true, available: true, configured: true, head };
+      } catch (e) {
+        log("garage: recovery failed; do not rely on stale memory");
+        return { ok: false, available: true, configured: true, reason: "Garage memory recovery failed; retry synchronization before starting a new turn." };
+      }
+    });
+    return saving;
+  }
   function files(p) {
     const d = productDir(p.id), out = [];
     const walk = (sub) => { let ents = []; try { ents = readdirSync(join(d, sub), { withFileTypes: true }); } catch { return; } for (const e of ents) { const rel = sub ? `${sub}/${e.name}` : e.name; if (e.name.startsWith(".")) continue; if (e.isDirectory()) walk(rel); else { const st = statSync(join(d, rel)); out.push({ path: rel, size: st.size, modified: st.mtime.toISOString() }); } } };
